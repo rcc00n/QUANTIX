@@ -1,0 +1,136 @@
+name: arbiq
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+    target: runtime
+  env_file: .env
+  init: true
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+services:
+  db:
+    image: postgres:16-alpine
+    command: [postgres, -c, shared_buffers=64MB, -c, work_mem=2MB, -c, maintenance_work_mem=32MB, -c, max_connections=30, -c, max_wal_size=512MB, -c, min_wal_size=80MB]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Run make setup first}
+      POSTGRES_USER: ${POSTGRES_USER:?Run make setup first}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run make setup first}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    # Bound reclaimable database file cache; does not evict application evidence.
+    mem_limit: 320m
+    memswap_limit: 640m
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    networks: [data]
+  migrate:
+    <<: *backend
+    command: [alembic, upgrade, head]
+    depends_on:
+      db: {condition: service_healthy}
+    networks: [data]
+    restart: "no"
+  backend:
+    <<: *backend
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks: [data, app]
+  collector:
+    <<: *backend
+    command: [python, -m, arbiq.collector.worker]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    networks: [data, app]
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      BACKEND_URL: http://backend:8000
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports: ["127.0.0.1:${FRONTEND_PORT:-3100}:3000"]
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    init: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    restart: unless-stopped
+    networks: [app]
+  notifications:
+    <<: *backend
+    command: [python, -m, arbiq.notifications.worker]
+    # File-backed Compose secrets preserve host ownership. Match the protected
+    # local file's owner without granting root or widening its 0600 permissions.
+    user: "${QUANTIX_SECRET_UID:-1000}:${QUANTIX_SECRET_GID:-1000}"
+    environment:
+      NOTIFICATION_WORKER_ENABLED: "${LOCAL_NOTIFICATION_WORKER_ENABLED:-true}"
+      TELEGRAM_TOKEN_FILE: /run/secrets/telegram_bot_token
+    secrets: [telegram_bot_token]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import json,time; x=json.load(open('/tmp/quantix-notification-health.json')); assert x['healthy'] and time.clock_gettime(time.CLOCK_MONOTONIC_RAW)-x['heartbeat_monotonic']<45"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    networks: [data, app]
+  test:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@test-db:5432/arbiq_test
+    depends_on:
+      test-db: {condition: service_healthy}
+    networks: [test]
+  test-db:
+    profiles: [test]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: arbiq_test
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d arbiq_test']
+      interval: 2s
+      timeout: 5s
+      retries: 20
+    networks: [test]
+volumes:
+  postgres_data:
+secrets:
+  telegram_bot_token:
+    file: ./.secrets/telegram-bot-token
+networks:
+  data: {internal: true}
+  app:
+  test: {internal: true}
