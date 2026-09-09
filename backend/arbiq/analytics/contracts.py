@@ -231,3 +231,11 @@ class AnalyticsExportMetrics(Contract):
     dataset_scope: str
 
 
+class ArchiveFile(Contract):
+    name: str
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    bytes: int = Field(ge=0)
+    records: int | None
+    columns: list[str] | None = None
+
+
