@@ -174,3 +174,21 @@ class DailySummary(Contract):
     assumptions: dict[str, str]
 
 
+class ExportManifest(Contract):
+    schema_version: Literal["1.0"] = "1.0"
+    mode: Literal["paper"] = "paper"
+    generated_at: UTCTimestamp
+    period: ReportPeriod
+    session_ids: tuple[UUID, ...]
+    files: tuple[str, ...] = EXPORT_FILES
+    timestamp_format: Literal["ISO-8601 UTC"] = "ISO-8601 UTC"
+    decimal_format: Literal["base-10 strings"] = "base-10 strings"
+    reporting_currency: Literal["CAD"] = "CAD"
+
+    @model_validator(mode="after")
+    def stable_files(self) -> "ExportManifest":
+        if self.files != EXPORT_FILES:
+            raise ValueError("Export v1.0 requires the complete ordered file manifest")
+        return self
+
+
