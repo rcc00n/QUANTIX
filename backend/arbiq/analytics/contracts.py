@@ -1,0 +1,123 @@
+"""Versioned reporting interface. Stage 5 supplies actual aggregation and ZIP export."""
+
+from typing import Annotated, Literal, Protocol
+from uuid import UUID
+
+from pydantic import Field, model_validator
+
+from arbiq.finance.contracts import (
+    Contract,
+    ExactDecimal,
+    NonNegativeDecimal,
+    UTCTimestamp,
+)
+
+REPORT_SCHEMA_VERSION = "1.0"
+
+# Stable ordered CSV headers; IDs join across files. Decimal values are strings.
+CSV_COLUMNS: dict[str, tuple[str, ...]] = {
+    "opportunities.csv": (
+        "id",
+        "detected_at",
+        "buy_market_id",
+        "sell_market_id",
+        "quantity",
+        "estimated_net_cad",
+        "calculation_version",
+        "provenance_json",
+    ),
+    "signals.csv": (
+        "id",
+        "opportunity_id",
+        "evaluated_at",
+        "decision",
+        "reason",
+        "telegram_delivery_status",
+        "notification_attempts_json",
+    ),
+    "paper_trades.csv": (
+        "id",
+        "session_id",
+        "opportunity_id",
+        "status",
+        "reason",
+        "requested_at",
+        "eligible_at",
+        "completed_at",
+        "reaction_delay_ms",
+        "provenance_json",
+    ),
+    "paper_fills.csv": (
+        "id",
+        "order_id",
+        "trade_id",
+        "executed_at",
+        "side",
+        "quantity",
+        "price",
+        "quote_asset",
+        "fee_quantity",
+        "fee_asset",
+        "fee_cad",
+        "cost_basis_cad",
+        "realized_simulated_pnl_cad",
+        "provenance_json",
+    ),
+    "portfolio_equity.csv": (
+        "session_id",
+        "as_of",
+        "equity_cad",
+        "realized_simulated_pnl_cad",
+        "unrealized_pnl_cad",
+        "capital_utilization_pct",
+        "drawdown_pct",
+        "initial_equity_cad",
+        "no_trading_benchmark_cad",
+        "net_external_flows_cad",
+        "valuation_inputs_json",
+    ),
+    "balances.csv": (
+        "session_id",
+        "exchange",
+        "asset",
+        "account_role",
+        "quantity",
+        "as_of",
+        "ledger_entries_json",
+    ),
+    "fees.csv": (
+        "id",
+        "trade_id",
+        "category",
+        "quantity",
+        "asset",
+        "cad_value",
+        "effective_at",
+        "fee_version_id",
+        "fx_quote_id",
+        "assumptions_json",
+    ),
+    "system_health.csv": (
+        "id",
+        "created_at",
+        "exchange",
+        "severity",
+        "event_type",
+        "message",
+        "details_json",
+    ),
+}
+EXPORT_FILES = ("SUMMARY.md", "metrics.json", *CSV_COLUMNS, "config_snapshot.json")
+
+
+class ReportPeriod(Contract):
+    start: UTCTimestamp
+    end: UTCTimestamp
+
+    @model_validator(mode="after")
+    def ordered(self) -> "ReportPeriod":
+        if self.end <= self.start:
+            raise ValueError("Report end must be after start")
+        return self
+
+
