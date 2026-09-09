@@ -139,3 +139,10 @@ class SimulationCounts(Contract):
         return self
 
 
+class ExchangePairResult(Contract):
+    buy_exchange: str
+    sell_exchange: str
+    net_simulated_realized_pnl_cad: ExactDecimal
+    completed_count: int = Field(ge=0)
+
+
