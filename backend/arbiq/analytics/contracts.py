@@ -146,3 +146,31 @@ class ExchangePairResult(Contract):
     completed_count: int = Field(ge=0)
 
 
+class DailySummary(Contract):
+    schema_version: Literal["1.0"] = "1.0"
+    mode: Literal["paper"] = "paper"
+    period: ReportPeriod
+    generated_at: UTCTimestamp
+    session_ids: tuple[UUID, ...]
+    calculation_version: str
+    opportunities_detected: int = Field(ge=0)
+    telegram_alerts_delivered: int = Field(ge=0)
+    simulations: SimulationCounts
+    gross_simulated_profit_cad: ExactDecimal | None
+    trading_fees_cad: NonNegativeDecimal | None
+    estimated_expenses_cad: NonNegativeDecimal | None
+    net_simulated_realized_pnl_cad: ExactDecimal | None
+    unrealized_pnl_cad: ExactDecimal | None
+    portfolio_equity_cad: ExactDecimal | None
+    initial_portfolio_cad: NonNegativeDecimal | None
+    no_trading_benchmark_cad: ExactDecimal | None
+    net_external_flows_cad: ExactDecimal | None
+    capital_utilization_pct: NonNegativeDecimal | None = Field(le=100)
+    maximum_drawdown_pct: NonNegativeDecimal | None = Field(le=100)
+    best_exchange_pair: ExchangePairResult | None
+    worst_exchange_pair: ExchangePairResult | None
+    failure_reasons: dict[str, Annotated[int, Field(ge=0)]]
+    data_quality_notes: tuple[str, ...]
+    assumptions: dict[str, str]
+
+
