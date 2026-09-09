@@ -121,3 +121,21 @@ class ReportPeriod(Contract):
         return self
 
 
+class SimulationCounts(Contract):
+    attempts: int = Field(ge=0)
+    pending: int = Field(ge=0)
+    completed: int = Field(ge=0)
+    partial: int = Field(ge=0)
+    missed: int = Field(ge=0)
+    failed: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def reconcile(self) -> "SimulationCounts":
+        if (
+            self.attempts
+            != self.pending + self.completed + self.partial + self.missed + self.failed
+        ):
+            raise ValueError("Simulation counts must reconcile")
+        return self
+
+
