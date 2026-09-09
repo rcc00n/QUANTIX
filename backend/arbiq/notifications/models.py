@@ -33,3 +33,12 @@ class TelegramBinding(Record, Base):
     revoked_at: Mapped[datetime | None]
 
 
+class NotificationWorkerState(Base):
+    __tablename__ = "notification_worker_state"
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    update_offset: Mapped[int] = mapped_column(BigInteger, default=0)
+    heartbeat_at: Mapped[datetime]
+    healthy: Mapped[bool] = mapped_column(default=False)
+    details: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
