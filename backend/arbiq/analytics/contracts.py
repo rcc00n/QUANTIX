@@ -239,3 +239,27 @@ class ArchiveFile(Contract):
     columns: list[str] | None = None
 
 
+class AnalyticsExportManifest(Contract):
+    schema_version: Literal["quantix-export-v1"] = "quantix-export-v1"
+    paper_only: Literal[True] = True
+    generated_at: UTCTimestamp
+    period: ReportPeriod
+    session_id: UUID
+    classification: Literal["VALIDATED", "RESEARCH"]
+    strategy_version_id: UUID | None
+    required_files: tuple[str, ...] = EXPORT_FILES
+    files: list[ArchiveFile]
+    hash_algorithm: str
+    limits: dict[str, int]
+    reconciliation: dict
+    complete: Literal[True] = True
+
+    @model_validator(mode="after")
+    def complete_files(self):
+        if self.required_files != EXPORT_FILES:
+            raise ValueError("Mandatory export headers/files cannot change silently")
+        if not set(EXPORT_FILES).issubset({f.name for f in self.files}):
+            raise ValueError("Analytical archive is missing mandatory files")
+        if len({f.name for f in self.files}) != len(self.files):
+            raise ValueError("Duplicate archive member")
+        return self
