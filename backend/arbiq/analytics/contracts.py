@@ -192,3 +192,42 @@ class ExportManifest(Contract):
         return self
 
 
+class ReportService(Protocol):
+    async def daily_summary(self, period: ReportPeriod, session_id: UUID) -> DailySummary: ...
+    async def export_zip(self, period: ReportPeriod, session_id: UUID) -> bytes: ...
+
+
+class AnalyticsExportMetrics(Contract):
+    """Stage5's actual numerical export envelope; legacy daily schemas remain intact."""
+
+    schema_version: Literal["quantix-export-v1"] = "quantix-export-v1"
+    paper_only: Literal[True] = True
+    session_id: UUID
+    name: str
+    classification: Literal["VALIDATED", "RESEARCH"]
+    period: ReportPeriod
+    strategy_version_id: UUID | None
+    metrics: dict
+    portfolio: dict | None
+    opening_portfolio: dict | None
+    initial_equity_cad: NonNegativeDecimal
+    no_trading_initial_conditions: dict
+    opportunity_detection_count: int = Field(ge=0)
+    opportunity_count_scope: str
+    notification_counts: dict = Field(default_factory=dict)
+    return_on_mean_committed_capital_pct: ExactDecimal | None
+    by_trade_size: list[dict]
+    expense_breakdown: dict
+    strategy_versions: list[dict]
+    strategy_version_window_limited: bool
+    reconciliation: dict
+    limitations: list[str]
+    accounting_convention: str
+    reporting_timezone: Literal["America/Edmonton"]
+    currency: Literal["CAD"]
+    statistical_warning: str
+    generated_at: UTCTimestamp
+    clock: dict
+    dataset_scope: str
+
+
