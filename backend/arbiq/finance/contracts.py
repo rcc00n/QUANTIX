@@ -21,3 +21,17 @@ def exact_decimal(value: object) -> Decimal:
     return result
 
 
+def utc_timestamp(value: datetime) -> datetime:
+    if value.utcoffset() is None or value.utcoffset().total_seconds() != 0:
+        raise ValueError("Timestamp must have an explicit UTC offset")
+    return value
+
+
+ExactDecimal = Annotated[Decimal, BeforeValidator(exact_decimal)]
+PositiveDecimal = Annotated[ExactDecimal, Field(gt=0)]
+NonNegativeDecimal = Annotated[ExactDecimal, Field(ge=0)]
+UTCTimestamp = Annotated[datetime, AfterValidator(utc_timestamp)]
+
+
+class Contract(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
