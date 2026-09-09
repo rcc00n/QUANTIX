@@ -67,3 +67,12 @@ class NumericReport(Contract):
         return values
 
 
+class ExplainRequest(Contract):
+    opportunity_id: UUID | None = None
+    session_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def one_source(self):
+        if (self.opportunity_id is None) == (self.session_id is None):
+            raise ValueError("Choose one retained opportunity or owned paper session")
+        return self
