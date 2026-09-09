@@ -22,3 +22,14 @@ class TelegramChallenge(Record, Base):
     consumed_at: Mapped[datetime | None]
 
 
+class TelegramBinding(Record, Base):
+    __tablename__ = "telegram_bindings"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), unique=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, unique=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(100))
+    approved_at: Mapped[datetime]
+    paused: Mapped[bool] = mapped_column(default=False)
+    revoked_at: Mapped[datetime | None]
+
+
