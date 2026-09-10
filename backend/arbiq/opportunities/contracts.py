@@ -149,3 +149,14 @@ class FXConversion:
             raise ValueError("FX routes have incorrect currency directions")
 
 
+def identity_cad() -> FXConversion:
+    return FXConversion(
+        "CAD",
+        ConversionRoute(),
+        ConversionRoute(),
+        True,
+        datetime.max.replace(tzinfo=UTC),
+        "CAD reporting currency identity",
+    )
+
+
