@@ -64,3 +64,20 @@ class MarketRules:
             raise ValueError("Inconsistent notional limits")
 
 
+@dataclass(frozen=True, slots=True)
+class ConversionLevel:
+    """Derived internal rates may contain more than 18 decimal places.
+
+    Original observed levels remain BookLevel/NUMERIC values. Reciprocals are never
+    rounded to a fake exchange quote or stored in a NUMERIC rate column.
+    """
+
+    price: Decimal
+    quantity: Decimal
+
+    def __post_init__(self) -> None:
+        for value in (self.price, self.quantity):
+            if not isinstance(value, Decimal) or not value.is_finite() or value <= 0:
+                raise ValueError("Derived conversion levels require positive finite Decimals")
+
+
