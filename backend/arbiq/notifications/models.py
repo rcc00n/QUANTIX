@@ -63,3 +63,13 @@ class AlertDecision(Record, Base):
     __table_args__ = (Index("ix_alert_decisions_user_time", "user_id", "evaluated_at"),)
 
 
+class AlertLifecycle(Record, Base):
+    __tablename__ = "alert_lifecycle"
+    decision_id: Mapped[UUID] = mapped_column(ForeignKey("alert_decisions.id"), unique=True)
+    acknowledged_at: Mapped[datetime | None]
+    acknowledged_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    cancelled_at: Mapped[datetime | None]
+    repeat_count: Mapped[int] = mapped_column(default=0)
+    next_repeat_at: Mapped[datetime | None]
+
+
