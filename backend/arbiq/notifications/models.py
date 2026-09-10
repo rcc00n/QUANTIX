@@ -92,3 +92,13 @@ class NotificationOutbox(Record, Base):
     __table_args__ = (Index("ix_notification_outbox_due", "status", "available_at"),)
 
 
+class NotificationEvent(Record, Base):
+    """Append-only lifecycle audit; intentionally contains no token or chat ID."""
+
+    __tablename__ = "notification_events"
+    user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), index=True)
+    outbox_id: Mapped[UUID | None] = mapped_column(ForeignKey("notification_outbox.id"))
+    alert_id: Mapped[UUID | None] = mapped_column(ForeignKey("alert_decisions.id"))
+    event_type: Mapped[str] = mapped_column(String(60), index=True)
+    details: Mapped[dict] = mapped_column(JSONB, default=dict)
+    idempotency_key: Mapped[str | None] = mapped_column(String(200), unique=True)
