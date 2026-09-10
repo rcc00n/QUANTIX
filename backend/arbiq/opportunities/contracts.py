@@ -103,3 +103,19 @@ class ConversionLeg:
             raise ValueError("Conversion levels must have descending target/source rates")
 
 
+@dataclass(frozen=True, slots=True)
+class ConversionRoute:
+    legs: tuple[ConversionLeg, ...] = ()
+
+    def __post_init__(self) -> None:
+        if len(self.legs) > 3:
+            raise ValueError("Conversion routes are bounded to three hops")
+        for a, b in zip(self.legs, self.legs[1:], strict=False):
+            if a.target_currency != b.source_currency:
+                raise ValueError("Disconnected conversion route")
+        currencies = [self.legs[0].source_currency] if self.legs else []
+        currencies.extend(leg.target_currency for leg in self.legs)
+        if len(currencies) != len(set(currencies)):
+            raise ValueError("Conversion cycles are forbidden")
+
+
