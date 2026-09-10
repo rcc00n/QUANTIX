@@ -119,3 +119,33 @@ class ConversionRoute:
             raise ValueError("Conversion cycles are forbidden")
 
 
+@dataclass(frozen=True, slots=True)
+class FXConversion:
+    currency: str
+    to_cad: ConversionRoute
+    from_cad: ConversionRoute
+    verified: bool = False
+    fresh_until: datetime = datetime(2000, 1, 1, tzinfo=UTC)
+    source: str = ""
+    observed_at: datetime | None = None
+    available_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        utc_timestamp(self.fresh_until)
+        for timestamp in (self.observed_at, self.available_at):
+            if timestamp is not None:
+                utc_timestamp(timestamp)
+        if self.currency == "CAD":
+            if self.to_cad.legs or self.from_cad.legs:
+                raise ValueError("CAD identity must not fabricate conversion legs")
+        elif not self.to_cad.legs or not self.from_cad.legs:
+            raise ValueError("Both acquisition and liquidation conversion evidence are required")
+        elif (
+            self.to_cad.legs[0].source_currency != self.currency
+            or self.to_cad.legs[-1].target_currency != "CAD"
+            or self.from_cad.legs[0].source_currency != "CAD"
+            or self.from_cad.legs[-1].target_currency != self.currency
+        ):
+            raise ValueError("FX routes have incorrect currency directions")
+
+
