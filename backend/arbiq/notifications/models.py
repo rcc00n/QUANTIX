@@ -73,3 +73,22 @@ class AlertLifecycle(Record, Base):
     next_repeat_at: Mapped[datetime | None]
 
 
+class NotificationOutbox(Record, Base):
+    __tablename__ = "notification_outbox"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    binding_id: Mapped[UUID] = mapped_column(ForeignKey("telegram_bindings.id"))
+    alert_id: Mapped[UUID | None] = mapped_column(ForeignKey("alert_decisions.id"), index=True)
+    deduplication_key: Mapped[str] = mapped_column(String(200), unique=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    message: Mapped[str] = mapped_column(Text)
+    silent: Mapped[bool] = mapped_column(default=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    available_at: Mapped[datetime]
+    expires_at: Mapped[datetime]
+    attempts: Mapped[int] = mapped_column(default=0)
+    delivered_at: Mapped[datetime | None]
+    provider_message_id: Mapped[str | None] = mapped_column(String(100))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    __table_args__ = (Index("ix_notification_outbox_due", "status", "available_at"),)
+
+
