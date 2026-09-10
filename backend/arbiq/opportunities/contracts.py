@@ -160,3 +160,42 @@ def identity_cad() -> FXConversion:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class MarketInput:
+    market_id: str
+    venue: str
+    base_currency: str
+    quote_currency: str
+    asks: tuple[BookLevel, ...]
+    bids: tuple[BookLevel, ...]
+    fee: Fee
+    rules: MarketRules
+    fx: FXConversion | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            not self.market_id
+            or not self.base_currency
+            or not self.quote_currency
+            or not self.venue
+        ):
+            raise ValueError("Market identity is required")
+        if self.base_currency == self.quote_currency:
+            raise ValueError("Market base and quote must differ")
+        if not self.asks or not self.bids:
+            raise ValueError("Both book sides are required")
+        if self.bids[0].price >= self.asks[0].price:
+            raise ValueError("Crossed/locked books are not executable evidence")
+        if any(a.price >= b.price for a, b in zip(self.asks, self.asks[1:], strict=False)):
+            raise ValueError("Asks must be strictly increasing")
+        if any(a.price <= b.price for a, b in zip(self.bids, self.bids[1:], strict=False)):
+            raise ValueError("Bids must be strictly decreasing")
+        if self.fx and self.fx.currency != self.quote_currency:
+            raise ValueError("FX currency differs from market quote")
+        if self.rules.price_tick:
+            with localcontext() as context:
+                context.prec = 78
+                if any(level.price % self.rules.price_tick for level in (*self.asks, *self.bids)):
+                    raise ValueError("Observed price conflicts with exchange price precision")
+
+
