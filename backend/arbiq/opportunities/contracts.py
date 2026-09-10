@@ -277,3 +277,31 @@ class OptimizationResult:
     optimality: str = "bounded depth-breakpoint search with exact quantity rounding"
 
 
+@dataclass(frozen=True, slots=True)
+class TransferAssumptions:
+    network: str | None
+    network_verified: bool
+    withdrawal_enabled: bool
+    deposit_enabled: bool
+    withdrawal_fee_base: Decimal
+    network_fee_base: Decimal
+    confirmations: int | None
+    estimated_seconds: int | None
+    future_price_haircut_pct: Decimal
+    evidence: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for value in (
+            self.withdrawal_fee_base,
+            self.network_fee_base,
+            self.future_price_haircut_pct,
+        ):
+            _number(value)
+        if self.future_price_haircut_pct >= 100:
+            raise ValueError("Future price haircut must be below 100 percent")
+        if self.confirmations is not None and self.confirmations < 0:
+            raise ValueError("Invalid confirmations")
+        if self.estimated_seconds is not None and self.estimated_seconds <= 0:
+            raise ValueError("Transfer delay must be positive")
+
+
