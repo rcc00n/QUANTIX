@@ -199,3 +199,16 @@ class MarketInput:
                     raise ValueError("Observed price conflicts with exchange price precision")
 
 
+@dataclass(frozen=True, slots=True)
+class Costs:
+    slippage_bps: Decimal = Decimal(10)
+    rebalancing_bps: Decimal = Decimal(10)
+    fixed_rebalancing_cad: Decimal = Decimal(0)
+    verified: bool = False
+    source: str = "conservative configurable reserves; not observed fills"
+
+    def __post_init__(self) -> None:
+        for value in (self.slippage_bps, self.rebalancing_bps, self.fixed_rebalancing_cad):
+            _number(value)
+
+
