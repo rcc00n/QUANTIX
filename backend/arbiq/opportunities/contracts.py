@@ -81,3 +81,25 @@ class ConversionLevel:
                 raise ValueError("Derived conversion levels require positive finite Decimals")
 
 
+@dataclass(frozen=True, slots=True)
+class ConversionLeg:
+    """Executable source→target levels; price is target units per source unit.
+
+    For A/B bids: (bid, A depth). For B→A asks: (1/ask, ask*A depth).
+    Fee is deducted from the target currency once. Levels must be best first.
+    """
+
+    source_currency: str
+    target_currency: str
+    levels: tuple[BookLevel | ConversionLevel, ...]
+    fee_rate: Decimal = Decimal(0)
+    evidence: str = ""
+
+    def __post_init__(self) -> None:
+        _number(self.fee_rate)
+        if self.fee_rate >= 1 or self.source_currency == self.target_currency or not self.levels:
+            raise ValueError("Invalid executable conversion leg")
+        if any(a.price < b.price for a, b in zip(self.levels, self.levels[1:], strict=False)):
+            raise ValueError("Conversion levels must have descending target/source rates")
+
+
