@@ -260,3 +260,20 @@ class Evaluation:
     version: str = CALCULATION_VERSION
 
 
+@dataclass(frozen=True, slots=True)
+class BudgetResult:
+    budget_cad: Decimal
+    best: Evaluation | None
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OptimizationResult:
+    best: Evaluation | None
+    maximum: Evaluation | None
+    budgets: tuple[BudgetResult, ...]
+    evaluated_count: int
+    reasons: tuple[str, ...]
+    optimality: str = "bounded depth-breakpoint search with exact quantity rounding"
+
+
