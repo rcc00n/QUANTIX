@@ -42,3 +42,24 @@ class NotificationWorkerState(Base):
     details: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
+class AlertDecision(Record, Base):
+    """Immutable rules and source references; a decision is never an execution."""
+
+    __tablename__ = "alert_decisions"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    evaluation_id: Mapped[UUID] = mapped_column(ForeignKey("arbitrage_evaluations.id"))
+    settings_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("terminal_settings_versions.id")
+    )
+    deduplication_key: Mapped[str] = mapped_column(String(180), unique=True)
+    evaluated_at: Mapped[datetime]
+    expires_at: Mapped[datetime]
+    classification: Mapped[str] = mapped_column(String(24))
+    eligible: Mapped[bool]
+    emergency: Mapped[bool]
+    reasons: Mapped[list] = mapped_column(JSONB)
+    rules: Mapped[dict] = mapped_column(JSONB)
+    evidence: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (Index("ix_alert_decisions_user_time", "user_id", "evaluated_at"),)
+
+
