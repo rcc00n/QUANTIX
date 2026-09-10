@@ -212,3 +212,51 @@ class Costs:
             _number(value)
 
 
+@dataclass(frozen=True, slots=True)
+class Evaluation:
+    buy_quantity: Decimal
+    base_acquired: Decimal
+    sell_quantity: Decimal
+    sell_base_required: Decimal
+    residual_base: Decimal
+    buy_vwap: Decimal
+    sell_vwap: Decimal
+    buy_notional: Decimal
+    sell_notional: Decimal
+    buy_fee_amount: Decimal
+    sell_fee_amount: Decimal
+    buy_quote_required: Decimal
+    sell_quote_received: Decimal
+    acquisition_cost_cad: Decimal | None
+    sale_proceeds_cad: Decimal | None
+    gross_profit_cad: Decimal | None
+    fees_cad: Decimal | None
+    fx_cost_cad: Decimal | None
+    expenses_cad: Decimal | None
+    net_profit_cad: Decimal | None
+    net_return_pct: Decimal | None
+    net_profit_quote: Decimal | None
+    verified: bool
+    reasons: tuple[str, ...]
+    capital_requirements: dict[str, dict[str, Decimal]]
+    inventory_projection: dict[str, dict[str, Decimal]]
+    slippage_reserve_cad: Decimal | None = None
+    rebalancing_cost_cad: Decimal | None = None
+    buy_fee_cad: Decimal | None = None
+    sell_fee_cad: Decimal | None = None
+    base_fee_value_cad: Decimal | None = None
+    fee_treatment: str = (
+        "Base fees affect quantities and are valued at executed-side VWAP for disclosure; "
+        "quote fees affect cashflows. Net profit subtracts each cost once."
+    )
+    gross_profit_definition: str = (
+        "Projected net cashflow before reserves plus disclosed trading fees."
+    )
+    fx_cost_definition: str = (
+        "Half of executable quote-currency round-trip drag; diagnostic already included "
+        "in acquisition and liquidation cashflows, never an additional deduction."
+    )
+    mode: Literal["PRE_FUNDED"] = "PRE_FUNDED"
+    version: str = CALCULATION_VERSION
+
+
