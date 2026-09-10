@@ -305,3 +305,15 @@ class TransferAssumptions:
             raise ValueError("Transfer delay must be positive")
 
 
+@dataclass(frozen=True, slots=True)
+class TransferScenario:
+    observed: Evaluation
+    delivered_base: Decimal
+    hypothetical_current_quote_proceeds: Decimal | None
+    risk_adjusted_quote_proceeds: Decimal | None
+    risk_adjusted_net_cad: Decimal | None
+    assumptions: TransferAssumptions
+    reasons: tuple[str, ...]
+    mode: Literal["TRANSFER_SCENARIO"] = "TRANSFER_SCENARIO"
+    guaranteed_executable: Literal[False] = False
+    actual_execution: Literal[False] = False
