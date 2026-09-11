@@ -58,3 +58,13 @@ class PortfolioCheckpoint(Record, Base):
     __table_args__ = (Index("ix_portfolio_checkpoint_session_time", "session_id", "as_of"),)
 
 
+class DailyAccountingSnapshot(Record, Base):
+    __tablename__ = "daily_accounting_snapshots"
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"), index=True)
+    local_date: Mapped[str] = mapped_column(String(10))
+    timezone: Mapped[str] = mapped_column(String(60))
+    revision: Mapped[int]
+    as_of: Mapped[datetime]
+    payload: Mapped[dict] = mapped_column(JSONB)
+    calculation_version: Mapped[str] = mapped_column(String(40))
+    __table_args__ = (UniqueConstraint("session_id", "local_date", "revision"),)
