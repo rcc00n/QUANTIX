@@ -54,3 +54,25 @@ class LegAccounting:
     fees_cad: Decimal | None
 
 
+@dataclass(frozen=True, slots=True)
+class PriceEvidence:
+    cad_per_unit: Decimal | None
+    observed_at: datetime | None
+    received_at: datetime | None
+    verified: bool = False
+    source: str = "unavailable"
+    provenance: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.cad_per_unit is not None:
+            if (
+                not isinstance(self.cad_per_unit, Decimal)
+                or not self.cad_per_unit.is_finite()
+                or self.cad_per_unit <= 0
+            ):
+                raise ValueError("Valuation rate requires positive finite Decimal")
+        for value in (self.observed_at, self.received_at):
+            if value is not None:
+                utc_timestamp(value)
+
+
