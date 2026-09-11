@@ -32,3 +32,11 @@ class User(Record, Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class AuthSession(Record, Base):
+    __tablename__ = "auth_sessions"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime]
+    revoked_at: Mapped[datetime | None]
+
+
