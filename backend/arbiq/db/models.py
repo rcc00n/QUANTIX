@@ -40,3 +40,11 @@ class AuthSession(Record, Base):
     revoked_at: Mapped[datetime | None]
 
 
+class LoginAttempt(Record, Base):
+    __tablename__ = "login_attempts"
+    username: Mapped[str] = mapped_column(String(80))
+    client_hash: Mapped[str] = mapped_column(String(64), index=True)
+    success: Mapped[bool]
+    __table_args__ = (Index("ix_login_throttle", "client_hash", "created_at"),)
+
+
