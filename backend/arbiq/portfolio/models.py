@@ -49,3 +49,12 @@ class AccountingMovement(Record, Base):
     __table_args__ = (Index("ix_accounting_session_effective", "session_id", "effective_at"),)
 
 
+class PortfolioCheckpoint(Record, Base):
+    __tablename__ = "portfolio_checkpoints"
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"), index=True)
+    as_of: Mapped[datetime]
+    payload: Mapped[dict] = mapped_column(JSONB)
+    calculation_version: Mapped[str] = mapped_column(String(40))
+    __table_args__ = (Index("ix_portfolio_checkpoint_session_time", "session_id", "as_of"),)
+
+
