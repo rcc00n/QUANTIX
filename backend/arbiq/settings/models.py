@@ -26,3 +26,11 @@ class FundingProposal(Record, Base):
     payload: Mapped[dict] = mapped_column(JSONB)
 
 
+class FundingExperiment(Record, Base):
+    __tablename__ = "funding_experiments"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"))
+    idempotency_key: Mapped[str] = mapped_column(String(100))
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    source_session_id: Mapped[UUID | None] = mapped_column(ForeignKey("paper_sessions.id"))
+    __table_args__ = (UniqueConstraint("user_id", "idempotency_key"),)
