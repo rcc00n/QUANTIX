@@ -36,3 +36,14 @@ class StrategyHead(Base):
     updated_at: Mapped[datetime]
 
 
+class ExecutionObservation(Record, Base):
+    __tablename__ = "execution_observations"
+    trade_id: Mapped[UUID] = mapped_column(ForeignKey("paper_trades.id"), index=True)
+    order_id: Mapped[UUID] = mapped_column(ForeignKey("paper_orders.id"))
+    snapshot_id: Mapped[UUID] = mapped_column(ForeignKey("order_book_snapshots.id"))
+    received_at: Mapped[datetime]
+    source_at: Mapped[datetime | None]
+    payload: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (UniqueConstraint("order_id", "snapshot_id"),)
+
+
