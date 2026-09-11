@@ -19,3 +19,10 @@ class TerminalSettingsVersion(Record, Base):
     __table_args__ = (UniqueConstraint("user_id", "version"),)
 
 
+class FundingProposal(Record, Base):
+    __tablename__ = "funding_proposals"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime]
+    payload: Mapped[dict] = mapped_column(JSONB)
+
+
