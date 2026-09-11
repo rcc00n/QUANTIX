@@ -32,3 +32,13 @@ def positive(value: Decimal, name: str = "quantity", *, zero: bool = False) -> D
     return value
 
 
+@dataclass(frozen=True, slots=True)
+class Reservation:
+    exchange_id: UUID
+    asset_id: UUID
+    quantity: Decimal
+
+    def __post_init__(self):
+        positive(self.quantity)
+
+
