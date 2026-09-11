@@ -34,3 +34,18 @@ class PortfolioPosition(Record, Base):
     )
 
 
+class AccountingMovement(Record, Base):
+    __tablename__ = "accounting_movements"
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"), index=True)
+    journal_id: Mapped[UUID] = mapped_column(ForeignKey("journals.id"), unique=True)
+    event_type: Mapped[str] = mapped_column(String(40))
+    effective_at: Mapped[datetime]
+    realized_trading_cad: Mapped[Decimal | None]
+    realized_fx_cad: Mapped[Decimal | None]
+    fees_cad: Mapped[Decimal | None]
+    expenses_cad: Mapped[Decimal | None]
+    external_flow_cad: Mapped[Decimal | None]
+    details: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (Index("ix_accounting_session_effective", "session_id", "effective_at"),)
+
+
