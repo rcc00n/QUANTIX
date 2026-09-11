@@ -57,3 +57,13 @@ class Exchange(Record, Base):
     config_version: Mapped[int] = mapped_column(default=1)
 
 
+class Asset(Record, Base):
+    __tablename__ = "assets"
+    canonical_key: Mapped[str] = mapped_column(String(120), unique=True)
+    symbol: Mapped[str] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(16))  # crypto / fiat / stablecoin
+    network: Mapped[str | None] = mapped_column(String(100))
+    identifiers: Mapped[dict] = mapped_column(JSONB, default=dict)
+    __table_args__ = (CheckConstraint("kind IN ('crypto','fiat','stablecoin')", name="kind"),)
+
+
