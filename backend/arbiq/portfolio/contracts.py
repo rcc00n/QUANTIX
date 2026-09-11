@@ -76,3 +76,11 @@ class PriceEvidence:
                 utc_timestamp(value)
 
 
+class AccountingError(ValueError):
+    """A financial invariant failed; the transaction must be rolled back."""
+
+
+class InsufficientBalance(AccountingError):
+    pass
+
+
