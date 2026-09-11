@@ -47,3 +47,14 @@ class ExecutionObservation(Record, Base):
     __table_args__ = (UniqueConstraint("order_id", "snapshot_id"),)
 
 
+class RebalanceRequest(Record, Base):
+    __tablename__ = "paper_rebalance_requests"
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"), index=True)
+    from_exchange_id: Mapped[UUID] = mapped_column(ForeignKey("exchanges.id"))
+    to_exchange_id: Mapped[UUID] = mapped_column(ForeignKey("exchanges.id"))
+    asset_id: Mapped[UUID] = mapped_column(ForeignKey("assets.id"))
+    requested_at: Mapped[datetime]
+    eligible_at: Mapped[datetime]
+    status: Mapped[str] = mapped_column(String(16))
+    request: Mapped[dict] = mapped_column(JSONB)
+    result: Mapped[dict] = mapped_column(JSONB)
