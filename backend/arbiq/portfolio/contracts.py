@@ -84,3 +84,22 @@ class InsufficientBalance(AccountingError):
     pass
 
 
+def decimal_context(function):
+    """Private Decimal context survives await points without changing other tasks."""
+    if iscoroutinefunction(function):
+
+        @wraps(function)
+        async def asynchronous(*args, **kwargs):
+            with localcontext() as ctx:
+                ctx.prec = 78
+                return await function(*args, **kwargs)
+
+        return asynchronous
+
+    @wraps(function)
+    def synchronous(*args, **kwargs):
+        with localcontext() as ctx:
+            ctx.prec = 78
+            return function(*args, **kwargs)
+
+    return synchronous
