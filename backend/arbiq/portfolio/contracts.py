@@ -25,3 +25,10 @@ def stored(value: Decimal | None) -> Decimal | None:
     return exact_decimal(result)
 
 
+def positive(value: Decimal, name: str = "quantity", *, zero: bool = False) -> Decimal:
+    value = exact_decimal(value)
+    if value < 0 or (value == 0 and not zero):
+        raise ValueError(f"Invalid {name}")
+    return value
+
+
