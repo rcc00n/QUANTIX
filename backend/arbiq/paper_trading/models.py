@@ -29,3 +29,10 @@ class PaperControl(Base):
     )
 
 
+class StrategyHead(Base):
+    __tablename__ = "strategy_heads"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    strategy_version_id: Mapped[UUID] = mapped_column(ForeignKey("strategy_versions.id"))
+    updated_at: Mapped[datetime]
+
+
