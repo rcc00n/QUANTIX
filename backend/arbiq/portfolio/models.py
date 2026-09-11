@@ -1,0 +1,36 @@
+"""Stage 4 accounting projections and immutable analytical evidence.
+
+Physical quantities are always reconstructible from the existing immutable ledger.
+A position is a transactionally maintained cost-basis cache, never a second ledger.
+"""
+
+from datetime import datetime
+from decimal import Decimal
+from uuid import UUID
+
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from arbiq.db.base import Base, Record
+
+
+class PortfolioPosition(Record, Base):
+    __tablename__ = "portfolio_positions"
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"), index=True)
+    exchange_id: Mapped[UUID] = mapped_column(ForeignKey("exchanges.id"))
+    asset_id: Mapped[UUID] = mapped_column(ForeignKey("assets.id"))
+    quantity: Mapped[Decimal] = mapped_column(default=Decimal(0))
+    reserved_quantity: Mapped[Decimal] = mapped_column(default=Decimal(0))
+    cost_basis_cad: Mapped[Decimal | None]
+    updated_at: Mapped[datetime]
+    __table_args__ = (
+        UniqueConstraint("session_id", "exchange_id", "asset_id"),
+        CheckConstraint(
+            "quantity >= 0 AND reserved_quantity >= 0 AND reserved_quantity <= quantity",
+            name="inventory",
+        ),
+        CheckConstraint("cost_basis_cad >= 0", name="basis"),
+    )
+
+
