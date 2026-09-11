@@ -48,3 +48,12 @@ class LoginAttempt(Record, Base):
     __table_args__ = (Index("ix_login_throttle", "client_hash", "created_at"),)
 
 
+class Exchange(Record, Base):
+    __tablename__ = "exchanges"
+    slug: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(120))
+    enabled: Mapped[bool] = mapped_column(default=False)
+    capabilities: Mapped[dict] = mapped_column(JSONB, default=dict)
+    config_version: Mapped[int] = mapped_column(default=1)
+
+
