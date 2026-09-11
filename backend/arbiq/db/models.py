@@ -1,0 +1,34 @@
+"""Persistent domain records. Financial amounts use exact NUMERIC(38,18).
+
+JSONB stores decimal strings, never JSON floating point amounts. Domain writes and
+cross-record invariants belong in services, not ORM callbacks. See docs/SCHEMA.md.
+"""
+
+from datetime import datetime
+from decimal import Decimal
+from uuid import UUID
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from arbiq.db.base import Base, Record
+
+
+class User(Record, Base):
+    __tablename__ = "users"
+    username: Mapped[str] = mapped_column(String(80), unique=True)
+    password_hash: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
