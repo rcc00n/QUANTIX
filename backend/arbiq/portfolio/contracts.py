@@ -42,3 +42,15 @@ class Reservation:
         positive(self.quantity)
 
 
+@dataclass(frozen=True, slots=True)
+class LegAccounting:
+    journal_id: UUID
+    duplicate: bool
+    base_change: Decimal
+    quote_change: Decimal
+    cost_basis_removed_cad: Decimal | None
+    realized_trading_cad: Decimal | None
+    realized_fx_cad: Decimal | None
+    fees_cad: Decimal | None
+
+
