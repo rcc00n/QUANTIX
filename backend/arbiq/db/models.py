@@ -304,3 +304,20 @@ class PaperTrade(Record, Base):
     )
 
 
+class PaperOrder(Record, Base):
+    __tablename__ = "paper_orders"
+    trade_id: Mapped[UUID] = mapped_column(ForeignKey("paper_trades.id"), index=True)
+    market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"))
+    side: Mapped[str] = mapped_column(String(4))
+    quantity: Mapped[Decimal]
+    limit_price: Mapped[Decimal | None]
+    status: Mapped[str] = mapped_column(String(20))
+    reason: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (
+        CheckConstraint("side IN ('buy','sell') AND quantity > 0", name="side_quantity"),
+        CheckConstraint(
+            "status IN ('pending','filled','partial','failed','cancelled')", name="status"
+        ),
+    )
+
+
