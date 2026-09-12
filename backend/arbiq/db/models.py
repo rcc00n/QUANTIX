@@ -85,3 +85,12 @@ class Market(Record, Base):
     )
 
 
+class StrategyVersion(Record, Base):
+    __tablename__ = "strategy_versions"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    version: Mapped[int]
+    settings: Mapped[dict] = mapped_column(JSONB)
+    reason: Mapped[str] = mapped_column(Text)
+    __table_args__ = (UniqueConstraint("user_id", "version"),)
+
+
