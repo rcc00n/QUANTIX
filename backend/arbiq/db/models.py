@@ -204,3 +204,15 @@ class NotificationAttempt(Record, Base):
     )
 
 
+class PaperSession(Record, Base):
+    __tablename__ = "paper_sessions"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    strategy_version_id: Mapped[UUID] = mapped_column(ForeignKey("strategy_versions.id"))
+    name: Mapped[str] = mapped_column(String(120))
+    started_at: Mapped[datetime]
+    ended_at: Mapped[datetime | None]
+    initial_equity_cad: Mapped[Decimal]
+    benchmark_snapshot: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (CheckConstraint("initial_equity_cad >= 0", name="initial_equity"),)
+
+
