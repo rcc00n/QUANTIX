@@ -321,3 +321,27 @@ class PaperOrder(Record, Base):
     )
 
 
+class PaperFill(Record, Base):
+    __tablename__ = "paper_fills"
+    order_id: Mapped[UUID] = mapped_column(ForeignKey("paper_orders.id"), index=True)
+    snapshot_id: Mapped[UUID] = mapped_column(ForeignKey("order_book_snapshots.id"))
+    journal_id: Mapped[UUID] = mapped_column(ForeignKey("journals.id"), unique=True)
+    fee_version_id: Mapped[UUID] = mapped_column(ForeignKey("fee_versions.id"))
+    fx_quote_id: Mapped[UUID | None] = mapped_column(ForeignKey("fx_quotes.id"))
+    quantity: Mapped[Decimal]
+    price: Mapped[Decimal]
+    fee_quantity: Mapped[Decimal]
+    fee_asset_id: Mapped[UUID] = mapped_column(ForeignKey("assets.id"))
+    quote_notional: Mapped[Decimal | None]
+    fee_cad: Mapped[Decimal | None]
+    cost_basis_cad: Mapped[Decimal | None]
+    realized_simulated_pnl_cad: Mapped[Decimal | None]
+    executed_at: Mapped[datetime]
+    provenance: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (
+        CheckConstraint(
+            "quantity > 0 AND price > 0 AND fee_quantity >= 0 AND fee_cad >= 0", name="fill_values"
+        ),
+    )
+
+
