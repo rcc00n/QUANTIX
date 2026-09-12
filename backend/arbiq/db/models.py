@@ -94,3 +94,17 @@ class StrategyVersion(Record, Base):
     __table_args__ = (UniqueConstraint("user_id", "version"),)
 
 
+class FeeVersion(Record, Base):
+    __tablename__ = "fee_versions"
+    exchange_id: Mapped[UUID] = mapped_column(ForeignKey("exchanges.id"))
+    market_id: Mapped[UUID | None] = mapped_column(ForeignKey("markets.id"))
+    effective_at: Mapped[datetime]
+    maker_rate: Mapped[Decimal]
+    taker_rate: Mapped[Decimal]
+    source: Mapped[str] = mapped_column(Text)
+    assumptions: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (
+        CheckConstraint("maker_rate BETWEEN -1 AND 1 AND taker_rate BETWEEN 0 AND 1", name="rates"),
+    )
+
+
