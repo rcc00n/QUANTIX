@@ -216,3 +216,18 @@ class PaperSession(Record, Base):
     __table_args__ = (CheckConstraint("initial_equity_cad >= 0", name="initial_equity"),)
 
 
+class VirtualAccount(Record, Base):
+    __tablename__ = "virtual_accounts"
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"))
+    exchange_id: Mapped[UUID | None] = mapped_column(ForeignKey("exchanges.id"))
+    asset_id: Mapped[UUID] = mapped_column(ForeignKey("assets.id"))
+    role: Mapped[str] = mapped_column(String(24))  # available / reserved / equity / expense
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "exchange_id", "asset_id", "role", postgresql_nulls_not_distinct=True
+        ),
+        CheckConstraint("role IN ('available','reserved','equity','expense')", name="role"),
+        CheckConstraint("role IN ('equity','expense') OR exchange_id IS NOT NULL", name="exchange"),
+    )
+
+
