@@ -355,3 +355,26 @@ class SimulationEvent(Record, Base):
     provenance: Mapped[dict] = mapped_column(JSONB)
 
 
+class InventoryTransfer(Record, Base):
+    __tablename__ = "inventory_transfers"
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"))
+    from_account_id: Mapped[UUID] = mapped_column(ForeignKey("virtual_accounts.id"))
+    to_account_id: Mapped[UUID] = mapped_column(ForeignKey("virtual_accounts.id"))
+    journal_id: Mapped[UUID] = mapped_column(ForeignKey("journals.id"), unique=True)
+    quantity: Mapped[Decimal]
+    expense_quantity: Mapped[Decimal]
+    expense_asset_id: Mapped[UUID] = mapped_column(ForeignKey("assets.id"))
+    expense_cad: Mapped[Decimal | None]
+    requested_at: Mapped[datetime]
+    settled_at: Mapped[datetime | None]
+    status: Mapped[str] = mapped_column(String(20))
+    assumptions: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (
+        CheckConstraint(
+            "quantity > 0 AND expense_quantity >= 0 AND expense_cad >= 0 "
+            "AND from_account_id <> to_account_id",
+            name="transfer_values",
+        ),
+    )
+
+
