@@ -262,3 +262,12 @@ class VirtualDeposit(Record, Base):
     __table_args__ = (CheckConstraint("quantity > 0 AND cad_equivalent >= 0", name="deposit"),)
 
 
+class BalanceSnapshot(Record, Base):
+    __tablename__ = "balance_snapshots"
+    account_id: Mapped[UUID] = mapped_column(ForeignKey("virtual_accounts.id"))
+    as_of: Mapped[datetime]
+    quantity: Mapped[Decimal]
+    last_journal_id: Mapped[UUID] = mapped_column(ForeignKey("journals.id"))
+    __table_args__ = (Index("ix_balances_account_time", "account_id", "as_of"),)
+
+
