@@ -378,3 +378,27 @@ class InventoryTransfer(Record, Base):
     )
 
 
+class PortfolioValuation(Record, Base):
+    __tablename__ = "portfolio_valuations"
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"))
+    as_of: Mapped[datetime]
+    equity_cad: Mapped[Decimal]
+    realized_simulated_pnl_cad: Mapped[Decimal]
+    unrealized_pnl_cad: Mapped[Decimal]
+    fees_cad: Mapped[Decimal]
+    expenses_cad: Mapped[Decimal]
+    capital_utilization_pct: Mapped[Decimal]
+    drawdown_pct: Mapped[Decimal]
+    no_trading_benchmark_cad: Mapped[Decimal]
+    net_external_flows_cad: Mapped[Decimal]
+    valuation_inputs: Mapped[dict] = mapped_column(JSONB)
+    calculation_version: Mapped[str] = mapped_column(String(40))
+    __table_args__ = (
+        Index("ix_valuations_session_time", "session_id", "as_of"),
+        CheckConstraint(
+            "capital_utilization_pct BETWEEN 0 AND 100 AND drawdown_pct BETWEEN 0 AND 100",
+            name="percentages",
+        ),
+    )
+
+
