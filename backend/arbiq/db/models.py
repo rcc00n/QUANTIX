@@ -174,3 +174,16 @@ class Opportunity(Record, Base):
     )
 
 
+class Signal(Record, Base):
+    __tablename__ = "signals"
+    opportunity_id: Mapped[UUID] = mapped_column(ForeignKey("opportunities.id"), index=True)
+    strategy_version_id: Mapped[UUID] = mapped_column(ForeignKey("strategy_versions.id"))
+    decision: Mapped[str] = mapped_column(String(20))  # alert / suppressed / rejected
+    reason: Mapped[str] = mapped_column(Text)
+    evaluated_at: Mapped[datetime]
+    rules_snapshot: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (
+        CheckConstraint("decision IN ('alert','suppressed','rejected')", name="decision"),
+    )
+
+
