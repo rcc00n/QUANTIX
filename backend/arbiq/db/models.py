@@ -119,3 +119,18 @@ class FXQuote(Record, Base):
     __table_args__ = (CheckConstraint("rate > 0", name="positive_rate"),)
 
 
+class MarketObservation(Record, Base):
+    __tablename__ = "market_observations"
+    market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"))
+    observed_at: Mapped[datetime]
+    received_at: Mapped[datetime]
+    bid: Mapped[Decimal | None]
+    ask: Mapped[Decimal | None]
+    bid_quantity: Mapped[Decimal | None]
+    ask_quantity: Mapped[Decimal | None]
+    source: Mapped[str] = mapped_column(String(40))
+    quality: Mapped[str] = mapped_column(String(32))
+    quality_reason: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (Index("ix_observations_market_time", "market_id", "observed_at"),)
+
+
