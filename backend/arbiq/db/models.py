@@ -108,3 +108,14 @@ class FeeVersion(Record, Base):
     )
 
 
+class FXQuote(Record, Base):
+    __tablename__ = "fx_quotes"
+    base_asset_id: Mapped[UUID] = mapped_column(ForeignKey("assets.id"))
+    quote_asset_id: Mapped[UUID] = mapped_column(ForeignKey("assets.id"))
+    rate: Mapped[Decimal]
+    observed_at: Mapped[datetime] = mapped_column(index=True)
+    source: Mapped[str] = mapped_column(Text)
+    provenance: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (CheckConstraint("rate > 0", name="positive_rate"),)
+
+
