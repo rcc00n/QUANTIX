@@ -134,3 +134,17 @@ class MarketObservation(Record, Base):
     __table_args__ = (Index("ix_observations_market_time", "market_id", "observed_at"),)
 
 
+class OrderBookSnapshot(Record, Base):
+    __tablename__ = "order_book_snapshots"
+    market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"))
+    observed_at: Mapped[datetime]
+    received_at: Mapped[datetime]
+    bids: Mapped[list] = mapped_column(JSONB)  # [[price_decimal_string, quantity_decimal_string]]
+    asks: Mapped[list] = mapped_column(JSONB)
+    sequence: Mapped[str | None] = mapped_column(String(100))
+    source: Mapped[str] = mapped_column(String(40))
+    quality: Mapped[str] = mapped_column(String(32))
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    __table_args__ = (Index("ix_books_market_time", "market_id", "observed_at"),)
+
+
