@@ -271,3 +271,36 @@ class BalanceSnapshot(Record, Base):
     __table_args__ = (Index("ix_balances_account_time", "account_id", "as_of"),)
 
 
+class PaperTrade(Record, Base):
+    __tablename__ = "paper_trades"
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"), index=True)
+    opportunity_id: Mapped[UUID | None] = mapped_column(ForeignKey("opportunities.id"))
+    route_id: Mapped[UUID | None] = mapped_column(ForeignKey("arbitrage_routes.id"))
+    evaluation_id: Mapped[UUID | None] = mapped_column(ForeignKey("arbitrage_evaluations.id"))
+    strategy_version_id: Mapped[UUID | None] = mapped_column(ForeignKey("strategy_versions.id"))
+    idempotency_key: Mapped[str | None] = mapped_column(String(180), unique=True)
+    classification: Mapped[str] = mapped_column(String(16), default="VALIDATED")
+    mode: Mapped[str] = mapped_column(String(24), default="PRE_FUNDED")
+    requested_quantity: Mapped[Decimal | None]
+    state: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(24))
+    requested_at: Mapped[datetime]
+    reaction_delay_ms: Mapped[int] = mapped_column(Integer)
+    eligible_at: Mapped[datetime]
+    completed_at: Mapped[datetime | None]
+    reason: Mapped[str | None] = mapped_column(Text)
+    calculation_version: Mapped[str] = mapped_column(String(40))
+    assumptions: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (
+        Index("ix_paper_status_eligible", "status", "eligible_at"),
+        Index("ix_paper_session_requested", "session_id", "requested_at"),
+        CheckConstraint(
+            "status IN ('pending','completed','partial','missed','failed','CANDIDATE',"
+            "'ELIGIBILITY_CHECK','SCHEDULED','RECHECKING','EXECUTING','COMPLETED',"
+            "'PARTIAL','MISSED','FAILED','EXPIRED')",
+            name="status",
+        ),
+        CheckConstraint("reaction_delay_ms >= 0 AND eligible_at >= requested_at", name="delay"),
+    )
+
+
