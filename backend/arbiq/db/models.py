@@ -231,3 +231,13 @@ class VirtualAccount(Record, Base):
     )
 
 
+class Journal(Record, Base):
+    __tablename__ = "journals"
+    session_id: Mapped[UUID] = mapped_column(ForeignKey("paper_sessions.id"))
+    event_type: Mapped[str] = mapped_column(String(40))
+    idempotency_key: Mapped[str] = mapped_column(String(180), unique=True)
+    effective_at: Mapped[datetime]
+    source_id: Mapped[UUID | None]
+    provenance: Mapped[dict] = mapped_column(JSONB)
+
+
