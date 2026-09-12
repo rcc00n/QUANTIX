@@ -251,3 +251,14 @@ class LedgerEntry(Record, Base):
     __table_args__ = (CheckConstraint("quantity <> 0", name="nonzero_quantity"),)
 
 
+class VirtualDeposit(Record, Base):
+    __tablename__ = "virtual_deposits"
+    account_id: Mapped[UUID] = mapped_column(ForeignKey("virtual_accounts.id"))
+    journal_id: Mapped[UUID] = mapped_column(ForeignKey("journals.id"), unique=True)
+    fx_quote_id: Mapped[UUID] = mapped_column(ForeignKey("fx_quotes.id"))
+    quantity: Mapped[Decimal]
+    cad_equivalent: Mapped[Decimal]
+    is_initial: Mapped[bool]
+    __table_args__ = (CheckConstraint("quantity > 0 AND cad_equivalent >= 0", name="deposit"),)
+
+
