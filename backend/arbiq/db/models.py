@@ -148,3 +148,29 @@ class OrderBookSnapshot(Record, Base):
     __table_args__ = (Index("ix_books_market_time", "market_id", "observed_at"),)
 
 
+class Opportunity(Record, Base):
+    __tablename__ = "opportunities"
+    buy_market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"))
+    sell_market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"))
+    buy_snapshot_id: Mapped[UUID] = mapped_column(ForeignKey("order_book_snapshots.id"))
+    sell_snapshot_id: Mapped[UUID] = mapped_column(ForeignKey("order_book_snapshots.id"))
+    buy_fee_version_id: Mapped[UUID] = mapped_column(ForeignKey("fee_versions.id"))
+    sell_fee_version_id: Mapped[UUID] = mapped_column(ForeignKey("fee_versions.id"))
+    strategy_version_id: Mapped[UUID] = mapped_column(ForeignKey("strategy_versions.id"))
+    fx_quote_id: Mapped[UUID] = mapped_column(ForeignKey("fx_quotes.id"))
+    detected_at: Mapped[datetime] = mapped_column(index=True)
+    expires_at: Mapped[datetime]
+    quantity: Mapped[Decimal]
+    estimated_gross_cad: Mapped[Decimal]
+    estimated_fees_cad: Mapped[Decimal]
+    estimated_expenses_cad: Mapped[Decimal]
+    estimated_net_cad: Mapped[Decimal]
+    estimated_net_pct: Mapped[Decimal]
+    calculation_version: Mapped[str] = mapped_column(String(40))
+    assumptions: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (
+        CheckConstraint("buy_market_id <> sell_market_id", name="distinct_markets"),
+        CheckConstraint("quantity > 0 AND expires_at >= detected_at", name="valid_opportunity"),
+    )
+
+
