@@ -241,3 +241,13 @@ class Journal(Record, Base):
     provenance: Mapped[dict] = mapped_column(JSONB)
 
 
+class LedgerEntry(Record, Base):
+    __tablename__ = "ledger_entries"
+    journal_id: Mapped[UUID] = mapped_column(ForeignKey("journals.id"), index=True)
+    account_id: Mapped[UUID] = mapped_column(ForeignKey("virtual_accounts.id"), index=True)
+    quantity: Mapped[Decimal]
+    cad_value: Mapped[Decimal | None]
+    memo: Mapped[str] = mapped_column(Text)
+    __table_args__ = (CheckConstraint("quantity <> 0", name="nonzero_quantity"),)
+
+
