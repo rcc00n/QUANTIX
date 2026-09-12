@@ -345,3 +345,13 @@ class PaperFill(Record, Base):
     )
 
 
+class SimulationEvent(Record, Base):
+    __tablename__ = "simulation_events"
+    trade_id: Mapped[UUID] = mapped_column(ForeignKey("paper_trades.id"), index=True)
+    order_id: Mapped[UUID | None] = mapped_column(ForeignKey("paper_orders.id"))
+    event_type: Mapped[str] = mapped_column(String(40))
+    reason: Mapped[str] = mapped_column(Text)
+    occurred_at: Mapped[datetime]
+    provenance: Mapped[dict] = mapped_column(JSONB)
+
+
