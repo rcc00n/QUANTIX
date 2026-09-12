@@ -67,3 +67,21 @@ class Asset(Record, Base):
     __table_args__ = (CheckConstraint("kind IN ('crypto','fiat','stablecoin')", name="kind"),)
 
 
+class Market(Record, Base):
+    __tablename__ = "markets"
+    exchange_id: Mapped[UUID] = mapped_column(ForeignKey("exchanges.id"), index=True)
+    base_asset_id: Mapped[UUID] = mapped_column(ForeignKey("assets.id"))
+    quote_asset_id: Mapped[UUID] = mapped_column(ForeignKey("assets.id"))
+    native_symbol: Mapped[str] = mapped_column(String(100))
+    active: Mapped[bool] = mapped_column(default=True)
+    amount_step: Mapped[Decimal | None]
+    price_tick: Mapped[Decimal | None]
+    min_notional: Mapped[Decimal | None]
+    metadata_json: Mapped[dict] = mapped_column(JSONB, default=dict)
+    __table_args__ = (
+        UniqueConstraint("exchange_id", "native_symbol"),
+        CheckConstraint("base_asset_id <> quote_asset_id", name="distinct_assets"),
+        CheckConstraint("amount_step > 0 AND price_tick > 0 AND min_notional >= 0", name="limits"),
+    )
+
+
