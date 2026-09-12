@@ -187,3 +187,20 @@ class Signal(Record, Base):
     )
 
 
+class NotificationAttempt(Record, Base):
+    __tablename__ = "notification_attempts"
+    signal_id: Mapped[UUID] = mapped_column(ForeignKey("signals.id"), index=True)
+    channel: Mapped[str] = mapped_column(String(20))
+    attempt: Mapped[int]
+    status: Mapped[str] = mapped_column(String(20))
+    delivered_at: Mapped[datetime | None]
+    provider_message_id: Mapped[str | None] = mapped_column(String(120))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    __table_args__ = (
+        UniqueConstraint("signal_id", "channel", "attempt"),
+        CheckConstraint(
+            "status IN ('pending','delivered','failed') AND attempt > 0", name="status"
+        ),
+    )
+
+
