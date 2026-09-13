@@ -463,3 +463,13 @@ class ExchangeConfigVersion(Record, Base):
     )
 
 
+class CollectorRun(Record, Base):
+    __tablename__ = "collector_runs"
+    worker_id: Mapped[str] = mapped_column(String(100), unique=True)
+    status: Mapped[str] = mapped_column(String(20))
+    heartbeat_at: Mapped[datetime] = mapped_column(index=True)
+    stopped_at: Mapped[datetime | None]
+    config_snapshot: Mapped[dict] = mapped_column(JSONB)
+    metrics: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
