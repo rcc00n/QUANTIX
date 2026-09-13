@@ -473,3 +473,30 @@ class CollectorRun(Record, Base):
     metrics: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
+class ExchangeHealth(Base):
+    __tablename__ = "exchange_health"
+    exchange_id: Mapped[UUID] = mapped_column(ForeignKey("exchanges.id"), primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("collector_runs.id"))
+    state: Mapped[str] = mapped_column(String(16))
+    connection_mode: Mapped[str] = mapped_column(String(24))
+    market_count: Mapped[int] = mapped_column(default=0)
+    cad_market_count: Mapped[int] = mapped_column(default=0)
+    monitored_count: Mapped[int] = mapped_column(default=0)
+    successful_requests: Mapped[int] = mapped_column(default=0)
+    failed_requests: Mapped[int] = mapped_column(default=0)
+    reconnects: Mapped[int] = mapped_column(default=0)
+    consecutive_failures: Mapped[int] = mapped_column(default=0)
+    latency_ms: Mapped[int | None]
+    last_success_at: Mapped[datetime | None]
+    last_attempt_at: Mapped[datetime | None]
+    last_discovery_at: Mapped[datetime | None]
+    next_retry_at: Mapped[datetime | None]
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    updated_at: Mapped[datetime]
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('HEALTHY','DEGRADED','STALE','SUSPICIOUS','UNAVAILABLE')", name="state"
+        ),
+    )
+
+
