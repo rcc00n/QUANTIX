@@ -422,3 +422,15 @@ class ActualTrade(Record, Base):
     )
 
 
+class SystemEvent(Record, Base):
+    __tablename__ = "system_events"
+    sequence: Mapped[int] = mapped_column(BigInteger, autoincrement=False, nullable=True)
+    exchange_id: Mapped[UUID | None] = mapped_column(ForeignKey("exchanges.id"))
+    actor_user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"))
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    severity: Mapped[str] = mapped_column(String(16))
+    message: Mapped[str] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSONB, default=dict)
+    __table_args__ = (CheckConstraint("severity IN ('info','warning','error')", name="severity"),)
+
+
