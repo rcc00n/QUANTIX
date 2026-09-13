@@ -531,3 +531,17 @@ class MarketDataSample(Record, Base):
     )
 
 
+class MarketQualityEvent(Record, Base):
+    """Transient quality evidence. Referenced financial books are separately immutable."""
+
+    __tablename__ = "market_quality_events"
+    event_key: Mapped[str] = mapped_column(String(64), unique=True)
+    market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"))
+    state: Mapped[str] = mapped_column(String(16))
+    reasons: Mapped[list] = mapped_column(JSONB)
+    evidence: Mapped[dict] = mapped_column(JSONB)
+    confirmation: Mapped[dict] = mapped_column(JSONB)
+    snapshot_id: Mapped[UUID | None] = mapped_column(ForeignKey("order_book_snapshots.id"))
+    __table_args__ = (Index("ix_quality_market_time", "market_id", "created_at"),)
+
+
