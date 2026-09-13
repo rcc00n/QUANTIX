@@ -446,3 +446,20 @@ class ReportExport(Record, Base):
     __table_args__ = (CheckConstraint("period_end > period_start", name="report_period"),)
 
 
+class ExchangeConfigVersion(Record, Base):
+    """Immutable public adapter configuration; never stores credentials."""
+
+    __tablename__ = "exchange_config_versions"
+    exchange_id: Mapped[UUID] = mapped_column(ForeignKey("exchanges.id"), index=True)
+    version: Mapped[int]
+    effective_at: Mapped[datetime]
+    enabled: Mapped[bool]
+    capabilities: Mapped[dict] = mapped_column(JSONB)
+    public_settings: Mapped[dict] = mapped_column(JSONB)
+    reason: Mapped[str] = mapped_column(Text)
+    __table_args__ = (
+        UniqueConstraint("exchange_id", "version"),
+        CheckConstraint("version > 0", name="positive_version"),
+    )
+
+
