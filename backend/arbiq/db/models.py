@@ -512,3 +512,22 @@ class LatestMarketBook(Base):
     payload: Mapped[dict] = mapped_column(JSONB)
 
 
+class MarketDataSample(Record, Base):
+    """Transient observations with explicit retention; no financial table references these."""
+
+    __tablename__ = "market_data_samples"
+    bucket_start: Mapped[datetime]
+    market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"))
+    received_at: Mapped[datetime]
+    exchange_timestamp: Mapped[datetime | None]
+    bid: Mapped[Decimal | None]
+    ask: Mapped[Decimal | None]
+    state: Mapped[str] = mapped_column(String(16))
+    latency_ms: Mapped[int | None]
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    __table_args__ = (
+        Index("ix_samples_market_time", "market_id", "received_at"),
+        UniqueConstraint("market_id", "bucket_start"),
+    )
+
+
