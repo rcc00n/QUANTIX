@@ -545,3 +545,33 @@ class MarketQualityEvent(Record, Base):
     __table_args__ = (Index("ix_quality_market_time", "market_id", "created_at"),)
 
 
+class ArbitrageRoute(Record, Base):
+    """Mutable current projection; immutable evaluations/events are the audit trail.
+
+    Separate from Stage 1 Opportunity, which requires confirmed CAD/strategy inputs.
+    A research route may legitimately have no trustworthy CAD conversion.
+    """
+
+    __tablename__ = "arbitrage_routes"
+    route_key: Mapped[str] = mapped_column(String(64), unique=True)
+    buy_market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"))
+    sell_market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"))
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("collector_runs.id"))
+    status: Mapped[str] = mapped_column(String(24), index=True)
+    actionable: Mapped[bool] = mapped_column(default=False)
+    detected_at: Mapped[datetime] = mapped_column(index=True)
+    updated_at: Mapped[datetime]
+    expires_at: Mapped[datetime]
+    revision: Mapped[int] = mapped_column(default=0)
+    payload: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (
+        CheckConstraint("buy_market_id <> sell_market_id", name="distinct_markets"),
+        CheckConstraint("actionable = false", name="paper_research_only"),
+        CheckConstraint(
+            "status IN ('DETECTED','RECHECKING','VERIFIED_MARKET','RESEARCH_ONLY',"
+            "'INVALIDATED','EXPIRED')",
+            name="lifecycle",
+        ),
+    )
+
+
