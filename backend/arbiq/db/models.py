@@ -500,3 +500,15 @@ class ExchangeHealth(Base):
     )
 
 
+class LatestMarketBook(Base):
+    """Bounded mutable fallback cache; never financial execution evidence."""
+
+    __tablename__ = "latest_market_books"
+    market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"), primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("collector_runs.id"))
+    received_at: Mapped[datetime] = mapped_column(index=True)
+    exchange_timestamp: Mapped[datetime | None]
+    state: Mapped[str] = mapped_column(String(16))
+    payload: Mapped[dict] = mapped_column(JSONB)
+
+
