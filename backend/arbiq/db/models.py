@@ -434,3 +434,15 @@ class SystemEvent(Record, Base):
     __table_args__ = (CheckConstraint("severity IN ('info','warning','error')", name="severity"),)
 
 
+class ReportExport(Record, Base):
+    __tablename__ = "report_exports"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    schema_version: Mapped[str] = mapped_column(String(20))
+    period_start: Mapped[datetime]
+    period_end: Mapped[datetime]
+    status: Mapped[str] = mapped_column(String(20))
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
+    provenance: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (CheckConstraint("period_end > period_start", name="report_period"),)
+
+
