@@ -575,3 +575,23 @@ class ArbitrageRoute(Record, Base):
     )
 
 
+class ArbitrageEvaluation(Record, Base):
+    __tablename__ = "arbitrage_evaluations"
+    route_id: Mapped[UUID] = mapped_column(ForeignKey("arbitrage_routes.id"), index=True)
+    revision: Mapped[int]
+    evaluated_at: Mapped[datetime]
+    buy_snapshot_id: Mapped[UUID] = mapped_column(ForeignKey("order_book_snapshots.id"))
+    sell_snapshot_id: Mapped[UUID] = mapped_column(ForeignKey("order_book_snapshots.id"))
+    buy_fee_version_id: Mapped[UUID] = mapped_column(ForeignKey("fee_versions.id"))
+    sell_fee_version_id: Mapped[UUID] = mapped_column(ForeignKey("fee_versions.id"))
+    quantity: Mapped[Decimal | None]
+    acquisition_cost_cad: Mapped[Decimal | None]
+    gross_profit_cad: Mapped[Decimal | None]
+    net_profit_cad: Mapped[Decimal | None]
+    net_return_pct: Mapped[Decimal | None]
+    calculation_version: Mapped[str] = mapped_column(String(40))
+    evidence: Mapped[dict] = mapped_column(JSONB)
+    result: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (UniqueConstraint("route_id", "revision"),)
+
+
