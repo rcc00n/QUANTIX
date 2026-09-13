@@ -595,3 +595,17 @@ class ArbitrageEvaluation(Record, Base):
     __table_args__ = (UniqueConstraint("route_id", "revision"),)
 
 
+class ArbitrageLifecycleEvent(Record, Base):
+    __tablename__ = "arbitrage_lifecycle_events"
+    route_id: Mapped[UUID] = mapped_column(ForeignKey("arbitrage_routes.id"), index=True)
+    event_at: Mapped[datetime]
+    status: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(JSONB)
+
+
+# Import extension models after legacy declarations to register migration metadata.
+from arbiq.notifications import models as notification_models  # noqa: E402,F401
+from arbiq.paper_trading import models as paper_models  # noqa: E402,F401
+from arbiq.portfolio import models as portfolio_models  # noqa: E402,F401
+from arbiq.settings import models as settings_models  # noqa: E402,F401
