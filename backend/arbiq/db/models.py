@@ -402,3 +402,23 @@ class PortfolioValuation(Record, Base):
     )
 
 
+class ActualTrade(Record, Base):
+    """Only explicitly user-recorded real activity. No paper IDs or simulator writes."""
+
+    __tablename__ = "actual_trades"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    market_id: Mapped[UUID] = mapped_column(ForeignKey("markets.id"))
+    side: Mapped[str] = mapped_column(String(4))
+    quantity: Mapped[Decimal]
+    price: Mapped[Decimal]
+    executed_at: Mapped[datetime]
+    user_confirmed_at: Mapped[datetime]
+    user_reference: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (
+        CheckConstraint(
+            "side IN ('buy','sell') AND quantity > 0 AND price > 0", name="trade_values"
+        ),
+    )
+
+
