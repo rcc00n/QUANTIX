@@ -258,3 +258,52 @@ class TrustedClock:
         }
         return self.apply_samples([result for result in results if isinstance(result, TimeSample)])
 
+    @property
+    def trusted(self) -> bool:
+        age = self.elapsed() - self.anchor_elapsed
+        return (
+            self.anchor_utc is not None
+            and self.stable_rounds >= self.required_stable_rounds
+            and self.elapsed() - self.stability_started_elapsed >= 5
+            and 0 <= age <= self.max_age_seconds
+            and self.anchor_uncertainty + age * 0.0001 <= self.maximum_uncertainty_seconds
+        )
+
+    def utcnow(self) -> datetime:
+        """Untrusted fallback is host UTC for diagnostics, never verification."""
+        if self.anchor_utc is None:
+            return self.wall()
+        return self.anchor_utc + timedelta(seconds=self.elapsed() - self.anchor_elapsed)
+
+    def snapshot(self) -> dict[str, Any]:
+        self.observe_wall()
+        now = self.elapsed()
+        utc = self.utcnow()
+        offset = (self.wall() - utc).total_seconds()
+        trusted = self.trusted
+        uncertainty = self.anchor_uncertainty + max(0, now - self.anchor_elapsed) * 0.0001
+        reason = self.reason
+        if self.anchor_utc is not None and now - self.anchor_elapsed > self.max_age_seconds:
+            reason = "EXTERNAL_REFERENCE_EXPIRED"
+        return {
+            "trusted": trusted,
+            "host_healthy": trusted
+            and abs(offset) <= 2
+            and now - self.started_elapsed >= 120
+            and now - self.last_wall_step_elapsed > 120,
+            "utc_now": utc.isoformat(),
+            "host_utc": self.wall().isoformat(),
+            "host_offset_seconds": round(offset, 6),
+            "uncertainty_ms": round(uncertainty * 1000, 3) if math.isfinite(uncertainty) else None,
+            "reference_age_seconds": round(now - self.anchor_elapsed, 3)
+            if self.anchor_utc is not None
+            else None,
+            "stable_rounds": self.stable_rounds,
+            "rounds": self.rounds,
+            "wall_steps": self.wall_steps,
+            "last_wall_step_seconds": self.last_wall_step_seconds,
+            "elapsed_source": ELAPSED_SOURCE,
+            "reason": reason,
+            "sources": self.sources,
+            "errors": self.errors,
+        }
