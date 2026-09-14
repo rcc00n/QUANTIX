@@ -224,3 +224,9 @@ async def test_schema_uses_precise_numeric_and_timestamptz(database_url):
         await engine.dispose()
 
 
+def test_migrations_match_models(database_url):
+    directory = Path(__file__).resolve().parents[1] / "backend"
+    if not directory.exists():
+        directory = Path("/app")
+    config = Config(str(directory / "alembic.ini"))
+    command.check(config)
