@@ -19,3 +19,30 @@ def rss_bytes():
         return None
 
 
+def reclaim_unused_pages():
+    before = rss_bytes()
+    started = time.monotonic()
+    collected = gc.collect()
+    supported = False
+    try:
+        trim = ctypes.CDLL(None).malloc_trim
+        trim.argtypes = [ctypes.c_size_t]
+        trim.restype = ctypes.c_int
+        trim(0)
+        supported = True
+    except (AttributeError, OSError):
+        pass
+    after = rss_bytes()
+    return {
+        "before_rss_bytes": before,
+        "after_rss_bytes": after,
+        "unused_pages_released_bytes": max(0, before - after)
+        if before is not None and after is not None
+        else None,
+        "gc_unreachable_collected": collected,
+        "libc_trim_supported": supported,
+        "elapsed_ms": round((time.monotonic() - started) * 1000, 3),
+        "scope": "unreachable objects and unused allocator pages only",
+    }
+
+
