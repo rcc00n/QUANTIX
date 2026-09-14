@@ -46,3 +46,23 @@ TIME_SOURCES = (
 )
 
 
+@dataclass(frozen=True)
+class TimeSample:
+    source: str
+    utc_at_receipt: datetime
+    elapsed_at_receipt: float
+    uncertainty_seconds: float
+    round_trip_seconds: float
+    host_at_receipt: datetime
+    source_timestamp: str
+
+    def projected(self, elapsed: float) -> datetime:
+        return self.utc_at_receipt + timedelta(seconds=elapsed - self.elapsed_at_receipt)
+
+    def evidence(self) -> dict[str, Any]:
+        value = asdict(self)
+        value["utc_at_receipt"] = self.utc_at_receipt.isoformat()
+        value["host_at_receipt"] = self.host_at_receipt.isoformat()
+        return value
+
+
