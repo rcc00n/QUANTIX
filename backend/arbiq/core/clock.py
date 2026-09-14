@@ -126,3 +126,120 @@ async def fetch_time_sample(
     )
 
 
+class TrustedClock:
+    """Fail-closed UTC projection anchored to corroborated independent HTTPS clocks.
+
+    Call synchronize every 30 seconds. Two stable independent-source rounds are
+    required. Host health is a separate flag: an externally anchored UTC clock does
+    not falsely claim that the shared OS clock was repaired.
+    """
+
+    def __init__(
+        self,
+        *,
+        elapsed: Callable[[], float] = elapsed_seconds,
+        wall: Callable[[], datetime] = lambda: datetime.now(UTC),
+        max_age_seconds: float = 90,
+        maximum_uncertainty_seconds: float = 2,
+        required_stable_rounds: int = 2,
+    ):
+        self.elapsed = elapsed
+        self.wall = wall
+        self.max_age_seconds = max_age_seconds
+        self.maximum_uncertainty_seconds = maximum_uncertainty_seconds
+        self.required_stable_rounds = required_stable_rounds
+        self.anchor_utc: datetime | None = None
+        self.anchor_elapsed = 0.0
+        self.anchor_uncertainty = float("inf")
+        self.stable_rounds = 0
+        self.reason = "NO_EXTERNAL_REFERENCE"
+        self.sources: list[dict[str, Any]] = []
+        self.errors: dict[str, str] = {}
+        self.rounds = 0
+        self.wall_steps = 0
+        self.last_wall_step_seconds: float | None = None
+        self.last_wall_step_elapsed = float("-inf")
+        self.previous_wall = self.wall()
+        self.previous_elapsed = self.elapsed()
+        self.started_elapsed = self.previous_elapsed
+        self.stability_started_elapsed = self.previous_elapsed
+
+    def observe_wall(self) -> None:
+        now, wall = self.elapsed(), self.wall()
+        movement = (wall - self.previous_wall).total_seconds() - (now - self.previous_elapsed)
+        if abs(movement) > 1:
+            self.wall_steps += 1
+            self.last_wall_step_seconds = movement
+            self.last_wall_step_elapsed = now
+        self.previous_wall, self.previous_elapsed = wall, now
+
+    def apply_samples(self, samples: list[TimeSample]) -> bool:
+        """Pure evidence processing; synthetic samples can exercise every gate."""
+        self.observe_wall()
+        self.rounds += 1
+        now = self.elapsed()
+        valid = {
+            sample.source: sample
+            for sample in samples
+            if sample.utc_at_receipt.tzinfo is not None
+            and math.isfinite(sample.uncertainty_seconds)
+            and 0 < sample.uncertainty_seconds <= self.maximum_uncertainty_seconds
+            and math.isfinite(sample.round_trip_seconds)
+            and 0 <= sample.round_trip_seconds <= 3
+            and 0 <= now - sample.elapsed_at_receipt <= 10
+        }
+        # Find an unambiguous largest intersecting quorum. Equal-size conflicting
+        # clusters do not select whichever happened to arrive first.
+        quorums: list[tuple[tuple[TimeSample, ...], datetime, datetime]] = []
+        for size in range(len(valid), 1, -1):
+            for group in itertools.combinations(valid.values(), size):
+                lower = max(
+                    s.projected(now) - timedelta(seconds=s.uncertainty_seconds) for s in group
+                )
+                upper = min(
+                    s.projected(now) + timedelta(seconds=s.uncertainty_seconds) for s in group
+                )
+                if lower <= upper:
+                    quorums.append((group, lower, upper))
+            if quorums:
+                break
+        if not quorums:
+            self.stable_rounds = 0
+            self.stability_started_elapsed = now
+            self.reason = "INSUFFICIENT_AGREEING_REFERENCES"
+            self.sources = [sample.evidence() for sample in valid.values()]
+            return False
+        lower = max(q[1] for q in quorums)
+        upper = min(q[2] for q in quorums)
+        if lower > upper:
+            self.stable_rounds = 0
+            self.stability_started_elapsed = now
+            self.reason = "AMBIGUOUS_REFERENCE_QUORUM"
+            self.sources = [sample.evidence() for sample in valid.values()]
+            return False
+        estimate = lower + (upper - lower) / 2
+        uncertainty = (upper - lower).total_seconds() / 2
+        prior = self.anchor_utc
+        age = now - self.anchor_elapsed
+        if prior is not None and 0 <= age <= self.max_age_seconds:
+            predicted = prior + timedelta(seconds=age)
+            disagreement = abs((estimate - predicted).total_seconds())
+            tolerance = max(0.25, uncertainty + self.anchor_uncertainty + age * 0.0001)
+            if disagreement > tolerance:
+                self.stable_rounds = 0
+                self.stability_started_elapsed = now
+                self.reason = "ELAPSED_CLOCK_OR_REFERENCE_DISCONTINUITY"
+        else:
+            self.stable_rounds = 0
+            self.stability_started_elapsed = now
+        self.stable_rounds += 1
+        self.anchor_utc, self.anchor_elapsed = estimate, now
+        self.anchor_uncertainty = uncertainty
+        members = {s.source for group, _, _ in quorums for s in group}
+        self.sources = [sample.evidence() for name, sample in valid.items() if name in members]
+        if self.trusted:
+            self.reason = "EXTERNAL_UTC_VERIFIED"
+        elif self.reason != "ELAPSED_CLOCK_OR_REFERENCE_DISCONTINUITY":
+            self.reason = "AWAITING_STABILITY_ROUND"
+        return self.trusted
+
