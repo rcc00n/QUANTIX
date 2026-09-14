@@ -46,3 +46,9 @@ def reclaim_unused_pages():
     }
 
 
+async def maintain_process_memory(state, interval_seconds=300):
+    """One cancellable lifespan task; bounded diagnostics, no application cache eviction."""
+    await asyncio.sleep(60)
+    while True:
+        state.memory_maintenance = await asyncio.to_thread(reclaim_unused_pages)
+        await asyncio.sleep(interval_seconds)
