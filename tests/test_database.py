@@ -189,5 +189,38 @@ async def test_database_rejects_invalid_journals(database_url, kind):
         await engine.dispose()
 
 
+async def test_schema_uses_precise_numeric_and_timestamptz(database_url):
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.connect() as connection:
+            columns = (
+                (
+                    await connection.execute(
+                        text("""
+                SELECT table_name, column_name, data_type, numeric_precision, numeric_scale
+                FROM information_schema.columns WHERE table_schema = 'public'
+            """)
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            assert len(Base.metadata.tables) == 56
+            assert not any(
+                row["data_type"] in ("double precision", "real") for row in columns
+            )
+            numerics = [row for row in columns if row["data_type"] == "numeric"]
+            assert len(numerics) > 40
+            assert all(
+                row["numeric_precision"] == 38 and row["numeric_scale"] == 18
+                for row in numerics
+            )
+            assert all(
+                row["data_type"] == "timestamp with time zone"
+                for row in columns
+                if row["column_name"].endswith("_at")
+            )
+    finally:
+        await engine.dispose()
 
 
