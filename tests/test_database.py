@@ -135,6 +135,58 @@ async def test_postgres_roundtrip_ledger_balance_and_immutability(database_url):
         await engine.dispose()
 
 
+@pytest.mark.parametrize(
+    "kind", ["unbalanced", "empty", "cross_session", "cross_asset"]
+)
+async def test_database_rejects_invalid_journals(database_url, kind):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            paper, available, equity = await synthetic_accounts(db)
+            if kind == "cross_session":
+                _, _, equity = await synthetic_accounts(db)
+            if kind == "cross_asset":
+                asset = Asset(
+                    canonical_key=f"synthetic:{uuid4()}",
+                    symbol="OTHER",
+                    kind="fiat",
+                    identifiers={},
+                )
+                db.add(asset)
+                await db.flush()
+                equity = VirtualAccount(
+                    session_id=paper.id, asset_id=asset.id, role="equity"
+                )
+                db.add(equity)
+                await db.flush()
+            journal = synthetic_journal(paper)
+            db.add(journal)
+            await db.flush()
+            if kind != "empty":
+                db.add_all(
+                    [
+                        LedgerEntry(
+                            journal_id=journal.id,
+                            account_id=available.id,
+                            quantity=Decimal(10),
+                            cad_value=Decimal(10),
+                            memo="SYNTHETIC",
+                        ),
+                        LedgerEntry(
+                            journal_id=journal.id,
+                            account_id=equity.id,
+                            quantity=Decimal("-9" if kind == "unbalanced" else "-10"),
+                            cad_value=Decimal(-10),
+                            memo="SYNTHETIC",
+                        ),
+                    ]
+                )
+            with pytest.raises(DBAPIError):
+                await db.commit()
+            await db.rollback()
+    finally:
+        await engine.dispose()
 
 
 
