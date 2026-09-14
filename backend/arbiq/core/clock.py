@@ -243,3 +243,18 @@ class TrustedClock:
             self.reason = "AWAITING_STABILITY_ROUND"
         return self.trusted
 
+    async def synchronize(self, session: aiohttp.ClientSession) -> bool:
+        results = await asyncio.gather(
+            *(
+                fetch_time_sample(session, source, elapsed=self.elapsed, wall=self.wall)
+                for source in TIME_SOURCES
+            ),
+            return_exceptions=True,
+        )
+        self.errors = {
+            source.name: type(result).__name__
+            for source, result in zip(TIME_SOURCES, results, strict=True)
+            if isinstance(result, BaseException)
+        }
+        return self.apply_samples([result for result in results if isinstance(result, TimeSample)])
+
