@@ -66,3 +66,20 @@ class TimeSample:
         return value
 
 
+def parse_source_timestamp(payload: Any, source: TimeSource) -> tuple[datetime, str]:
+    value = payload
+    for part in source.path:
+        value = value[part]
+    if isinstance(value, (float, bool)):
+        raise ValueError("inexact time representation")
+    try:
+        epoch = Decimal(str(value)) / source.divisor
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("invalid time representation") from exc
+    if not epoch.is_finite() or not Decimal("1577836800") <= epoch <= Decimal("4102444800"):
+        raise ValueError("time outside supported 2020-2100 range")
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=int(epoch * 1000000)), str(
+        value
+    )
+
+
