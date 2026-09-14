@@ -29,3 +29,20 @@ def elapsed_seconds() -> float:
 ELAPSED_SOURCE = "CLOCK_MONOTONIC_RAW" if hasattr(time, "CLOCK_MONOTONIC_RAW") else "monotonic"
 
 
+@dataclass(frozen=True)
+class TimeSource:
+    name: str
+    url: str
+    path: tuple[str | int, ...]
+    divisor: int
+    resolution_seconds: float
+
+
+TIME_SOURCES = (
+    TimeSource("kraken", "https://api.kraken.com/0/public/Time", ("result", "unixtime"), 1, 1),
+    TimeSource("coinbase", "https://api.exchange.coinbase.com/time", ("epoch",), 1, 0.001),
+    TimeSource("binance", "https://api.binance.com/api/v3/time", ("serverTime",), 1000, 0.001),
+    TimeSource("okx", "https://www.okx.com/api/v5/public/time", ("data", 0, "ts"), 1000, 0.001),
+)
+
+
