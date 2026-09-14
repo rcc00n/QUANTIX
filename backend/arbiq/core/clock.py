@@ -83,3 +83,46 @@ def parse_source_timestamp(payload: Any, source: TimeSource) -> tuple[datetime, 
     )
 
 
+async def fetch_time_sample(
+    session: aiohttp.ClientSession,
+    source: TimeSource,
+    *,
+    elapsed: Callable[[], float] = elapsed_seconds,
+    wall: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> TimeSample:
+    started = elapsed()
+    async with session.get(
+        source.url,
+        params={"quantix_time_probe": str(time.monotonic_ns())},
+        headers={"Cache-Control": "no-cache, no-store", "Pragma": "no-cache"},
+        timeout=aiohttp.ClientTimeout(total=5),
+        allow_redirects=False,
+    ) as response:
+        response.raise_for_status()
+        if response.status != 200:
+            raise ValueError("unexpected time endpoint status")
+        if Decimal(response.headers.get("Age", "0")) > 0:
+            raise ValueError("cached time response")
+        raw = await response.content.read(16385)
+        if len(raw) > 16384:
+            raise ValueError("oversized time response")
+        payload = json.loads(raw, parse_float=Decimal)
+        timestamp, original = parse_source_timestamp(payload, source)
+    ended = elapsed()
+    rtt = ended - started
+    if not math.isfinite(rtt) or not 0 <= rtt <= 3:
+        raise ValueError("time response latency outside trust budget")
+    # Generation occurs somewhere within the request interval. Truncated source
+    # precision adds [0,resolution]; midpoint is an estimate, bounds include both.
+    uncertainty = rtt / 2 + source.resolution_seconds / 2 + 0.05
+    return TimeSample(
+        source.name,
+        timestamp + timedelta(seconds=rtt / 2 + source.resolution_seconds / 2),
+        ended,
+        uncertainty,
+        rtt,
+        wall(),
+        original,
+    )
+
+
