@@ -19,3 +19,12 @@ def read_secret_file(filename: str) -> str:
     return value
 
 
+def secret_environment(name: str) -> str:
+    """FILE takes precedence; an explicitly missing file must fail closed."""
+    filename = os.environ.get(f"{name}_FILE")
+    if filename:
+        return read_secret_file(filename)
+    value = os.environ.get(name)
+    if not value:
+        raise ValueError("Required runtime credential is unavailable")
+    return value
