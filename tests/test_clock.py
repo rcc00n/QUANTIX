@@ -259,3 +259,13 @@ async def test_public_time_transport_rejects_cache_oversize_and_impossible_laten
         )
 
 
+@pytest.mark.asyncio
+async def test_reference_errors_are_sanitized_and_fail_closed(monkeypatch):
+    async def unavailable(*args, **kwargs):
+        raise TimeoutError("SYNTHETIC SECRET-LIKE STRING MUST NEVER BE REPORTED")
+
+    monkeypatch.setattr("arbiq.core.clock.fetch_time_sample", unavailable)
+    clock = SyntheticTime().clock()
+    assert not await clock.synchronize(None)
+    assert set(clock.snapshot()["errors"].values()) == {"TimeoutError"}
+    assert "SECRET" not in str(clock.snapshot())
