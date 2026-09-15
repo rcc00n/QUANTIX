@@ -18,3 +18,24 @@ def test_reclaim_reports_only_process_memory():
     assert "unreachable objects" in result["scope"]
 
 
+@pytest.mark.asyncio
+async def test_maintenance_is_bounded_and_cancellable():
+    state = SimpleNamespace(memory_maintenance=None)
+    sleeps = []
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError
+
+    async def run(function):
+        return {"scope": "SYNTHETIC unreachable objects only"}
+
+    with (
+        patch("arbiq.core.memory.asyncio.sleep", sleep),
+        patch("arbiq.core.memory.asyncio.to_thread", run),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await maintain_process_memory(state, interval_seconds=300)
+    assert sleeps == [60, 300]
+    assert state.memory_maintenance["scope"].startswith("SYNTHETIC")
