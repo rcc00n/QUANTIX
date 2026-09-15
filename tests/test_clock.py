@@ -60,6 +60,18 @@ def test_clock_requires_multiple_independent_stable_rounds_and_expires():
     assert not clock.snapshot()["host_healthy"]
 
 
+def test_wall_step_does_not_reverse_verified_utc_and_host_is_gated():
+    time = SyntheticTime()
+    clock = establish(time)
+    before = clock.utcnow()
+    time.move(15, wall_seconds=-65)
+    assert clock.utcnow() == before + timedelta(seconds=15)
+    status = clock.snapshot()
+    assert status["trusted"]
+    assert status["wall_steps"] == 1
+    assert status["last_wall_step_seconds"] == -80
+    assert status["host_offset_seconds"] == -80
+    assert not status["host_healthy"]
 
 
 
