@@ -74,6 +74,15 @@ def test_wall_step_does_not_reverse_verified_utc_and_host_is_gated():
     assert not status["host_healthy"]
 
 
+def test_elapsed_clock_discontinuity_requires_reestablishment():
+    time = SyntheticTime()
+    clock = establish(time)
+    time.move(30)
+    assert not clock.apply_samples(time.samples(offset=-80))
+    assert clock.snapshot()["reason"] == "ELAPSED_CLOCK_OR_REFERENCE_DISCONTINUITY"
+    time.move(30)
+    assert clock.apply_samples(time.samples(offset=-80))
+    assert not clock.snapshot()["host_healthy"]
 
 
 
