@@ -85,6 +85,13 @@ def test_elapsed_clock_discontinuity_requires_reestablishment():
     assert not clock.snapshot()["host_healthy"]
 
 
+def test_missing_and_single_source_fail_closed_even_after_prior_trust():
+    time = SyntheticTime()
+    clock = establish(time)
+    assert not clock.apply_samples(time.samples()[:1])
+    assert not clock.trusted
+    assert clock.snapshot()["reason"] == "INSUFFICIENT_AGREEING_REFERENCES"
+    assert not clock.apply_samples([])
 
 
 
