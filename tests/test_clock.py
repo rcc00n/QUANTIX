@@ -149,6 +149,10 @@ def test_single_outlier_does_not_defeat_independent_majority():
     }
 
 
+@pytest.mark.parametrize("uncertainty", [0, -1, 3, float("nan"), float("inf")])
+def test_invalid_or_excessive_uncertainty_is_not_trusted(uncertainty):
+    time = SyntheticTime()
+    assert not time.clock().apply_samples(time.samples(uncertainty=uncertainty))
 
 
 
