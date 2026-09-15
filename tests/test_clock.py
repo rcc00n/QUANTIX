@@ -164,6 +164,15 @@ def test_old_or_future_received_samples_do_not_establish_time():
     assert not time.clock().apply_samples(samples)
 
 
+def test_time_parsing_preserves_exact_fractional_epoch():
+    utc, original = parse_source_timestamp(
+        {"epoch": Decimal("1767225600.123456")}, TIME_SOURCES[1]
+    )
+    assert utc == datetime(2026, 1, 1, microsecond=123456, tzinfo=UTC)
+    assert original == "1767225600.123456"
+    assert parse_source_timestamp({"serverTime": "1767225600123"}, TIME_SOURCES[2])[
+        0
+    ] == (datetime(2026, 1, 1, microsecond=123000, tzinfo=UTC))
 
 
 
