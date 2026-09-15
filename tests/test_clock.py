@@ -155,6 +155,13 @@ def test_invalid_or_excessive_uncertainty_is_not_trusted(uncertainty):
     assert not time.clock().apply_samples(time.samples(uncertainty=uncertainty))
 
 
+def test_old_or_future_received_samples_do_not_establish_time():
+    time = SyntheticTime()
+    samples = time.samples()
+    time.move(11)
+    assert not time.clock().apply_samples(samples)
+    time.move(-20)
+    assert not time.clock().apply_samples(samples)
 
 
 
