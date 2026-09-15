@@ -183,6 +183,12 @@ def test_invalid_time_payloads_rejected(value):
         parse_source_timestamp({"epoch": value}, TIME_SOURCES[1])
 
 
+def test_rapid_duplicate_rounds_do_not_establish_stability():
+    time = SyntheticTime()
+    clock = time.clock()
+    for _ in range(10):
+        assert not clock.apply_samples(time.samples())
+    assert clock.snapshot()["reason"] == "AWAITING_STABILITY_ROUND"
 
 
 class SyntheticResponse:
