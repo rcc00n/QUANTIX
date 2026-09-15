@@ -16,3 +16,12 @@ def convert_to_cad(amount: Decimal, cad_per_unit: Decimal) -> Decimal:
         return amount * cad_per_unit
 
 
+def round_quantity_down(quantity: Decimal, step: Decimal) -> Decimal:
+    quantity, step = exact_decimal(quantity), exact_decimal(step)
+    if quantity < 0 or step <= 0:
+        raise ValueError("Quantity must be nonnegative and step must be positive")
+    with localcontext() as ctx:
+        ctx.prec = 78
+        return (quantity / step).to_integral_value(rounding=ROUND_DOWN) * step
+
+
