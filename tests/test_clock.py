@@ -101,6 +101,24 @@ def test_duplicates_do_not_count_as_independent_sources():
     assert not clock.apply_samples([sample, sample, sample])
 
 
+def test_conflicting_equal_quorums_fail_closed():
+    time = SyntheticTime()
+    clock = time.clock()
+    samples = time.samples()
+    samples.extend(
+        TimeSample(
+            name,
+            time.wall + timedelta(seconds=80),
+            time.elapsed,
+            0.1,
+            0.05,
+            time.wall,
+            "synthetic-outlier",
+        )
+        for name in ("synthetic-independent-c", "synthetic-independent-d")
+    )
+    assert not clock.apply_samples(samples)
+    assert clock.snapshot()["reason"] == "AMBIGUOUS_REFERENCE_QUORUM"
 
 
 
