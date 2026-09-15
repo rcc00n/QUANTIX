@@ -175,6 +175,12 @@ def test_time_parsing_preserves_exact_fractional_epoch():
     ] == (datetime(2026, 1, 1, microsecond=123000, tzinfo=UTC))
 
 
+@pytest.mark.parametrize(
+    "value", [1767225600.0, True, "NaN", "Infinity", "0", "999999999999"]
+)
+def test_invalid_time_payloads_rejected(value):
+    with pytest.raises(ValueError):
+        parse_source_timestamp({"epoch": value}, TIME_SOURCES[1])
 
 
 
