@@ -121,6 +121,32 @@ def test_conflicting_equal_quorums_fail_closed():
     assert clock.snapshot()["reason"] == "AMBIGUOUS_REFERENCE_QUORUM"
 
 
+def test_single_outlier_does_not_defeat_independent_majority():
+    time = SyntheticTime()
+    clock = time.clock()
+    samples = time.samples()
+    samples.append(
+        TimeSample(
+            "synthetic-c", time.wall, time.elapsed, 0.1, 0.05, time.wall, "synthetic"
+        )
+    )
+    samples.append(
+        TimeSample(
+            "synthetic-d",
+            time.wall + timedelta(seconds=80),
+            time.elapsed,
+            0.1,
+            0.05,
+            time.wall,
+            "synthetic-outlier",
+        )
+    )
+    assert not clock.apply_samples(samples)
+    assert {s["source"] for s in clock.sources} == {
+        "synthetic-independent-a",
+        "synthetic-independent-b",
+        "synthetic-c",
+    }
 
 
 
