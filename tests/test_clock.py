@@ -94,6 +94,11 @@ def test_missing_and_single_source_fail_closed_even_after_prior_trust():
     assert not clock.apply_samples([])
 
 
+def test_duplicates_do_not_count_as_independent_sources():
+    time = SyntheticTime()
+    clock = time.clock()
+    sample = time.samples()[0]
+    assert not clock.apply_samples([sample, sample, sample])
 
 
 
