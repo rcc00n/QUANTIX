@@ -222,6 +222,21 @@ class SyntheticSession:
         return self.response
 
 
+@pytest.mark.asyncio
+async def test_public_time_transport_preserves_roundtrip_bounds_and_disables_redirects():
+    readings = iter([1000, 1000.2])
+    session = SyntheticSession(SyntheticResponse())
+    sample = await fetch_time_sample(
+        session,
+        TIME_SOURCES[2],
+        elapsed=lambda: next(readings),
+        wall=lambda: datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    assert sample.utc_at_receipt == datetime(2026, 1, 1, microsecond=223500, tzinfo=UTC)
+    assert sample.uncertainty_seconds == pytest.approx(0.1505)
+    assert sample.round_trip_seconds == pytest.approx(0.2)
+    assert session.options["allow_redirects"] is False
+    assert session.options["timeout"].total == 5
 
 
 
