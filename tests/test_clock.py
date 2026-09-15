@@ -239,5 +239,23 @@ async def test_public_time_transport_preserves_roundtrip_bounds_and_disables_red
     assert session.options["timeout"].total == 5
 
 
+@pytest.mark.parametrize(
+    ("response", "readings"),
+    [
+        (SyntheticResponse(headers={"Age": "10"}), [1000, 1000.2]),
+        (SyntheticResponse(body=b"x" * 16385), [1000, 1000.2]),
+        (SyntheticResponse(), [1000, 1004]),
+        (SyntheticResponse(), [1000, 999]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_public_time_transport_rejects_cache_oversize_and_impossible_latency(
+    response, readings
+):
+    elapsed = iter(readings)
+    with pytest.raises(ValueError):
+        await fetch_time_sample(
+            SyntheticSession(response), TIME_SOURCES[2], elapsed=lambda: next(elapsed)
+        )
 
 
