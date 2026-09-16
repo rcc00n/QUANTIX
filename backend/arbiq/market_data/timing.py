@@ -46,3 +46,29 @@ def distribution(values):
     }
 
 
+class Timings:
+    def __init__(self, limit=600):
+        self.limit = limit
+        self.values = {}
+
+    def add(self, name, value):
+        if value is not None and math.isfinite(value) and value >= 0:
+            self.values.setdefault(name, deque(maxlen=self.limit)).append(
+                (elapsed_seconds(), value)
+            )
+
+    def snapshot(self):
+        now = elapsed_seconds()
+        return {
+            name: {
+                **distribution(v for _, v in rows),
+                "unit": "ms",
+                "window_seconds": round(now - rows[0][0], 3),
+                "window_limit": self.limit,
+                "elapsed_source": "monotonic_raw_or_monotonic",
+            }
+            for name, rows in self.values.items()
+            if rows
+        }
+
+
