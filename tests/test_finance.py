@@ -74,3 +74,9 @@ def test_invalid_financial_inputs(operation, args):
         operation(*args)
 
 
+def test_contract_json_uses_decimal_strings_and_validates_defaults():
+    level = BookLevel(price="0.1", quantity="2")
+    assert level.model_dump(mode="json") == {"price": "0.1", "quantity": "2"}
+    assert StrategySettings().minimum_profit_cad == Decimal(5)
+    with pytest.raises(ValidationError):
+        BookLevel(price=0.1, quantity="1")
