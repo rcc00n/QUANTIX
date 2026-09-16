@@ -17,3 +17,8 @@ def test_decimal_precision_and_signed_conversion():
 )
 def test_exchange_quantity_step_rounds_down(quantity, step, expected):
     assert round_quantity_down(Decimal(quantity), Decimal(step)) == Decimal(expected)
+def test_pnl_keeps_fees_and_expenses_separate_and_allows_losses():
+    assert net_simulated_pnl(
+        Decimal("10.01"), Decimal("2.02"), Decimal("1.03")
+    ) == Decimal("6.96")
+    assert net_simulated_pnl(Decimal(1), Decimal(2), Decimal(3)) == Decimal(-4)

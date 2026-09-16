@@ -25,3 +25,10 @@ def round_quantity_down(quantity: Decimal, step: Decimal) -> Decimal:
         return (quantity / step).to_integral_value(rounding=ROUND_DOWN) * step
 
 
+def net_simulated_pnl(gross_cad: Decimal, fees_cad: Decimal, expenses_cad: Decimal) -> Decimal:
+    gross_cad, fees_cad, expenses_cad = map(exact_decimal, (gross_cad, fees_cad, expenses_cad))
+    if fees_cad < 0 or expenses_cad < 0:
+        raise ValueError("Costs must be nonnegative")
+    with localcontext() as ctx:
+        ctx.prec = 78
+        return gross_cad - fees_cad - expenses_cad
