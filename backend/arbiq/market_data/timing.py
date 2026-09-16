@@ -80,3 +80,54 @@ def age_seconds(now: datetime, timestamp: datetime | None):
     return round(age, 6) if age >= 0 else None
 
 
+def freshness(book, now, config, clock):
+    receive_age = age_seconds(now, book.received_at)
+    source_age = age_seconds(now, book.exchange_timestamp)
+    uncertainty_ms = clock.get("uncertainty_ms")
+    try:
+        uncertainty = float(uncertainty_ms) / 1000
+        if not math.isfinite(uncertainty) or not 0 <= uncertainty <= 2:
+            raise ValueError
+    except (ValueError, TypeError):
+        uncertainty = None
+    reason = None
+    if not clock.get("trusted") or uncertainty is None:
+        state, reason = "CLOCK_UNTRUSTED", "UTC_REFERENCE_UNAVAILABLE"
+    elif not book.normalized.bids or not book.normalized.asks:
+        state, reason = "UNAVAILABLE", "TWO_SIDED_BOOK_UNAVAILABLE"
+    elif receive_age is None or (book.exchange_timestamp and source_age is None):
+        state, reason = "CLOCK_UNTRUSTED", "FUTURE_OBSERVATION"
+    elif book.state.value == "STALE":
+        # The live worker may have stricter owner-applied limits than API defaults.
+        state, reason = "STALE", "BOOK_ALREADY_CLASSIFIED_STALE"
+    else:
+        # Include capture uncertainty as well as the current reference bound.
+        captured = book.verification.get("clock", {}).get("uncertainty_ms")
+        try:
+            captured = float(captured) / 1000
+            if not math.isfinite(captured) or not 0 <= captured <= 2:
+                raise ValueError
+        except (ValueError, TypeError):
+            captured = 2.0
+        upper = max(receive_age, source_age or 0) + uncertainty + captured
+        stale_after = min(config.freshness_stale_seconds, config.maximum_age_seconds)
+        state = (
+            "STALE"
+            if upper > stale_after
+            else "AGING"
+            if upper > config.freshness_fresh_seconds
+            else "FRESH"
+        )
+        if source_age is None:
+            reason = "SOURCE_TIMESTAMP_UNAVAILABLE_RECEIPT_AGE_ONLY"
+    return {
+        "classification": state,
+        "reason": reason,
+        "collector_age_seconds": receive_age,
+        "source_age_seconds": source_age,
+        "source_timestamp_supplied": book.exchange_timestamp is not None,
+        "timestamp_basis": book.raw_evidence.get("timestamp_basis"),
+        "fresh_seconds": config.freshness_fresh_seconds,
+        "stale_seconds": min(config.freshness_stale_seconds, config.maximum_age_seconds),
+        "clock_uncertainty_ms": uncertainty_ms,
+    }
