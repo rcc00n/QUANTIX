@@ -58,5 +58,19 @@ def test_pnl_keeps_fees_and_expenses_separate_and_allows_losses():
     assert net_simulated_pnl(Decimal(1), Decimal(2), Decimal(3)) == Decimal(-4)
 
 
+@pytest.mark.parametrize(
+    "operation,args",
+    [
+        (convert_to_cad, (Decimal(1), Decimal(0))),
+        (convert_to_cad, (Decimal(1), Decimal(-1))),
+        (round_quantity_down, (Decimal(-1), Decimal("0.1"))),
+        (round_quantity_down, (Decimal(1), Decimal(0))),
+        (net_simulated_pnl, (Decimal(1), Decimal(-1), Decimal(0))),
+        (net_simulated_pnl, (Decimal(1), Decimal(0), Decimal(-1))),
+    ],
+)
+def test_invalid_financial_inputs(operation, args):
+    with pytest.raises(ValueError):
+        operation(*args)
 
 
