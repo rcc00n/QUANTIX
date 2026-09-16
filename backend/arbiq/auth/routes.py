@@ -84,3 +84,29 @@ async def me(user: AuthenticatedUser) -> dict:
     return {"id": str(user.id), "username": user.username, "mode": "paper"}
 
 
+@router.post("/logout")
+async def logout(request: Request, response: Response, db: DB, user: AuthenticatedUser) -> dict:
+    token = request.cookies.get(COOKIE_NAME, "")
+    await db.execute(
+        update(AuthSession)
+        .where(AuthSession.token_hash == hash_token(token))
+        .values(revoked_at=datetime.now(UTC))
+    )
+    db.add(
+        SystemEvent(
+            event_type="auth.logout",
+            severity="info",
+            actor_user_id=user.id,
+            message="Dashboard session revoked",
+            details={},
+        )
+    )
+    await db.commit()
+    response.delete_cookie(
+        COOKIE_NAME,
+        path="/",
+        secure=request.app.state.settings.cookie_secure,
+        httponly=True,
+        samesite="strict",
+    )
+    return {"status": "logged_out"}
