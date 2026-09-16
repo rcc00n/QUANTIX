@@ -79,3 +79,8 @@ async def login(payload: LoginRequest, request: Request, response: Response, db:
     return {"username": user.username, "mode": "paper"}
 
 
+@router.get("/me")
+async def me(user: AuthenticatedUser) -> dict:
+    return {"id": str(user.id), "username": user.username, "mode": "paper"}
+
+
