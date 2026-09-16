@@ -72,3 +72,11 @@ class Timings:
         }
 
 
+def age_seconds(now: datetime, timestamp: datetime | None):
+    """A future or unavailable timestamp is not a zero-age observation."""
+    if timestamp is None:
+        return None
+    age = (now - timestamp).total_seconds()
+    return round(age, 6) if age >= 0 else None
+
+
