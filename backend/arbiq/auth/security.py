@@ -24,3 +24,5 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
