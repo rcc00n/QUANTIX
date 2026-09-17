@@ -38,3 +38,11 @@ def eligibility(exchange_id: str) -> dict:
     }
 
 
+def available_candidates(requested: list[str], excluded: list[str]) -> tuple[list[str], list[str]]:
+    selected = [name for name in requested if name not in excluded]
+    return (
+        [name for name in selected if name in async_ccxt.exchanges],
+        [name for name in selected if name not in async_ccxt.exchanges],
+    )
+
+
