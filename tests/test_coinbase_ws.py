@@ -171,6 +171,24 @@ def test_bounded_frontier_matches_full_synthetic_order_book_oracle():
             assert len(getattr(protocol.books[PRODUCT], field).levels) <= 256
 
 
+@pytest.mark.parametrize(
+    "payload,code",
+    [
+        ({"type": "error", "message": "SYNTHETIC exchange rejection"}, "SUBSCRIPTION_REJECTED"),
+        (snapshot(product_id="SYNTHETIC-OTHER"), "UNKNOWN_STREAM_PRODUCT"),
+        (delta([["buy", "100", "2"]]), "DELTA_WITHOUT_SNAPSHOT"),
+        (snapshot(bids=[["100", "1"], ["100.00", "2"]]), "INVALID_SNAPSHOT_LEVEL"),
+        (snapshot(bids=[[100, "1"]]), "INVALID_LEVEL_TYPE"),
+        (snapshot(asks=[["100", "2"]]), "INVALID_RECONSTRUCTED_BOOK"),
+        (snapshot(bids=[]), "INVALID_SNAPSHOT_DEPTH"),
+        (heartbeat(sequence=True), "INVALID_HEARTBEAT_SEQUENCE"),
+    ],
+)
+def test_malformed_and_unavailable_market_frames_fail_closed(payload, code):
+    exchange = CoinbaseProtocol([PRODUCT], 25)
+    with pytest.raises(StreamInvalid, match=code):
+        send(exchange, payload)
+    assert not exchange.books
 
 
 
