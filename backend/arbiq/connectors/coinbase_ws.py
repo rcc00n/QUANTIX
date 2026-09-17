@@ -41,3 +41,53 @@ def _event_time(value: str) -> datetime:
         raise StreamInvalid("INVALID_EVENT_TIMESTAMP") from exc
 
 
+class _Side:
+    """Retain the known price region, or the entire book for a short snapshot.
+
+    A dropped price is always strictly worse than the retained boundary. Any
+    update on the tracked side of that boundary is applied. If the known
+    region ceases to contain the requested number of levels, resnapshot instead
+    of guessing or treating the unseen tail as absent.
+    """
+
+    def __init__(self, rows: list, *, is_bid: bool, capacity: int):
+        if not isinstance(rows, list) or not 0 < len(rows) <= _MAX_SNAPSHOT_SIDE:
+            raise StreamInvalid("INVALID_SNAPSHOT_DEPTH")
+        self.is_bid = is_bid
+        self.capacity = capacity
+        self.boundary: Decimal | None = None
+        self.levels: dict[Decimal, Decimal] = {}
+        for row in rows:
+            if not isinstance(row, list) or len(row) != 2:
+                raise StreamInvalid("INVALID_SNAPSHOT_LEVEL")
+            price, size = _level(*row)
+            if size == 0 or price in self.levels:
+                raise StreamInvalid("INVALID_SNAPSHOT_LEVEL")
+            self.levels[price] = size
+        self.trim()
+
+    def apply(self, price: Decimal, size: Decimal):
+        if self.boundary is not None and (
+            price < self.boundary if self.is_bid else price > self.boundary
+        ):
+            return
+        if size == 0:
+            self.levels.pop(price, None)
+        else:
+            self.levels[price] = size
+
+    def trim(self):
+        if len(self.levels) > self.capacity:
+            leading = nlargest if self.is_bid else nsmallest
+            rows = leading(self.capacity, self.levels.items(), key=_PRICE_ONLY)
+            self.levels = dict(rows)
+            self.boundary = rows[-1][0]
+
+    def leading(self, depth: int) -> list:
+        self.trim()
+        if self.boundary is not None and len(self.levels) < depth:
+            raise StreamInvalid("DEPTH_FRONTIER_EXHAUSTED")
+        prices = sorted(self.levels, reverse=self.is_bid)[:depth]
+        return [[price, self.levels[price]] for price in prices]
+
+
