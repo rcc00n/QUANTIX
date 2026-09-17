@@ -140,3 +140,93 @@ class _Book:
         }
 
 
+class CoinbaseProtocol:
+    """Coinbase Exchange public batch book, separate from Advanced Trade's protocol.
+
+    Native Level2 Batch frames have no per-book checksum or sequence field.
+    Heartbeat sequence numbers are product-level and cannot prove continuity
+    for the batch channel, so they never update a book or its source timestamp.
+    """
+
+    url = "wss://ws-feed.exchange.coinbase.com"
+    ping_message = None
+
+    def __init__(self, symbols: list[str], depth: int):
+        self.symbols = frozenset(symbols)
+        if not self.symbols or len(self.symbols) != len(symbols) or not 1 <= depth <= 100:
+            raise ValueError("Coinbase subscriptions require unique products and bounded depth")
+        if any(not isinstance(product, str) or "-" not in product for product in self.symbols):
+            raise ValueError("Coinbase subscriptions require native Exchange product IDs")
+        self.depth = depth
+        self.books: dict[str, _Book] = {}
+
+    def subscription(self) -> dict:
+        return {
+            "type": "subscribe",
+            "product_ids": sorted(self.symbols),
+            "channels": ["level2_batch", "heartbeat"],
+        }
+
+    def _check_subscription(self, channels: list):
+        if not isinstance(channels, list):
+            raise StreamInvalid("INVALID_SUBSCRIPTION_RESPONSE")
+        booked, heartbeat = set(), set()
+        for entry in channels:
+            if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+                raise StreamInvalid("INVALID_SUBSCRIPTION_RESPONSE")
+            name = entry["name"]
+            if name not in _BOOK_CHANNELS and name != "heartbeat":
+                continue
+            products = entry.get("product_ids")
+            if not isinstance(products, list) or any(not isinstance(p, str) for p in products):
+                raise StreamInvalid("INVALID_SUBSCRIPTION_RESPONSE")
+            if name in _BOOK_CHANNELS:
+                booked.update(products)
+            else:
+                heartbeat.update(products)
+        if booked != self.symbols or heartbeat != self.symbols:
+            raise StreamInvalid("INCOMPLETE_SUBSCRIPTION")
+
+    def consume(self, message: str | bytes) -> StreamFrame:
+        try:
+            return self._consume(json.loads(message))
+        except StreamInvalid:
+            self.books.clear()
+            raise
+        except (ValueError, TypeError, KeyError) as exc:
+            self.books.clear()
+            raise StreamInvalid("MALFORMED_COINBASE_FRAME") from exc
+
+    def _consume(self, data: dict) -> StreamFrame:
+        if not isinstance(data, dict) or not isinstance(data.get("type"), str):
+            raise StreamInvalid("MALFORMED_COINBASE_FRAME")
+        kind = data["type"]
+        if kind == "error":
+            raise StreamInvalid("COINBASE_SUBSCRIPTION_REJECTED")
+        if kind == "subscriptions":
+            self._check_subscription(data["channels"])
+            return StreamFrame(synchronized=frozenset(self.books))
+        if kind not in {"snapshot", "l2update", "heartbeat"}:
+            return StreamFrame(synchronized=frozenset(self.books), activity=False)
+        product = data.get("product_id")
+        if product not in self.symbols:
+            raise StreamInvalid("UNKNOWN_STREAM_PRODUCT")
+        if kind == "heartbeat":
+            _event_time(data.get("time"))
+            if type(data.get("sequence")) is not int or data["sequence"] < 0:
+                raise StreamInvalid("INVALID_HEARTBEAT_SEQUENCE")
+            return StreamFrame(synchronized=frozenset(self.books))
+        timestamp = None
+        if kind == "snapshot":
+            if product in self.books:
+                raise StreamInvalid("UNEXPECTED_SECOND_SNAPSHOT")
+            book = self.books[product] = _Book(data, self.depth)
+        else:
+            book = self.books.get(product)
+            if book is None:
+                raise StreamInvalid("DELTA_WITHOUT_SNAPSHOT")
+            if not book.update(data):
+                return StreamFrame(synchronized=frozenset(self.books), activity=False)
+            timestamp = data["time"]
+        raw = book.projected(product, timestamp)
+        return StreamFrame(books=((product, raw),), synchronized=frozenset(self.books))
