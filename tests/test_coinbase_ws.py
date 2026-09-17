@@ -76,6 +76,47 @@ def test_native_product_ids_and_batch_subscription_alias():
         CoinbaseProtocol(["BTC/USD"], 25)
 
 
+def test_updates_are_exact_absolute_sizes_and_heartbeat_never_refreshes_quote():
+    protocol = CoinbaseProtocol([PRODUCT, OTHER_PRODUCT], 25)
+    first = send(protocol, heartbeat(sequence=90))
+    assert first.activity and first.books == () and not first.synchronized
+    # Coinbase may include an undocumented snapshot `time`. Keep it distinct
+    # from a documented exchange engine update time and do not publish it.
+    event = send(protocol, snapshot(time=NOW.isoformat()))
+    symbol, book = event.books[0]
+    assert symbol == PRODUCT and event.synchronized == {PRODUCT}
+    assert book["timestamp"] is None
+    assert book["timestamp_basis"] == "no_verified_snapshot_event_time"
+    assert book["bids"][0] == [Decimal("100.00"), Decimal("1.000000000000000001")]
+    assert book["asks"][0] == [Decimal(102), Decimal(3)]
+    assert book["stream_integrity"]["update_sequence"] == "not_supplied"
+    assert book["stream_integrity"]["checksum"] == "not_supplied"
+    update = delta(
+        [
+            ["buy", "100.0000", "0"],
+            ["buy", "99", "2.22"],
+            ["buy", "99", "3.33"],
+            ["sell", "102", "0.314159265358979323"],
+        ]
+    )
+    result = send(protocol, update)
+    raw = result.books[0][1]
+    assert raw["timestamp"] == update["time"]
+    assert raw["timestamp_basis"] == "exchange_batch_latest_event"
+    assert raw["nonce"] is None
+    assert raw["bids"] == [[Decimal(99), Decimal("3.33")], [Decimal(98), Decimal(2)]]
+    assert raw["asks"][0][1] == Decimal("0.314159265358979323")
+    # Product-level heartbeats can skip arbitrary sequence values between
+    # heartbeats. Those values cannot demonstrate a gap in the batch channel.
+    idle = send(protocol, heartbeat(sequence=2000))
+    assert idle.activity and not idle.books and idle.synchronized == {PRODUCT}
+    duplicate = send(protocol, update)
+    assert not duplicate.activity and not duplicate.books
+    # A different delivered message can share the same engine timestamp.
+    same_timestamp = send(protocol, delta([["buy", "99", "4"]]))
+    assert same_timestamp.books[0][1]["bids"][0] == [Decimal(99), Decimal(4)]
+    other = send(protocol, snapshot(product_id=OTHER_PRODUCT))
+    assert other.synchronized == {PRODUCT, OTHER_PRODUCT}
 
 
 
