@@ -191,5 +191,20 @@ def test_malformed_and_unavailable_market_frames_fail_closed(payload, code):
     assert not exchange.books
 
 
+def test_out_of_order_and_untimed_update_require_fresh_connection_snapshot():
+    protocol = CoinbaseProtocol([PRODUCT], 25)
+    send(protocol, snapshot())
+    with pytest.raises(StreamInvalid, match="INVALID_EVENT_TIMESTAMP"):
+        send(protocol, delta([["buy", "100", "7"]], time="2026-03-04T00:00:01"))
+    assert not protocol.books
+    send(protocol, snapshot())
+    send(protocol, delta([["buy", "100", "7"]], step=2))
+    with pytest.raises(StreamInvalid, match="OUT_OF_ORDER_BOOK_EVENT"):
+        send(protocol, delta([["buy", "100", "3"]], step=1))
+    with pytest.raises(StreamInvalid, match="DELTA_WITHOUT_SNAPSHOT"):
+        send(protocol, delta([["buy", "100", "4"]], step=3))
+    send(protocol, snapshot())
+    with pytest.raises(StreamInvalid, match="UNEXPECTED_SECOND_SNAPSHOT"):
+        send(protocol, snapshot())
 
 
