@@ -91,3 +91,52 @@ class _Side:
         return [[price, self.levels[price]] for price in prices]
 
 
+class _Book:
+    def __init__(self, data: dict, depth: int):
+        self.depth = depth
+        capacity = max(256, depth * 4)
+        self.bids = _Side(data["bids"], is_bid=True, capacity=capacity)
+        self.asks = _Side(data["asks"], is_bid=False, capacity=capacity)
+        self.last_time: datetime | None = None
+        self.last_changes: tuple | None = None
+
+    def update(self, data: dict) -> bool:
+        timestamp = _event_time(data["time"])
+        if self.last_time is not None and timestamp < self.last_time:
+            raise StreamInvalid("OUT_OF_ORDER_BOOK_EVENT")
+        changes = data["changes"]
+        if not isinstance(changes, list) or not 0 < len(changes) <= _MAX_BATCH_CHANGES:
+            raise StreamInvalid("INVALID_BATCH_SIZE")
+        parsed = []
+        for change in changes:
+            if not isinstance(change, list) or len(change) != 3:
+                raise StreamInvalid("INVALID_BATCH_CHANGE")
+            side, price, quantity = change
+            if side not in ("buy", "sell"):
+                raise StreamInvalid("INVALID_BATCH_SIDE")
+            parsed.append((side, *_level(price, quantity)))
+        batch = tuple(parsed)
+        if timestamp == self.last_time and batch == self.last_changes:
+            return False
+        for side, price, size in batch:
+            (self.bids if side == "buy" else self.asks).apply(price, size)
+        self.last_time, self.last_changes = timestamp, batch
+        return True
+
+    def projected(self, product: str, event_time: str | None) -> dict:
+        bids, asks = self.bids.leading(self.depth), self.asks.leading(self.depth)
+        if not bids or not asks or bids[0][0] >= asks[0][0]:
+            raise StreamInvalid("INVALID_RECONSTRUCTED_BOOK")
+        return {
+            "symbol": product,
+            "bids": bids,
+            "asks": asks,
+            "timestamp": event_time,
+            "timestamp_basis": (
+                "exchange_batch_latest_event" if event_time else "no_verified_snapshot_event_time"
+            ),
+            "stream_integrity": dict(_INTEGRITY),
+            "nonce": None,
+        }
+
+
