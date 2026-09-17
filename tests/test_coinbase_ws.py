@@ -138,6 +138,37 @@ def test_top_levels_stay_exact_after_deletion_until_the_frontier_is_exhausted():
         send(protocol, delta([["buy", "90", "5"]], step=3))
 
 
+def test_bounded_frontier_matches_full_synthetic_order_book_oracle():
+    protocol = CoinbaseProtocol([PRODUCT], 25)
+    rng = random.Random(150)
+    all_rows = {
+        "buy": {price: Decimal(1) for price in range(100, 500)},
+        "sell": {price: Decimal(1) for price in range(700, 1100)},
+    }
+    send(
+        protocol,
+        snapshot(
+            bids=[[str(price), "1"] for price in all_rows["buy"]],
+            asks=[[str(price), "1"] for price in all_rows["sell"]],
+        ),
+    )
+    for step in range(1, 121):
+        changes = []
+        for _ in range(16):
+            side = rng.choice(("buy", "sell"))
+            start, end = (75, 550) if side == "buy" else (650, 1150)
+            price = rng.randrange(start, end)
+            quantity = Decimal(rng.randrange(3)) / Decimal(100)
+            changes.append([side, str(price), str(quantity)])
+            if quantity:
+                all_rows[side][price] = quantity
+            else:
+                all_rows[side].pop(price, None)
+        book = send(protocol, delta(changes, step)).books[0][1]
+        for field, side in (("bids", "buy"), ("asks", "sell")):
+            full = sorted(all_rows[side], reverse=side == "buy")[:25]
+            assert book[field] == [[price, all_rows[side][price]] for price in full]
+            assert len(getattr(protocol.books[PRODUCT], field).levels) <= 256
 
 
 
