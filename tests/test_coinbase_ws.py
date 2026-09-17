@@ -119,6 +119,23 @@ def test_updates_are_exact_absolute_sizes_and_heartbeat_never_refreshes_quote():
     assert other.synchronized == {PRODUCT, OTHER_PRODUCT}
 
 
+def test_top_levels_stay_exact_after_deletion_until_the_frontier_is_exhausted():
+    protocol = CoinbaseProtocol([PRODUCT], 10)
+    send(
+        protocol,
+        snapshot(
+            bids=[[str(price), "1"] for price in range(100, 400)],
+            asks=[["500", "1"], ["510", "1"]],
+        ),
+    )
+    update = send(protocol, delta([["buy", "399", "0"], ["buy", "101", "0"]]))
+    assert [price for price, _ in update.books[0][1]["bids"]] == list(range(398, 388, -1))
+    # Prices below 144 still exist, but their intervening deltas were outside
+    # the tracked frontier. Falling below ten proven bids requires a resync.
+    with pytest.raises(StreamInvalid, match="DEPTH_FRONTIER_EXHAUSTED"):
+        send(protocol, delta([["buy", str(p), "0"] for p in range(153, 399)], step=2))
+    with pytest.raises(StreamInvalid, match="DELTA_WITHOUT_SNAPSHOT"):
+        send(protocol, delta([["buy", "90", "5"]], step=3))
 
 
 
