@@ -116,3 +116,15 @@ class MetadataArchive:
         }
 
 
+def publish(adapter, tables):
+    """Build first, publish without awaits under the connector's request lock."""
+    for field, value in tables.items():
+        setattr(adapter, field, value)
+    adapter.symbols = sorted(adapter.markets)
+    adapter.ids = sorted(adapter.markets_by_id)
+    adapter.codes = sorted(adapter.currencies)
+    # CCXT retains a completed load_markets Task whose result is the old expanded
+    # registry. It must not keep the previous full map alive after a cache swap.
+    loading = getattr(adapter, "markets_loading", None)
+    if loading is None or loading.done():
+        adapter.markets_loading = None
