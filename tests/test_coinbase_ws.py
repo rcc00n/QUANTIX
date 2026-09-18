@@ -208,3 +208,14 @@ def test_out_of_order_and_untimed_update_require_fresh_connection_snapshot():
         send(protocol, snapshot())
 
 
+def test_unknown_types_and_bounded_packet_lengths(monkeypatch):
+    protocol = CoinbaseProtocol([PRODUCT], 25)
+    send(protocol, snapshot())
+    frame = send(protocol, {"type": "future_coinbase_event"})
+    assert not frame.activity and not frame.books and frame.synchronized == {PRODUCT}
+    monkeypatch.setattr(coinbase_ws, "_MAX_BATCH_CHANGES", 1)
+    with pytest.raises(StreamInvalid, match="INVALID_BATCH_SIZE"):
+        send(protocol, delta([["buy", "100", "2"], ["buy", "98", "5"]]))
+    monkeypatch.setattr(coinbase_ws, "_MAX_SNAPSHOT_SIDE", 1)
+    with pytest.raises(StreamInvalid, match="INVALID_SNAPSHOT_DEPTH"):
+        send(protocol, snapshot())
