@@ -94,3 +94,11 @@ def safe_json(value):
     return str(value)[:200]
 
 
+def midpoint(book: CapturedBook) -> Decimal | None:
+    if not book.normalized.bids or not book.normalized.asks:
+        return None
+    with localcontext() as context:
+        context.prec = 78
+        return (book.normalized.bids[0].price + book.normalized.asks[0].price) / Decimal(2)
+
+
