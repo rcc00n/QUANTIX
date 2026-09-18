@@ -284,3 +284,17 @@ def validate_book(
     )
 
 
+def fresh_view(book: CapturedBook, now: datetime, maximum_age_seconds: int) -> CapturedBook:
+    if book.received_at > now or (book.exchange_timestamp and book.exchange_timestamp > now):
+        return book.classified(
+            DataState.SUSPICIOUS,
+            reasons=tuple(dict.fromkeys((*book.reasons, "future_ingestion_timestamp"))),
+        )
+    if (now - book.received_at).total_seconds() > maximum_age_seconds or (
+        book.exchange_timestamp
+        and (now - book.exchange_timestamp).total_seconds() > maximum_age_seconds
+    ):
+        return book.classified(
+            DataState.STALE, reasons=tuple(dict.fromkeys((*book.reasons, "stale_ingestion")))
+        )
+    return book
