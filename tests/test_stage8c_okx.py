@@ -91,6 +91,33 @@ def test_okx_quarantines_a_live_checksum_field_outside_the_current_protocol():
     assert not protocol.consume("pong").synchronized
 
 
+def test_okx_linked_delta_removes_levels_past_publication_depth_and_ignores_duplicate():
+    protocol = OkxProtocol([SYMBOL], 2)
+    snapshot = message(
+        bids=[level(98, 2), level(99, 1), level(97, 3)],
+        asks=[level(102, 3), level(100, 1), level(101, 2)],
+    )
+    first = protocol.consume(snapshot).books[0][1]
+    assert [price for price, _ in first["bids"]] == [99, 98]
+    assert [price for price, _ in first["asks"]] == [100, 101]
+    assert not protocol.consume(snapshot).books
+
+    delta = message(
+        "update",
+        previous=10,
+        sequence=18,
+        bids=[level(99, 0), level(98, 9)],
+        asks=[level(100, 0)],
+    )
+    new = protocol.consume(delta).books[0][1]
+    assert new["bids"] == [[Decimal(98), Decimal(9)], [Decimal(97), Decimal(3)]]
+    assert new["asks"] == [[Decimal(101), Decimal(2)], [Decimal(102), Decimal(3)]]
+    assert new["stream_integrity"]["previous_sequence"] == 10
+    assert new["stream_integrity"]["sequence"] == 18
+    assert not new["stream_integrity"]["snapshot"]
+    assert [price for price, _ in first["bids"]] == [99, 98]
+    repeat = protocol.consume(delta)
+    assert repeat.synchronized == {SYMBOL} and not repeat.books
 
 
 
