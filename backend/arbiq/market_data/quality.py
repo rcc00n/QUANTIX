@@ -77,3 +77,20 @@ class CapturedBook(Contract):
         )
 
 
+def safe_json(value):
+    """Public evidence only. Decimal and unexpected scalar values remain strings."""
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): safe_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [safe_json(v) for v in value]
+    if isinstance(value, float):
+        return str(value)  # Marked/rejected by money parser, preserved only as evidence.
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    return str(value)[:200]
+
+
