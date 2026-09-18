@@ -102,3 +102,11 @@ def midpoint(book: CapturedBook) -> Decimal | None:
         return (book.normalized.bids[0].price + book.normalized.asks[0].price) / Decimal(2)
 
 
+def deviation_pct(value: Decimal, reference: Decimal) -> Decimal:
+    if reference <= 0:
+        raise ValueError("Reference must be positive")
+    with localcontext() as context:
+        context.prec = 78
+        return (value - reference).copy_abs() / reference * Decimal(100)
+
+
