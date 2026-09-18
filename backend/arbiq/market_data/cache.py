@@ -80,3 +80,22 @@ class BookCache:
             return "DUPLICATE_STREAM_UPDATE"
         return None
 
+    def references(self, book: CapturedBook, now: datetime) -> list[dict]:
+        by_venue = {}
+        for candidate in self.books.values():
+            if venue_group(candidate.exchange) == venue_group(book.exchange):
+                continue
+            if (candidate.base_key, candidate.quote_key) != (book.base_key, book.quote_key):
+                continue  # Never treat USD, CAD, USDC or USDT as equivalent.
+            candidate = fresh_view(candidate, now, self.config.maximum_age_seconds)
+            price = midpoint(candidate)
+            if candidate.state == DataState.HEALTHY and price is not None:
+                by_venue[venue_group(candidate.exchange)] = {
+                    "exchange": candidate.exchange,
+                    "market_id": str(candidate.market_id),
+                    "price": str(price),
+                    "quote_key": candidate.quote_key,
+                    "received_at": candidate.received_at.isoformat(),
+                }
+        return list(by_venue.values())
+
