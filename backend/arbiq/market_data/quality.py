@@ -110,3 +110,16 @@ def deviation_pct(value: Decimal, reference: Decimal) -> Decimal:
         return (value - reference).copy_abs() / reference * Decimal(100)
 
 
+def exchange_timestamp(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and "T" in value:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if stamp.utcoffset() is None:
+            raise ValueError("Timezone missing")
+        return stamp.astimezone(UTC)
+    if isinstance(value, (int, Decimal)) and not isinstance(value, bool):
+        return datetime.fromtimestamp(int(value) / 1000, UTC)
+    raise ValueError("Invalid timestamp")
+
+
