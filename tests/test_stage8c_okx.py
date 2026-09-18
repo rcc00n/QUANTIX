@@ -142,6 +142,66 @@ def test_okx_heartbeat_cannot_refresh_old_quotes_or_invalidate_link():
     assert updated.books[0][1]["timestamp"] == int(TS)
 
 
+@pytest.mark.parametrize(
+    ("update", "reason"),
+    [
+        (message("update", previous=9, sequence=11), "SEQUENCE_GAP"),
+        (message("update", previous=10, sequence=9), "SEQUENCE_RESET"),
+        (message("update", previous=10, sequence=10), "CHANGED_DUPLICATE_SEQUENCE"),
+        (
+            message("update", previous=10, sequence=11, timestamp=str(int(TS) - 1)),
+            "REGRESSED_BOOK_TIMESTAMP",
+        ),
+        (message("update", previous=10, sequence=True), "INVALID_SEQUENCE"),
+        (
+            message("update", previous=10, sequence=11, timestamp=None),
+            "INVALID_BOOK_TIMESTAMP",
+        ),
+        (
+            message("update", previous=10, sequence=11, timestamp=int(TS)),
+            "INVALID_BOOK_TIMESTAMP",
+        ),
+        (
+            message("update", previous=10, sequence=11, bids=[[98.1, "2", "0", "1"]]),
+            "INVALID_BOOK_LEVEL",
+        ),
+        (
+            message("update", previous=10, sequence=11, asks=[level(100, -1)]),
+            "INVALID_BOOK_LEVEL",
+        ),
+        (
+            message("update", previous=10, sequence=11, asks=[level(100, "Infinity")]),
+            "INVALID_BOOK_LEVEL",
+        ),
+        (
+            message(
+                "update",
+                previous=10,
+                sequence=11,
+                asks=[level(100, 1), level("100.00", 2)],
+            ),
+            "INVALID_BOOK_LEVEL",
+        ),
+        (
+            message("update", previous=10, sequence=11, symbol="SOL-USDT"),
+            "UNKNOWN_STREAM_SYMBOL",
+        ),
+        (message(previous=2), "INVALID_SNAPSHOT_SEQUENCE"),
+        (message(sequence=11), "UNEXPECTED_SNAPSHOT"),
+        (json.dumps({"event": "error", "code": "60018"}), "SUBSCRIPTION_REJECTED"),
+        (json.dumps({"event": "notice", "code": "64008"}), "EXCHANGE_MAINTENANCE"),
+        ("{", "INVALID_STREAM_MESSAGE"),
+    ],
+)
+def test_okx_invalid_input_discards_state_until_new_snapshot(update, reason):
+    protocol = OkxProtocol([SYMBOL], 25)
+    protocol.consume(message())
+    with pytest.raises(StreamInvalid, match=f"^{reason}$"):
+        protocol.consume(update)
+    assert not protocol.consume("pong").synchronized
+    with pytest.raises(StreamInvalid, match="DELTA_WITHOUT_SNAPSHOT"):
+        protocol.consume(message("update", previous=10, sequence=11))
+    assert protocol.consume(message(sequence=20)).synchronized == {SYMBOL}
 
 
 
