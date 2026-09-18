@@ -22,3 +22,16 @@ class DiscoveredMarket:
     id: UUID | None = None
 
 
+def decimal_or_none(value) -> Decimal | None:
+    if value is None:
+        return None
+    # CCXT metadata may contain adapter constants as floats. These are metadata,
+    # never executable financial inputs; unknown precision remains unknown.
+    if isinstance(value, float):
+        return None
+    try:
+        return exact_decimal(value)
+    except (ValueError, TypeError):
+        return None
+
+
