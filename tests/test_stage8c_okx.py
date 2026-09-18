@@ -204,5 +204,30 @@ def test_okx_invalid_input_discards_state_until_new_snapshot(update, reason):
     assert protocol.consume(message(sequence=20)).synchronized == {SYMBOL}
 
 
+def test_okx_retains_full_depth_and_trims_book_to_published_channel_limit():
+    protocol = OkxProtocol([SYMBOL], 400)
+    protocol.consume(
+        message(
+            bids=[level(price, 1) for price in range(500, 100, -1)],
+            asks=[level(600, 1)],
+        )
+    )
+    added = protocol.consume(
+        message("update", previous=10, sequence=11, bids=[level(510, 1)], asks=[])
+    ).books[0][1]["bids"]
+    assert len(added) == 400 and added[0][0] == 510 and added[-1][0] == 102
+    removed = protocol.consume(
+        message(
+            "update",
+            previous=11,
+            sequence=12,
+            bids=[level(510, 0), level(101, 1)],
+            asks=[],
+        )
+    ).books[0][1]["bids"]
+    assert len(removed) == 400 and removed[-1][0] == 101
+    protocol = OkxProtocol([SYMBOL], 25)
+    with pytest.raises(StreamInvalid, match="INVALID_BOOK_LEVELS"):
+        protocol.consume(message(bids=[level(price, 1) for price in range(500, 99, -1)]))
 
 
