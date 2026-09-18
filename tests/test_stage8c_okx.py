@@ -83,6 +83,12 @@ def test_okx_subscription_and_exact_snapshot_provenance():
     }
 
 
+def test_okx_quarantines_a_live_checksum_field_outside_the_current_protocol():
+    protocol = OkxProtocol([SYMBOL], 25)
+    protocol.consume(message())
+    with pytest.raises(StreamInvalid, match="UNEXPECTED_CHECKSUM"):
+        protocol.consume(message("update", previous=10, sequence=11, checksum=-123456))
+    assert not protocol.consume("pong").synchronized
 
 
 
