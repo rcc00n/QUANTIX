@@ -29,3 +29,54 @@ def temporal_order_trusted(book: CapturedBook) -> bool:
     )
 
 
+class BookCache:
+    def __init__(self, config: CollectorConfig):
+        self.config = config
+        self.now = lambda: datetime.now(UTC)
+        self.limit = len(config.exchange_ids) * config.max_markets_per_exchange
+        self.books: OrderedDict[UUID, CapturedBook] = OrderedDict()
+        self.rejected_updates = Counter()
+        self.watermarks = OrderedDict()
+
+    def seed_watermarks(self, values):
+        for market_id, timestamps in values.items():
+            if market_id not in self.books:
+                self.watermarks[market_id] = timestamps
+        while len(self.watermarks) > self.limit:
+            self.watermarks.popitem(last=False)
+
+    def rejection_reason(self, book):
+        previous = self.books.get(book.market_id)
+        if previous is None:
+            watermark = self.watermarks.get(book.market_id)
+            if watermark:
+                received, source = watermark
+                if book.received_at < received or (
+                    book.exchange_timestamp and source and book.exchange_timestamp < source
+                ):
+                    return "BEFORE_RESTART_WATERMARK"
+            return None
+        previous_time_trusted = temporal_order_trusted(previous)
+        if previous_time_trusted and book.received_at < previous.received_at:
+            return "OUT_OF_ORDER_RECEIPT"
+        if (
+            book.ingestion_index
+            and previous.ingestion_index
+            and book.ingestion_index < previous.ingestion_index
+        ):
+            return "OUT_OF_ORDER_INGESTION"
+        if (
+            previous_time_trusted
+            and book.exchange_timestamp
+            and previous.exchange_timestamp
+            and book.exchange_timestamp < previous.exchange_timestamp
+        ):
+            return "OUT_OF_ORDER_SOURCE"
+        if (
+            previous_time_trusted
+            and book.source.endswith("_ws")
+            and book.content_sha256 == previous.content_sha256
+        ):
+            return "DUPLICATE_STREAM_UPDATE"
+        return None
+
