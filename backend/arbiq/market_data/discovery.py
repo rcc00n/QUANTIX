@@ -136,3 +136,48 @@ def normalize_market(
     )
 
 
+def selected_markets(
+    markets: list[DiscoveredMarket], config: CollectorConfig
+) -> list[DiscoveredMarket]:
+    eligible = []
+    for market in markets:
+        if (
+            config.base_assets
+            and market.base.symbol not in config.base_assets
+            and market.base.key not in config.base_assets
+        ):
+            continue
+        if config.quote_assets and market.quote.symbol not in config.quote_assets:
+            continue
+        if config.active_only and market.active is not True:
+            if market.active is False or not config.allow_unknown_active:
+                continue
+        if config.minimum_quote_volume > 0 and (
+            market.quote_volume is None or market.quote_volume < config.minimum_quote_volume
+        ):
+            continue
+        eligible.append(market)
+
+    def rank(market):
+        return (
+            0 if config.prefer_cad and market.quote.symbol == "CAD" else 1,
+            config.priority_assets.index(market.base.symbol)
+            if market.base.symbol in config.priority_assets
+            else len(config.priority_assets),
+            config.quote_assets.index(market.quote.symbol)
+            if market.quote.symbol in config.quote_assets
+            else len(config.quote_assets),
+            -(market.quote_volume or Decimal(0)),
+            market.native_symbol,
+        )
+
+    ordered = sorted(eligible, key=rank)
+    # Spread a small VPS budget across base assets before adding redundant quotes.
+    distinct, remainder, bases = [], [], set()
+    for market in ordered:
+        if market.base.key in bases:
+            remainder.append(market)
+        else:
+            distinct.append(market)
+            bases.add(market.base.key)
+    return (distinct + remainder)[: config.max_markets_per_exchange]
