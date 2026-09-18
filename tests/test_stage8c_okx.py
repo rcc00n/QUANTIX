@@ -120,6 +120,26 @@ def test_okx_linked_delta_removes_levels_past_publication_depth_and_ignores_dupl
     assert repeat.synchronized == {SYMBOL} and not repeat.books
 
 
+def test_okx_heartbeat_cannot_refresh_old_quotes_or_invalidate_link():
+    protocol = OkxProtocol([SYMBOL], 25)
+    assert protocol.consume("pong").pong
+    protocol.consume(message())
+    keepalive = protocol.consume(
+        message(
+            "update",
+            previous=10,
+            sequence=10,
+            timestamp=str(int(TS) + 60000),
+            bids=[],
+            asks=[],
+        )
+    )
+    assert keepalive.activity and not keepalive.pong and not keepalive.books
+    assert keepalive.synchronized == {SYMBOL}
+    pongs = protocol.consume(b"pong")
+    assert pongs.synchronized == {SYMBOL} and pongs.pong and not pongs.books
+    updated = protocol.consume(message("update", previous=10, sequence=20))
+    assert updated.books[0][1]["timestamp"] == int(TS)
 
 
 
