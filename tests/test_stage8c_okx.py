@@ -231,3 +231,7 @@ def test_okx_retains_full_depth_and_trims_book_to_published_channel_limit():
         protocol.consume(message(bids=[level(price, 1) for price in range(500, 99, -1)]))
 
 
+@pytest.mark.parametrize("symbols", [[], ["BTC/USDT"], ["BTC-USDT-SWAP"], [SYMBOL, SYMBOL]])
+def test_okx_requires_unique_native_spot_instruments(symbols):
+    with pytest.raises(ValueError, match="unique native spot instrument IDs"):
+        OkxProtocol(symbols, 25)
