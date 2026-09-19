@@ -505,3 +505,27 @@ class CollectorStore:
         self.last_quality[book.market_id] = signature
         return True
 
+    async def latest_watermarks(self, market_ids):
+        """Ordering only: retained fallback is never restored as fresh live data."""
+        if not market_ids:
+            return {}
+        if len(market_ids) > self.config.max_markets_per_exchange:
+            raise ValueError("Bounded venue watermark read required")
+        async with self.sessions() as db:
+            rows = (
+                await db.execute(
+                    select(
+                        LatestMarketBook.market_id,
+                        LatestMarketBook.received_at,
+                        LatestMarketBook.exchange_timestamp,
+                    ).where(
+                        LatestMarketBook.market_id.in_(market_ids),
+                        LatestMarketBook.state.in_(["HEALTHY", "DEGRADED"]),
+                        LatestMarketBook.payload["verification"]["clock"]["trusted"]
+                        .as_boolean()
+                        .is_(True),
+                    )
+                )
+            ).all()
+        return {row.market_id: (row.received_at, row.exchange_timestamp) for row in rows}
+
