@@ -38,3 +38,24 @@ class Schedule:
         )
 
 
+class ClockGuard:
+    def __init__(self, skew_seconds: float = 5):
+        self.last_wall = datetime.now(UTC)
+        self.last_monotonic = time.monotonic()
+        self.skew_seconds = skew_seconds
+        self.healthy = True
+        self.stable = 0
+
+    def check(self, wall: datetime | None = None, monotonic: float | None = None) -> bool:
+        wall = wall or datetime.now(UTC)
+        monotonic = time.monotonic() if monotonic is None else monotonic
+        drift = abs((wall - self.last_wall).total_seconds() - (monotonic - self.last_monotonic))
+        if drift > self.skew_seconds:
+            self.healthy = False
+            self.stable = 0
+        else:
+            self.stable += 1
+            if self.stable >= 5:
+                self.healthy = True
+        self.last_wall, self.last_monotonic = wall, monotonic
+        return self.healthy
