@@ -266,3 +266,35 @@ class CollectorStore:
             if market.native_symbol not in conflicts and market.native_symbol in mapping
         ]
 
+    async def set_selection(self, exchange_id, selected):
+        requested = {market.native_symbol for market in selected}
+        async with self.sessions() as db:
+            mapping = {}
+            if requested:
+                rows = await db.execute(
+                    select(Market.native_symbol, Market.id).where(
+                        Market.exchange_id == exchange_id,
+                        Market.active.is_(True),
+                        Market.native_symbol.in_(requested),
+                    )
+                )
+                mapping = dict(rows.all())
+            should_monitor = Market.native_symbol.in_(mapping) if mapping else false()
+            monitored = Market.metadata_json["monitored"].as_boolean()
+            await db.execute(
+                update(Market)
+                .where(
+                    Market.exchange_id == exchange_id, monitored.is_distinct_from(should_monitor)
+                )
+                .values(
+                    metadata_json=case(
+                        (should_monitor, Market.metadata_json.concat({"monitored": True})),
+                        else_=Market.metadata_json.concat({"monitored": False}),
+                    )
+                )
+            )
+            await db.commit()
+        return [
+            replace(m, id=mapping[m.native_symbol]) for m in selected if m.native_symbol in mapping
+        ]
+
