@@ -99,3 +99,96 @@ class BookCache:
                 }
         return list(by_venue.values())
 
+    def put(self, book: CapturedBook, confirmation: bool = False) -> CapturedBook | None:
+        previous = self.books.get(book.market_id)
+        rejection = self.rejection_reason(book)
+        if rejection:
+            self.rejected_updates[rejection] += 1
+            return previous
+        references = self.references(book, book.received_at)
+        price = midpoint(book)
+        reasons = list(book.reasons)
+        if price and previous and previous.state == DataState.HEALTHY:
+            before = midpoint(previous)
+            if before and deviation_pct(price, before) > self.config.anomaly_deviation_pct:
+                reasons.append("extreme_temporal_discrepancy")
+        if price and len(references) >= 2:
+            values = sorted(Decimal(item["price"]) for item in references)
+            median = values[len(values) // 2]
+            if deviation_pct(price, median) > self.config.anomaly_deviation_pct:
+                reasons.append("extreme_reference_discrepancy")
+        unresolved = bool(
+            previous
+            and (
+                "unconfirmed_anomaly" in previous.reasons
+                or any(r.startswith("extreme_") for r in previous.reasons)
+            )
+        )
+        resolved = (
+            confirmation
+            and len(references) >= 2
+            and not any(r.startswith("extreme_") for r in reasons)
+            and book.state == DataState.HEALTHY
+        )
+        if unresolved and not resolved:
+            reasons.append("unconfirmed_anomaly")
+        anomaly = (
+            any(reason.startswith("extreme_") for reason in reasons)
+            or "unconfirmed_anomaly" in reasons
+        )
+        verification = {
+            **book.verification,
+            "status": "NOT_NEEDED",
+            "independent_references": references,
+            "same_quote_only": True,
+        }
+        if anomaly or confirmation:
+            repeated = bool(
+                price
+                and previous
+                and midpoint(previous)
+                and deviation_pct(price, midpoint(previous)) <= Decimal("2")
+            )
+            disagreement = "extreme_reference_discrepancy" in reasons
+            verification.update(
+                {
+                    "status": "INSUFFICIENT_REFERENCE"
+                    if len(references) < 2
+                    else "REPEATED_WITH_REFERENCE_DISAGREEMENT"
+                    if repeated and disagreement
+                    else "DISPUTED"
+                    if disagreement
+                    else "CONFIRMED"
+                    if confirmation
+                    else "PENDING",
+                    "fresh_rest_recheck": confirmation,
+                    "repeated_price": repeated,
+                    "previous_content_sha256": previous.content_sha256 if previous else None,
+                }
+            )
+        state = (
+            DataState.SUSPICIOUS if anomaly and book.state != DataState.UNAVAILABLE else book.state
+        )
+        book = book.classified(
+            state, reasons=tuple(dict.fromkeys(reasons)), verification=verification
+        )
+        self.books[book.market_id] = book
+        self.watermarks.pop(book.market_id, None)
+        self.books.move_to_end(book.market_id)
+        while len(self.books) > self.limit:
+            self.books.popitem(last=False)
+        return book
+
+    def get(self, market_id: UUID, now: datetime | None = None) -> CapturedBook | None:
+        value = self.books.get(market_id)
+        return (
+            fresh_view(value, now or self.now(), self.config.maximum_age_seconds) if value else None
+        )
+
+    def retain(self, market_ids: set[UUID]):
+        for market_id in list(self.watermarks):
+            if market_id not in market_ids:
+                del self.watermarks[market_id]
+        for market_id in list(self.books):
+            if market_id not in market_ids:
+                del self.books[market_id]
