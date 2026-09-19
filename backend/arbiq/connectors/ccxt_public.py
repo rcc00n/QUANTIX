@@ -191,3 +191,77 @@ class PublicConnector:
                     )
                     return result
 
+    async def discover_spot_markets(self) -> list[dict]:
+        # Some CCXT adapters discover private/account products unless explicitly scoped.
+        markets = await self._call(self.adapter.load_markets, True, deadline_seconds=90)
+        # A successful reload replaces the expanded tables. The previous archive
+        # is no longer a valid source for selection, even if compaction fails.
+        self.metadata_archive = None
+        self.metadata_focus = None
+        self.metadata_metrics = {"state": "not_archived"}
+        return [m for m in markets.values() if m.get("spot") is True and not m.get("contract")]
+
+    async def archive_metadata(self):
+        """Retain every native field losslessly before reducing the expanded cache."""
+        async with self._gate:
+            archive = await asyncio.to_thread(MetadataArchive.capture, self.adapter)
+            self.metadata_archive = archive
+            self.metadata_focus = None
+            self.metadata_metrics = {
+                "state": "archived",
+                "catalog_markets": len(archive.tables["markets"]),
+                "uncompressed_bytes": archive.uncompressed_bytes,
+                "compressed_bytes": archive.compressed_bytes,
+            }
+
+    async def focus_metadata(self, symbols):
+        if self.metadata_archive is None:
+            return
+        symbols = tuple(sorted(set(symbols)))
+        if symbols == self.metadata_focus:
+            return
+        async with self._gate:
+            tables = await asyncio.to_thread(self.metadata_archive.focused, symbols)
+            publish(self.adapter, tables)
+            self.metadata_focus = symbols
+            self.metadata_metrics.update(state="focused", expanded_markets=len(symbols))
+
+    async def fetch_tickers(self) -> dict:
+        if self.adapter.has.get("fetchTickers") is not True:
+            return {}
+        return await self._call(self.adapter.fetch_tickers, deadline_seconds=60)
+
+    def requested_depth(self, depth: int) -> tuple[int, dict]:
+        if self.exchange_id == "kucoin":
+            return (20 if depth <= 20 else 100), {}
+        if self.exchange_id == "htx":
+            return next(value for value in (5, 10, 20, 150) if value >= depth), {}
+        if self.exchange_id == "bitfinex":
+            return (25 if depth <= 25 else 100), {"precision": "P0"}
+        if self.exchange_id == "coinbaseexchange":
+            return depth, {"level": 2}
+        if self.exchange_id == "kraken":
+            return min((v for v in (10, 25, 100, 500, 1000) if v >= depth), default=1000), {}
+        return depth, {}
+
+    async def fetch_raw_book(self, native_symbol: str) -> dict:
+        depth, params = self.requested_depth(self.config.depth)
+        result = await self._call(self.adapter.fetch_order_book, native_symbol, depth, params)
+        if self.exchange_id == "bitfinex":
+            # CCXT stamps this timestamp with local milliseconds; the public book
+            # response has no exchange timestamp. Preserve that absence explicitly.
+            result = {
+                **result,
+                "timestamp": None,
+                "datetime": None,
+                "timestamp_basis": "not_supplied",
+            }
+        return result
+
+    async def close(self):
+        await self.adapter.close()
+        if self._session is not None and not self._session.closed:
+            await self._session.close()
+        self._session = None
+
+
