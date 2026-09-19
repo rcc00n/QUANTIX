@@ -109,3 +109,22 @@ class NativeStream:
             if self.counts["frames"] % 8 == 0:
                 await asyncio.sleep(0)
 
+    async def publish(self):
+        due = {}
+        while True:
+            self.wake.clear()
+            now = elapsed_seconds()
+            symbol = next((key for key in self.pending if due.get(key, 0) <= now), None)
+            if symbol is not None:
+                raw = self.pending.pop(symbol)
+                due[symbol] = now + self.config.websocket_publish_interval_seconds
+                raw["_stream_queue_ms"] = (now - raw["_stream_received_elapsed"]) * 1000
+                self.counts["published_depth"] += 1
+                await self.on_book(symbol, raw)
+                continue
+            delay = min((due[key] - now for key in self.pending), default=None)
+            try:
+                await asyncio.wait_for(self.wake.wait(), delay)
+            except TimeoutError:
+                pass
+
