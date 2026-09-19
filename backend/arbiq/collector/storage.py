@@ -113,3 +113,36 @@ class CollectorStore:
                 )
             await db.commit()
 
+    async def register_exchange(self, slug: str, name: str, capabilities: dict):
+        async with self.sessions() as db:
+            exchange = await db.scalar(select(Exchange).where(Exchange.slug == slug))
+            stable = {k: v for k, v in capabilities.items() if k != "discovered_at"}
+            if exchange is None:
+                exchange = Exchange(
+                    slug=slug, name=name, enabled=True, capabilities=stable, config_version=1
+                )
+                db.add(exchange)
+                await db.flush()
+                changed = True
+            else:
+                changed = exchange.capabilities != stable
+                exchange.name = name
+                exchange.enabled = True
+                if changed:
+                    exchange.config_version += 1
+                    exchange.capabilities = stable
+            if changed:
+                db.add(
+                    ExchangeConfigVersion(
+                        exchange_id=exchange.id,
+                        version=exchange.config_version,
+                        effective_at=datetime.now(UTC),
+                        enabled=True,
+                        capabilities=stable,
+                        public_settings=self.config.model_dump(mode="json"),
+                        reason="Public adapter capability discovery",
+                    )
+                )
+            await db.commit()
+            return exchange.id
+
