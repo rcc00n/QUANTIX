@@ -343,3 +343,165 @@ class CollectorStore:
             )
             await db.commit()
 
+    async def save_book(self, book: CapturedBook, force=False):
+        now = time.monotonic()
+        signature = (book.state, book.reasons)
+        transition = self.last_quality.get(book.market_id) != signature
+        if (
+            not force
+            and not transition
+            and now - self.last_persist.get(book.market_id, -1000)
+            < self.config.persistence_interval_seconds
+        ):
+            return False
+        payload = book.model_dump(mode="json")
+        invalid_prior_time = or_(
+            LatestMarketBook.payload["verification"]["clock"]["trusted"].as_boolean().is_(False),
+            LatestMarketBook.payload["reasons"].contains(["invalid_or_future_timestamp"]),
+            LatestMarketBook.payload["reasons"].contains(["collector_clock_jump"]),
+            LatestMarketBook.payload["reasons"].contains(["ingestion_clock_reversed"]),
+            LatestMarketBook.exchange_timestamp > LatestMarketBook.received_at,
+        )
+        async with self.sessions() as db:
+            statement = insert(LatestMarketBook).values(
+                market_id=book.market_id,
+                run_id=self.run_id,
+                received_at=book.received_at,
+                exchange_timestamp=book.exchange_timestamp,
+                state=book.state.value,
+                payload=payload,
+            )
+            await db.execute(
+                statement.on_conflict_do_update(
+                    index_elements=[LatestMarketBook.market_id],
+                    set_={
+                        key: getattr(statement.excluded, key)
+                        for key in (
+                            "run_id",
+                            "received_at",
+                            "exchange_timestamp",
+                            "state",
+                            "payload",
+                        )
+                    },
+                    where=and_(
+                        or_(
+                            invalid_prior_time,
+                            LatestMarketBook.received_at <= statement.excluded.received_at,
+                        ),
+                        or_(
+                            invalid_prior_time,
+                            LatestMarketBook.exchange_timestamp.is_(None),
+                            statement.excluded.exchange_timestamp.is_(None),
+                            LatestMarketBook.exchange_timestamp
+                            <= statement.excluded.exchange_timestamp,
+                        ),
+                        or_(
+                            LatestMarketBook.run_id != statement.excluded.run_id,
+                            func.coalesce(
+                                LatestMarketBook.payload["ingestion_index"].astext.cast(BigInteger),
+                                0,
+                            )
+                            <= book.ingestion_index,
+                        ),
+                    ),
+                )
+            )
+            if (
+                now - self.last_sample.get(book.market_id, -10000)
+                >= self.config.sample_interval_seconds
+            ):
+                seconds = int(book.received_at.timestamp())
+                bucket = datetime.fromtimestamp(
+                    seconds - seconds % self.config.sample_interval_seconds, UTC
+                )
+                statement = insert(MarketDataSample).values(
+                    id=uuid4(),
+                    market_id=book.market_id,
+                    bucket_start=bucket,
+                    received_at=book.received_at,
+                    exchange_timestamp=book.exchange_timestamp,
+                    bid=book.normalized.bids[0].price if book.normalized.bids else None,
+                    ask=book.normalized.asks[0].price if book.normalized.asks else None,
+                    state=book.state.value,
+                    latency_ms=book.latency_ms,
+                    content_sha256=book.content_sha256,
+                )
+                await db.execute(
+                    statement.on_conflict_do_nothing(index_elements=["market_id", "bucket_start"])
+                )
+                self.last_sample[book.market_id] = now
+            if transition or force:
+                snapshot_id = None
+                if book.state == DataState.SUSPICIOUS and self.config.evidence_budget_per_hour:
+                    cutoff = datetime.now(UTC) - timedelta(hours=1)
+                    count = await db.scalar(
+                        select(func.count())
+                        .select_from(OrderBookSnapshot)
+                        .where(
+                            OrderBookSnapshot.created_at >= cutoff,
+                            OrderBookSnapshot.source.like("collector:%"),
+                        )
+                    )
+                    prior = await db.scalar(
+                        select(OrderBookSnapshot.id)
+                        .where(
+                            OrderBookSnapshot.market_id == book.market_id,
+                            OrderBookSnapshot.content_sha256 == book.content_sha256,
+                        )
+                        .limit(1)
+                    )
+                    recent = await db.scalar(
+                        select(OrderBookSnapshot.id)
+                        .where(
+                            OrderBookSnapshot.market_id == book.market_id,
+                            OrderBookSnapshot.created_at >= cutoff,
+                            OrderBookSnapshot.source.like("collector:%"),
+                        )
+                        .limit(1)
+                    )
+                    if prior:
+                        snapshot_id = prior
+                    elif count < self.config.evidence_budget_per_hour and not recent:
+                        snapshot = OrderBookSnapshot(
+                            market_id=book.market_id,
+                            observed_at=book.exchange_timestamp or book.received_at,
+                            received_at=book.received_at,
+                            bids=[[str(v.price), str(v.quantity)] for v in book.normalized.bids],
+                            asks=[[str(v.price), str(v.quantity)] for v in book.normalized.asks],
+                            sequence=book.sequence,
+                            source=f"collector:{book.source}",
+                            quality=book.state.value,
+                            content_sha256=book.content_sha256,
+                        )
+                        db.add(snapshot)
+                        await db.flush()
+                        snapshot_id = snapshot.id
+                bucket = int(book.received_at.timestamp()) // 60
+                key = hashlib.sha256(
+                    f"{book.market_id}:{bucket}:{book.state}:{book.reasons}".encode()
+                ).hexdigest()
+                await db.execute(
+                    insert(MarketQualityEvent)
+                    .values(
+                        id=uuid4(),
+                        event_key=key,
+                        market_id=book.market_id,
+                        state=book.state.value,
+                        reasons=list(book.reasons),
+                        evidence={
+                            "raw": book.raw_evidence,
+                            "content_sha256": book.content_sha256,
+                            "received_at": book.received_at.isoformat(),
+                            "source": book.source,
+                        },
+                        confirmation=book.verification,
+                        snapshot_id=snapshot_id,
+                    )
+                    .on_conflict_do_nothing(index_elements=[MarketQualityEvent.event_key])
+                )
+            await db.commit()
+        self.last_persist[book.market_id] = now
+        self.last_quality[book.market_id] = signature
+        return True
+
