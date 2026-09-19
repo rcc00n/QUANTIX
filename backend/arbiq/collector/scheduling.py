@@ -21,3 +21,20 @@ def retry_delay(
     )
 
 
+@dataclass
+class Schedule:
+    due: float = 0
+    failures: int = 0
+
+    def success(self, interval: float, *, started: float | None = None):
+        self.failures = 0
+        now = time.monotonic()
+        self.due = now + interval if started is None else max(now, started + interval)
+
+    def failure(self, config: CollectorConfig, error_code: str):
+        self.failures += 1
+        self.due = time.monotonic() + retry_delay(
+            self.failures, config, rate_limited=error_code == "RATE_LIMIT"
+        )
+
+
