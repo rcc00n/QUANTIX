@@ -298,3 +298,16 @@ class CollectorStore:
             replace(m, id=mapping[m.native_symbol]) for m in selected if m.native_symbol in mapping
         ]
 
+    async def health(self, exchange_id, values: dict):
+        async with self.sessions() as db:
+            statement = insert(ExchangeHealth).values(
+                exchange_id=exchange_id, run_id=self.run_id, **values
+            )
+            await db.execute(
+                statement.on_conflict_do_update(
+                    index_elements=[ExchangeHealth.exchange_id],
+                    set_={key: getattr(statement.excluded, key) for key in (*values, "run_id")},
+                )
+            )
+            await db.commit()
+
