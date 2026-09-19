@@ -265,3 +265,25 @@ class PublicConnector:
         self._session = None
 
 
+def classify_error(error: Exception) -> str:
+    if isinstance(error, (ccxt.RequestTimeout, TimeoutError, asyncio.TimeoutError)):
+        return "TIMEOUT"
+    if isinstance(error, (ccxt.RateLimitExceeded, ccxt.DDoSProtection)):
+        return "RATE_LIMIT"
+    if isinstance(error, ccxt.PermissionDenied):
+        return "ACCESS_DENIED"
+    if isinstance(error, ccxt.AuthenticationError):
+        return "PUBLIC_ENDPOINT_REQUIRES_AUTH"
+    if isinstance(error, ccxt.BadSymbol):
+        return "MARKET_UNAVAILABLE"
+    if isinstance(error, (ccxt.BadRequest, ccxt.ArgumentsRequired)):
+        return "UNSUPPORTED_REQUEST"
+    if isinstance(error, ccxt.NotSupported):
+        return "NOT_SUPPORTED"
+    if isinstance(
+        error, (ccxt.ExchangeNotAvailable, ccxt.NetworkError, aiohttp.ClientError, OSError)
+    ):
+        return "NETWORK_UNAVAILABLE"
+    if isinstance(error, (ValueError, TypeError, KeyError, ArithmeticError)):
+        return "MALFORMED_RESPONSE"
+    return "EXCHANGE_ERROR"
