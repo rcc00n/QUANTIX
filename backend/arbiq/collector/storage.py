@@ -311,3 +311,35 @@ class CollectorStore:
             )
             await db.commit()
 
+    async def heartbeat(self, metrics: dict):
+        async with self.sessions() as db:
+            await db.execute(
+                update(CollectorRun)
+                .where(CollectorRun.id == self.run_id)
+                .values(heartbeat_at=datetime.now(UTC), metrics=safe_json(metrics))
+            )
+            await db.commit()
+
+    async def event(
+        self, exchange_id, event_type: str, message: str, severity="info", details=None
+    ):
+        now = time.monotonic()
+        key = (exchange_id, event_type, json.dumps(details or {}, sort_keys=True))
+        if now - self.last_events.get(key, -1000) < 60:
+            return
+        # Key space is bounded even when adapters rotate error variants.
+        if len(self.last_events) > 1000:
+            self.last_events.clear()
+        self.last_events[key] = now
+        async with self.sessions() as db:
+            db.add(
+                SystemEvent(
+                    exchange_id=exchange_id,
+                    event_type=event_type,
+                    severity=severity,
+                    message=message,
+                    details=safe_json(details or {}),
+                )
+            )
+            await db.commit()
+
