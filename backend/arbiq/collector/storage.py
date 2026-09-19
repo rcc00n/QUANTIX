@@ -146,3 +146,123 @@ class CollectorStore:
             await db.commit()
             return exchange.id
 
+    async def save_markets(
+        self, exchange_id, markets: list[DiscoveredMarket], selected: list[DiscoveredMarket]
+    ):
+        assets = {}
+        for market in markets:
+            for asset in (market.base, market.quote):
+                assets[asset.key] = {
+                    "id": uuid4(),
+                    "canonical_key": asset.key,
+                    "symbol": asset.symbol,
+                    "kind": asset.kind,
+                    "network": None,
+                    "identifiers": {"identity_verified": asset.verified, "reason": asset.reason},
+                }
+        async with self.sessions() as db:
+            values = list(assets.values())
+            for offset in range(0, len(values), 500):
+                await db.execute(
+                    insert(Asset)
+                    .values(values[offset : offset + 500])
+                    .on_conflict_do_nothing(index_elements=[Asset.canonical_key])
+                )
+            asset_ids = dict(
+                (
+                    await db.execute(
+                        select(Asset.canonical_key, Asset.id).where(Asset.canonical_key.in_(assets))
+                    )
+                ).all()
+            )
+            existing = {
+                row.native_symbol: row
+                for row in (
+                    await db.execute(
+                        select(
+                            Market.native_symbol, Market.base_asset_id, Market.quote_asset_id
+                        ).where(Market.exchange_id == exchange_id)
+                    )
+                ).all()
+            }
+            # Disappearance/inactivation does not delete historical market identity.
+            await db.execute(
+                update(Market)
+                .where(Market.exchange_id == exchange_id)
+                .values(
+                    active=False,
+                    metadata_json=Market.metadata_json.concat(
+                        {"monitored": False, "active_status": "not_rediscovered"}
+                    ),
+                )
+            )
+            chosen = {market.native_symbol for market in selected}
+            values = []
+            conflicts = []
+            for market in markets:
+                base_id, quote_id = asset_ids[market.base.key], asset_ids[market.quote.key]
+                prior = existing.get(market.native_symbol)
+                if prior and (prior.base_asset_id, prior.quote_asset_id) != (base_id, quote_id):
+                    conflicts.append(market.native_symbol)
+                    continue
+                values.append(
+                    {
+                        "id": uuid4(),
+                        "exchange_id": exchange_id,
+                        "base_asset_id": base_id,
+                        "quote_asset_id": quote_id,
+                        "native_symbol": market.native_symbol,
+                        "active": market.active is not False,
+                        "amount_step": market.amount_step,
+                        "price_tick": market.price_tick,
+                        "min_notional": market.min_notional,
+                        "metadata_json": {
+                            **market.metadata,
+                            "monitored": market.native_symbol in chosen,
+                            "discovered_at": datetime.now(UTC).isoformat(),
+                        },
+                    }
+                )
+            for offset in range(0, len(values), 300):
+                statement = insert(Market).values(values[offset : offset + 300])
+                await db.execute(
+                    statement.on_conflict_do_update(
+                        index_elements=[Market.exchange_id, Market.native_symbol],
+                        set_={
+                            key: getattr(statement.excluded, key)
+                            for key in (
+                                "active",
+                                "amount_step",
+                                "price_tick",
+                                "min_notional",
+                                "metadata_json",
+                            )
+                        },
+                    )
+                )
+            if conflicts:
+                db.add(
+                    SystemEvent(
+                        exchange_id=exchange_id,
+                        event_type="market.identity_conflict",
+                        severity="error",
+                        message="Conflicting market identities quarantined",
+                        details={"symbols": conflicts[:50], "count": len(conflicts)},
+                    )
+                )
+            mapping = dict(
+                (
+                    await db.execute(
+                        select(Market.native_symbol, Market.id).where(
+                            Market.exchange_id == exchange_id
+                        )
+                    )
+                ).all()
+            )
+            await db.commit()
+        return [
+            replace(market, id=mapping[market.native_symbol])
+            for market in selected
+            if market.native_symbol not in conflicts and market.native_symbol in mapping
+        ]
+
