@@ -128,3 +128,60 @@ class NativeStream:
             except TimeoutError:
                 pass
 
+    async def session(self, ws, protocol, symbols, stop):
+        tasks = [
+            asyncio.create_task(self.receive(ws, protocol, symbols)),
+            asyncio.create_task(self.publish()),
+            asyncio.create_task(stop.wait()),
+        ]
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self.pending.clear()
+
+    async def run(self, symbols: list[str], stop: asyncio.Event):
+        attempt = 0
+        while not stop.is_set():
+            connected_at = elapsed_seconds()
+            self.generation += 1
+            reported = False
+            try:
+                protocol = self.protocol(symbols, self.config.depth)
+                async with self.connection(
+                    protocol.url,
+                    open_timeout=12,
+                    close_timeout=3,
+                    ping_interval=20,
+                    ping_timeout=10,
+                    max_size=2**21,
+                    max_queue=8,
+                ) as ws:
+                    try:
+                        await ws.send(json.dumps(protocol.subscription()))
+                        await self.session(ws, protocol, frozenset(symbols), stop)
+                    except Exception as exc:
+                        reported = True
+                        await self.report(exc)
+                        raise
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if not reported:
+                    await self.report(exc)
+                attempt = 1 if elapsed_seconds() - connected_at > 60 else attempt + 1
+                try:
+                    await asyncio.wait_for(stop.wait(), retry_delay(attempt, self.config))
+                except TimeoutError:
+                    pass
+
+    async def report(self, error):
+        self.counts["resynchronizations"] += 1
+        if isinstance(error, StreamInvalid):
+            self.counts["invalid_sessions"] += 1
+        code = str(error) if isinstance(error, StreamInvalid) else "WS_DISCONNECTED"
+        await self.on_error(code, self.counts["resynchronizations"])
