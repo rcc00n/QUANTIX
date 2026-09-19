@@ -88,3 +88,28 @@ class CollectorStore:
             )
             await db.commit()
 
+    async def disable_unconfigured(self, configured: set[str]):
+        async with self.sessions() as db:
+            rows = (
+                await db.scalars(
+                    select(Exchange).where(
+                        Exchange.enabled.is_(True), Exchange.slug.not_in(configured)
+                    )
+                )
+            ).all()
+            for exchange in rows:
+                exchange.enabled = False
+                exchange.config_version += 1
+                db.add(
+                    ExchangeConfigVersion(
+                        exchange_id=exchange.id,
+                        version=exchange.config_version,
+                        effective_at=datetime.now(UTC),
+                        enabled=False,
+                        capabilities=exchange.capabilities,
+                        public_settings=self.config.model_dump(mode="json"),
+                        reason="Removed from collector configuration",
+                    )
+                )
+            await db.commit()
+
