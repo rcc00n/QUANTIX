@@ -554,3 +554,31 @@ class CollectorStore:
             )
             await db.commit()
 
+    def retain_runtime_keys(self, market_ids):
+        for values in (self.last_persist, self.last_quality, self.last_sample):
+            for key in list(values):
+                if key not in market_ids:
+                    del values[key]
+
+    async def prune(self):
+        """Never touch immutable Stage 1 evidence, accounting, trades or strategy history."""
+        now = datetime.now(UTC)
+        async with self.sessions() as db:
+            for model, cutoff in (
+                (MarketDataSample, now - timedelta(hours=self.config.sample_retention_hours)),
+                (MarketQualityEvent, now - timedelta(days=self.config.quality_retention_days)),
+            ):
+                await db.execute(delete(model).where(model.created_at < cutoff))
+                expired = (
+                    select(model.id)
+                    .order_by(model.created_at.desc(), model.id)
+                    .offset(self.config.max_transient_rows)
+                )
+                await db.execute(delete(model).where(model.id.in_(expired)))
+            # Latest fallback rows are not history and expire after a discovery cycle.
+            await db.execute(
+                delete(LatestMarketBook).where(
+                    LatestMarketBook.received_at < now - timedelta(hours=24)
+                )
+            )
+            await db.commit()
