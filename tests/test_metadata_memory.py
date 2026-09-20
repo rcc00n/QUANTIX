@@ -69,6 +69,21 @@ def test_archive_is_lossless_for_native_metadata_and_dynamic_selection():
     assert archive.restore()["markets"][a["symbol"]] == a
 
 
+async def test_successful_rediscovery_invalidates_the_prior_archive(monkeypatch):
+    connector = PublicConnector("kraken", CollectorConfig())
+    try:
+        a, b = native(), native("ETH/CAD", "synthetic-eth", "ETH")
+        connector.adapter.set_markets([a])
+        await connector.archive_metadata()
+        await connector.focus_metadata([a["symbol"]])
+        connector.adapter.set_markets([b])
+        monkeypatch.setattr(connector, "_call", AsyncMock(return_value=connector.adapter.markets))
+        assert await connector.discover_spot_markets() == list(connector.adapter.markets.values())
+        assert connector.metadata_archive is None
+        await connector.focus_metadata([b["symbol"]])
+        assert set(connector.adapter.markets) == {b["symbol"]}
+    finally:
+        await connector.close()
 
 
 
