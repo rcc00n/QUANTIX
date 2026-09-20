@@ -78,3 +78,14 @@ class CoverageMetrics:
     covered_keys: int
 
 
+def metrics(catalogs, monitored) -> CoverageMetrics:
+    discovered = intersections(catalogs)
+    covered = intersections(monitored)
+    pairs = sum(len(list(combinations(groups, 2))) for groups in covered.values())
+    return CoverageMetrics(
+        sum(len(x) for x in monitored.values()),
+        pairs,
+        pairs * 2,
+        sum(len(v) > 1 for v in discovered.values()),
+        sum(len(v) > 1 for v in covered.values()),
+    )
