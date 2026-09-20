@@ -153,3 +153,11 @@ async def test_installed_adapter_retains_exact_symbol_id_rules_and_fee_fields(sl
         await connector.close()
 
 
+def test_cold_decoder_rejects_arbitrary_globals_and_oversized_archive(monkeypatch):
+    import arbiq.connectors.metadata as module
+
+    with pytest.raises(ValueError, match="unsupported"):
+        decode(zlib.compress(pickle.dumps(eval)))
+    monkeypatch.setattr(module, "MAX_UNCOMPRESSED_BYTES", 1)
+    with pytest.raises(ValueError, match="bound"):
+        MetadataArchive.capture(SimpleNamespace(markets={"BTC/CAD": native()}))
