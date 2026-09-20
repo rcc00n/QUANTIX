@@ -69,3 +69,12 @@ def allocate(
     return result
 
 
+@dataclass(frozen=True)
+class CoverageMetrics:
+    monitored_markets: int
+    compatible_intersections: int
+    directed_comparisons: int
+    catalog_intersections: int
+    covered_keys: int
+
+
