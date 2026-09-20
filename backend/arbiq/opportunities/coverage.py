@@ -12,3 +12,12 @@ def venue_group(slug: str) -> str:
     return "coinbase" if slug in {"coinbase", "coinbaseexchange"} else slug
 
 
+def intersections(catalogs: dict[str, list[DiscoveredMarket]]) -> dict[tuple[str, str], set[str]]:
+    coverage = defaultdict(set)
+    for slug, markets in catalogs.items():
+        for market in markets:
+            if market.active is not False and market.base.verified and market.quote.verified:
+                coverage[(market.base.key, market.quote.key)].add(venue_group(slug))
+    return dict(coverage)
+
+
