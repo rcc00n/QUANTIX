@@ -529,3 +529,28 @@ class CollectorStore:
             ).all()
         return {row.market_id: (row.received_at, row.exchange_timestamp) for row in rows}
 
+    async def malformed(self, market_id, excerpt: str, content_sha256: str):
+        now = datetime.now(UTC)
+        bucket = int(now.timestamp()) // 60
+        key = hashlib.sha256(f"{market_id}:{bucket}:malformed_transport".encode()).hexdigest()
+        async with self.sessions() as db:
+            await db.execute(
+                insert(MarketQualityEvent)
+                .values(
+                    id=uuid4(),
+                    event_key=key,
+                    market_id=market_id,
+                    state="SUSPICIOUS",
+                    reasons=["malformed_transport_payload"],
+                    evidence={
+                        "public_response_excerpt": excerpt[:8192],
+                        "content_sha256": content_sha256,
+                        "received_at": now.isoformat(),
+                        "truncated": True,
+                    },
+                    confirmation={},
+                )
+                .on_conflict_do_nothing(index_elements=[MarketQualityEvent.event_key])
+            )
+            await db.commit()
+
