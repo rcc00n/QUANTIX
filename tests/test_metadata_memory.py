@@ -86,6 +86,30 @@ async def test_successful_rediscovery_invalidates_the_prior_archive(monkeypatch)
         await connector.close()
 
 
+async def test_completed_ccxt_load_task_cannot_pin_expanded_market_registry():
+    connector = PublicConnector("kraken", CollectorConfig())
+    try:
+        a, b = native(), native("ETH/CAD", "synthetic-eth", "ETH")
+        connector.adapter.set_markets([a, b])
+        full = connector.adapter.markets.copy()
+        task = asyncio.get_running_loop().create_future()
+        task.set_result(connector.adapter.markets)
+        connector.adapter.markets_loading = task
+        await connector.archive_metadata()
+        await connector.focus_metadata([a["symbol"]])
+        assert connector.adapter.markets_loading is None
+        assert connector.adapter.markets[a["symbol"]] == full[a["symbol"]]
+        # CCXT must use its focused cached map, never a hidden new discovery request.
+        loaded = await connector.adapter.load_markets()
+        assert set(loaded) == {a["symbol"]}
+        await connector.focus_metadata([b["symbol"]])
+        assert connector.adapter.market(b["symbol"]) == full[b["symbol"]]
+        previous = connector.adapter.markets
+        with pytest.raises(ValueError, match="absent"):
+            await connector.focus_metadata(["MISSING/CAD"])
+        assert connector.adapter.markets is previous
+    finally:
+        await connector.close()
 
 
 
