@@ -112,5 +112,44 @@ async def test_completed_ccxt_load_task_cannot_pin_expanded_market_registry():
         await connector.close()
 
 
+@pytest.mark.parametrize(
+    "slug",
+    [
+        "kraken",
+        "ndax",
+        "coinbase",
+        "coinbaseexchange",
+        "cryptocom",
+        "bitstamp",
+        "gemini",
+        "binance",
+        "bybit",
+        "okx",
+        "bitfinex",
+        "kucoin",
+        "gate",
+        "mexc",
+        "bitget",
+        "htx",
+        "poloniex",
+        "bitso",
+        "luno",
+        "bitbank",
+    ],
+)
+async def test_installed_adapter_retains_exact_symbol_id_rules_and_fee_fields(slug):
+    connector = PublicConnector(slug, CollectorConfig())
+    try:
+        a, b = native(), native("ETH/CAD", "synthetic-eth", "ETH")
+        connector.adapter.set_markets([a, b])
+        original = pickle.loads(pickle.dumps(connector.adapter.markets[a["symbol"]]))
+        await connector.archive_metadata()
+        await connector.focus_metadata([a["symbol"]])
+        assert connector.adapter.market(a["symbol"]) == original
+        assert connector.adapter.safe_market(a["id"], None, None, "spot")["id"] == a["id"]
+        assert connector.adapter.market(a["symbol"])["taker"] == Decimal(".006")
+        assert connector.adapter.market(a["symbol"])["info"]["exact"] == original["info"]["exact"]
+    finally:
+        await connector.close()
 
 
