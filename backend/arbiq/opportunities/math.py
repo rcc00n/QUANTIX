@@ -483,3 +483,69 @@ def _leg_marginal(leg: ConversionLeg, amount: Decimal, *, left: bool) -> Decimal
     raise InsufficientDepth("INSUFFICIENT_EXECUTABLE_FX_DEPTH")
 
 
+def _convert_slope(
+    route: ConversionRoute, amount: Decimal, *, left: bool
+) -> tuple[Decimal, Decimal]:
+    derivative = ONE
+    for leg in route.legs:
+        derivative *= _leg_marginal(leg, amount, left=left)
+        amount = fill_depth(leg.levels, amount) * (ONE - leg.fee_rate)
+    return amount, derivative
+
+
+def _required_slope(
+    route: ConversionRoute,
+    amount: Decimal,
+    *,
+    left: bool,
+) -> tuple[Decimal, Decimal]:
+    derivative = ONE
+    for leg in reversed(route.legs):
+        gross = amount / (ONE - leg.fee_rate)
+        capacity = sum((x.quantity * x.price for x in leg.levels), ZERO)
+        if gross > capacity:
+            raise InsufficientDepth("INSUFFICIENT_EXECUTABLE_FX_DEPTH")
+        amount = quantity_for_notional(leg.levels, gross)
+        derivative /= _leg_marginal(leg, amount, left=left)
+    return amount, derivative
+
+
+def _book_slope(levels: tuple[BookLevel, ...], quantity: Decimal, *, left: bool) -> Decimal:
+    cumulative = ZERO
+    for level in levels:
+        cumulative += level.quantity
+        if quantity < cumulative or (left and quantity == cumulative):
+            return level.price
+    if quantity == cumulative:
+        return levels[-1].price
+    raise InsufficientDepth("INSUFFICIENT_OBSERVED_DEPTH")
+
+
+def _continuous_net_slope(
+    buy: MarketInput,
+    sell: MarketInput,
+    quantity: Decimal,
+    costs: Costs,
+    *,
+    left: bool,
+) -> tuple[Decimal, Decimal]:
+    """Concave no-rounding envelope, an upper bound on realizable rounded cashflows."""
+    buy_quote_factor = ONE + buy.fee.rate if buy.fee.currency == "quote" else ONE
+    sell_quote_factor = ONE - sell.fee.rate if sell.fee.currency == "quote" else ONE
+    sale_factor = _base_buy_factor(buy) / _base_sell_factor(sell)
+    sell_quantity = quantity * sale_factor
+    buy_quote = fill_depth(buy.asks, quantity) * buy_quote_factor
+    sell_quote = fill_depth(sell.bids, sell_quantity) * sell_quote_factor
+    acquisition, cost_slope = _required_slope(buy.fx.from_cad, buy_quote, left=left)
+    proceeds, sale_slope = _convert_slope(sell.fx.to_cad, sell_quote, left=left)
+    reserve_factor = ONE + (costs.slippage_bps + costs.rebalancing_bps) / D(10000)
+    slope = sale_slope * _book_slope(sell.bids, sell_quantity, left=left)
+    slope *= sale_factor * sell_quote_factor
+    buy_book_slope = _book_slope(buy.asks, quantity, left=left)
+    slope -= cost_slope * buy_book_slope
+    slope -= (reserve_factor - ONE) * cost_slope * buy_book_slope * buy_quote_factor
+    # The acquisition derivative includes quote trading fees once.
+    slope -= cost_slope * buy_book_slope * (buy_quote_factor - ONE)
+    return proceeds - acquisition * reserve_factor - costs.fixed_rebalancing_cad, slope
+
+
