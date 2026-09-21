@@ -125,3 +125,18 @@ def convert(route: ConversionRoute, amount: Decimal) -> Decimal:
     return result
 
 
+@precision
+def required_input(route: ConversionRoute, target_amount: Decimal) -> Decimal:
+    """Exact source acquisition cost for target units, using the opposite FX side."""
+    if not isinstance(target_amount, D) or not target_amount.is_finite() or target_amount < 0:
+        raise ValueError("Target amount must be a nonnegative Decimal")
+    result = target_amount
+    for leg in reversed(route.legs):
+        gross_target = result / (ONE - leg.fee_rate)
+        capacity = sum((x.price * x.quantity for x in leg.levels), ZERO)
+        if gross_target > capacity:
+            raise InsufficientDepth("INSUFFICIENT_FX_DEPTH")
+        result = quantity_for_notional(leg.levels, gross_target)
+    return result
+
+
