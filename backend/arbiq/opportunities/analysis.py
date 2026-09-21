@@ -38,3 +38,56 @@ def dump_input(value):
     return safe_json(value)
 
 
+def load_input(data):
+    fx = data.get("fx")
+
+    def route(value):
+        return ConversionRoute(
+            tuple(
+                ConversionLeg(
+                    x["source_currency"],
+                    x["target_currency"],
+                    tuple(
+                        ConversionLevel(Decimal(z["price"]), Decimal(z["quantity"]))
+                        for z in x["levels"]
+                    ),
+                    Decimal(x["fee_rate"]),
+                    x["evidence"],
+                )
+                for x in value["legs"]
+            )
+        )
+
+    if fx:
+        fx = FXConversion(
+            fx["currency"],
+            route(fx["to_cad"]),
+            route(fx["from_cad"]),
+            fx["verified"],
+            datetime.fromisoformat(fx["fresh_until"]),
+            fx["source"],
+            observed_at=datetime.fromisoformat(fx["observed_at"])
+            if fx.get("observed_at")
+            else None,
+            available_at=datetime.fromisoformat(fx["available_at"])
+            if fx.get("available_at")
+            else None,
+        )
+    return MarketInput(
+        data["market_id"],
+        data["venue"],
+        data["base_currency"],
+        data["quote_currency"],
+        tuple(BookLevel(**x) for x in data["asks"]),
+        tuple(BookLevel(**x) for x in data["bids"]),
+        Fee(**{**data["fee"], "rate": Decimal(data["fee"]["rate"])}),
+        MarketRules(
+            **{
+                k: (Decimal(v) if v is not None and k not in {"verified", "source"} else v)
+                for k, v in data["rules"].items()
+            }
+        ),
+        fx,
+    )
+
+
