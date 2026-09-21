@@ -549,3 +549,109 @@ def _continuous_net_slope(
     return proceeds - acquisition * reserve_factor - costs.fixed_rebalancing_cad, slope
 
 
+def _interval_bound(
+    low: Decimal,
+    high: Decimal,
+    low_tangent: tuple[Decimal, Decimal],
+    high_tangent: tuple[Decimal, Decimal],
+) -> Decimal:
+    low_net, low_slope = low_tangent
+    high_net, high_slope = high_tangent
+    points = [low, high]
+    if low_slope != high_slope:
+        crossing = (high_net - low_net + low_slope * low - high_slope * high) / (
+            low_slope - high_slope
+        )
+        if low < crossing < high:
+            points.append(crossing)
+    return max(
+        min(low_net + low_slope * (q - low), high_net + high_slope * (q - high)) for q in points
+    )
+
+
+def _certify_optimum(
+    buy: MarketInput,
+    sell: MarketInput,
+    capped: Decimal,
+    budget: Decimal,
+    now: datetime,
+    costs: Costs,
+    best: Evaluation | None,
+    max_search_evaluations: int,
+) -> tuple[Evaluation | None, int, bool]:
+    """Bounded branch-and-bound on the exact buy quantity lattice.
+
+    Ask acquisition costs are convex; bid proceeds are concave. Executable FX preserves
+    that property. Tangent envelopes bound every unevaluated rounded order quantity.
+    If the work limit is reached the result explicitly loses verified optimality.
+    """
+    step = buy.rules.amount_step
+    if step is None:
+        return best, 0, False
+    count = int(capped / step)
+    if count <= 32:
+        return best, 0, True  # The initial pass enumerated the entire lattice.
+    if best is None:
+        return best, 0, False
+    try:
+        low_count = max(
+            1, int((_minimum_quantity(buy, sell) / step).to_integral_value(rounding=ROUND_CEILING))
+        )
+        if low_count > count:
+            return best, 0, True
+        low_quantity = step * low_count
+        low_tangent = _continuous_net_slope(buy, sell, low_quantity, costs, left=False)
+        high_tangent = _continuous_net_slope(buy, sell, capped, costs, left=True)
+        initial_bound = _interval_bound(low_quantity, capped, low_tangent, high_tangent)
+        # Descendants use lattice quantities. Preserve the original Decimal
+        # representation if the initial cap has a different exponent.
+        if capped.compare_total(step * count) != ZERO:
+            high_tangent = None
+    except InsufficientDepth:
+        return best, 0, False
+    # Child intervals share one endpoint and its directional tangent with their
+    # parent. Carry that exact tangent instead of walking the same depth again.
+    queue = [(-initial_bound, low_count, count, low_tangent, high_tangent)]
+    checked = 0
+    # Limits CPU independently of the number of decimal ticks or budget magnitude.
+    while queue and checked < max_search_evaluations:
+        negative_bound, low, high, low_tangent, high_tangent = heapq.heappop(queue)
+        if -negative_bound <= best.net_profit_cad:
+            continue
+        center = (low + high) // 2
+        quantity = step * center
+        try:
+            candidate = evaluate_route(buy, sell, quantity, now=now, costs=costs)
+            checked += 1
+            if (
+                candidate.net_profit_cad is not None
+                and candidate.acquisition_cost_cad <= budget
+                and (candidate.net_profit_cad, -candidate.acquisition_cost_cad)
+                > (best.net_profit_cad, -best.acquisition_cost_cad)
+            ):
+                best = candidate
+        except (ValueError, InsufficientDepth):
+            checked += 1
+        for first, last in ((low, center - 1), (center + 1, high)):
+            if first > last:
+                continue
+            first_quantity, last_quantity = step * first, step * last
+            try:
+                first_tangent = (
+                    low_tangent
+                    if first == low
+                    else _continuous_net_slope(buy, sell, first_quantity, costs, left=False)
+                )
+                last_tangent = (
+                    high_tangent
+                    if last == high and high_tangent is not None
+                    else _continuous_net_slope(buy, sell, last_quantity, costs, left=True)
+                )
+                bound = _interval_bound(first_quantity, last_quantity, first_tangent, last_tangent)
+            except InsufficientDepth:
+                return best, checked, False
+            if bound > best.net_profit_cad:
+                heapq.heappush(queue, (-bound, first, last, first_tangent, last_tangent))
+    return best, checked, not queue
+
+
