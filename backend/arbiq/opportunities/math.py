@@ -780,3 +780,52 @@ def optimize_route(
     )
 
 
+@precision
+def transfer_scenario(
+    buy: MarketInput,
+    sell: MarketInput,
+    requested_buy_quantity: Decimal,
+    assumptions: TransferAssumptions,
+    *,
+    now: datetime,
+    costs: Costs = DEFAULT_COSTS,
+) -> TransferScenario:
+    """Explicit counterfactual. Arrival price is unknown; today's bid is not a fill."""
+    observed = evaluate_route(buy, sell, requested_buy_quantity, now=now, costs=costs)
+    delivered = max(
+        ZERO,
+        observed.base_acquired - assumptions.withdrawal_fee_base - assumptions.network_fee_base,
+    )
+    reasons = ["FUTURE_SELLING_PRICE_UNKNOWN", "TRANSFER_NOT_ATOMIC"]
+    if not assumptions.network or not assumptions.network_verified:
+        reasons.append("NETWORK_COMPATIBILITY_UNVERIFIED")
+    if not assumptions.withdrawal_enabled or not assumptions.deposit_enabled:
+        reasons.append("FUNDING_ROUTE_DISABLED_OR_UNVERIFIED")
+    if assumptions.confirmations is None or assumptions.estimated_seconds is None:
+        reasons.append("TRANSFER_TIMING_UNVERIFIED")
+    sell_quantity = _floor(delivered / _base_sell_factor(sell), sell.rules.amount_step)
+    current_quote = adjusted_quote = adjusted_net = None
+    if sell_quantity > 0:
+        try:
+            notional = fill_depth(sell.bids, sell_quantity)
+            _check_limits(sell, sell_quantity, notional)
+            current_quote = (
+                notional * (ONE - sell.fee.rate) if sell.fee.currency == "quote" else notional
+            )
+            adjusted_quote = current_quote * (ONE - assumptions.future_price_haircut_pct / D(100))
+            if sell.fx and sell.fx.fresh_until >= now and observed.acquisition_cost_cad is not None:
+                adjusted_net = convert(sell.fx.to_cad, adjusted_quote)
+                adjusted_net -= observed.acquisition_cost_cad + observed.expenses_cad
+        except (ValueError, InsufficientDepth):
+            reasons.append("TRANSFER_SCENARIO_INSUFFICIENT_DEPTH_OR_LIMITS")
+    else:
+        reasons.append("TRANSFER_FEES_CONSUME_AVAILABLE_ASSET")
+    return TransferScenario(
+        observed,
+        delivered,
+        current_quote,
+        adjusted_quote,
+        adjusted_net,
+        assumptions,
+        tuple(reasons),
+    )
