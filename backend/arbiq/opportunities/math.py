@@ -400,3 +400,36 @@ def _minimum_quantity(buy: MarketInput, sell: MarketInput) -> Decimal:
     return minimum
 
 
+def _candidate_quantities(buy: MarketInput, sell: MarketInput, maximum: Decimal) -> set[Decimal]:
+    points = _breakpoints(buy, sell, maximum)
+    buy_step, sell_step = buy.rules.amount_step, sell.rules.amount_step
+    if buy_step and maximum / buy_step <= 32:
+        # Exact exhaustive lattice evaluation for small discrete universes.
+        points.update(buy_step * n for n in range(1, int(maximum / buy_step) + 1))
+    if buy_step and sell_step:
+        # Seed the first exact inventory alignment. Otherwise a loss-making tiny
+        # order with a large rounding residual can conceal a better slightly larger
+        # order. Fractions here represent exact Decimal ratios, never float money.
+        ratio = (
+            Fraction(buy_step)
+            * Fraction(_base_buy_factor(buy))
+            / (Fraction(sell_step) * Fraction(_base_sell_factor(sell)))
+        )
+        alignment = buy_step * ratio.denominator
+        aligned_minimum = _ceil(_minimum_quantity(buy, sell), alignment)
+        if ZERO < aligned_minimum <= maximum:
+            points.add(aligned_minimum)
+    result: set[Decimal] = set()
+    for point in points:
+        for value in (_floor(point, buy_step), _ceil(point, buy_step)):
+            if ZERO < value <= maximum:
+                result.add(value)
+        if sell_step:
+            sell_qty = point * _base_buy_factor(buy) / _base_sell_factor(sell)
+            for count in (_floor(sell_qty, sell_step), _ceil(sell_qty, sell_step)):
+                value = _ceil(count * _base_sell_factor(sell) / _base_buy_factor(buy), buy_step)
+                if ZERO < value <= maximum:
+                    result.add(value)
+    return result
+
+
