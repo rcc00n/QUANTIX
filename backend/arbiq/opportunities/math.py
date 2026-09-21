@@ -61,3 +61,21 @@ def fill_depth(levels: tuple[BookLevel | ConversionLevel, ...], quantity: Decima
     return notional
 
 
+@precision
+def quantity_for_notional(
+    levels: tuple[BookLevel | ConversionLevel, ...],
+    notional: Decimal,
+) -> Decimal:
+    """Largest visible base quantity affordable by the given quote notional."""
+    if not isinstance(notional, D) or not notional.is_finite() or notional < 0:
+        raise ValueError("Notional must be a nonnegative Decimal")
+    remaining, quantity = notional, ZERO
+    for level in levels:
+        take = min(level.quantity, remaining / level.price)
+        quantity += take
+        remaining -= take * level.price
+        if remaining <= 0:
+            break
+    return quantity
+
+
