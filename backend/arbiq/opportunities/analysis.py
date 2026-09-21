@@ -91,3 +91,14 @@ def load_input(data):
     )
 
 
+def load_costs(data):
+    return Costs(
+        **{
+            key: Decimal(value)
+            if key in {"slippage_bps", "rebalancing_bps", "fixed_rebalancing_cad"}
+            else value
+            for key, value in data.items()
+        }
+    )
+
+
