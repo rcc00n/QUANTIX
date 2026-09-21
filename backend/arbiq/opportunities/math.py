@@ -330,3 +330,22 @@ def evaluate_route(
     )
 
 
+@precision
+def maximum_quantity(buy: MarketInput, sell: MarketInput) -> Decimal:
+    _compatible(buy, sell)
+    buy_depth = sum((level.quantity for level in buy.asks), ZERO)
+    sell_depth = sum((level.quantity for level in sell.bids), ZERO)
+    if buy.rules.max_quantity:
+        buy_depth = min(buy_depth, buy.rules.max_quantity)
+    if sell.rules.max_quantity:
+        sell_depth = min(sell_depth, sell.rules.max_quantity)
+    if buy.rules.max_notional:
+        buy_depth = min(buy_depth, quantity_for_notional(buy.asks, buy.rules.max_notional))
+    if sell.rules.max_notional:
+        sell_depth = min(sell_depth, quantity_for_notional(sell.bids, sell.rules.max_notional))
+    return _floor(
+        min(buy_depth, sell_depth * _base_sell_factor(sell) / _base_buy_factor(buy)),
+        buy.rules.amount_step,
+    )
+
+
