@@ -177,3 +177,156 @@ def _compatible(buy: MarketInput, sell: MarketInput) -> None:
         raise ValueError("INCOMPATIBLE_BASE_IDENTITY")
 
 
+@precision
+def evaluate_route(
+    buy: MarketInput,
+    sell: MarketInput,
+    requested_buy_quantity: Decimal,
+    *,
+    now: datetime,
+    costs: Costs = DEFAULT_COSTS,
+) -> Evaluation:
+    """Project pre-funded inventory changes; no balances, fills or profit realization.
+
+    Buy quantity is rounded DOWN. Base buy fees reduce acquired inventory; base sell
+    fees increase the seller's required inventory. Selling is rounded DOWN again.
+    Residual acquired base is retained without assigning it fabricated cash proceeds.
+    """
+    _compatible(buy, sell)
+    utc_timestamp(now)
+    exact_decimal(requested_buy_quantity)
+    quantity = _floor(requested_buy_quantity, buy.rules.amount_step)
+    if quantity <= 0:
+        raise ValueError("NO_EXECUTABLE_QUANTITY")
+    buy_notional = fill_depth(buy.asks, quantity)
+    acquired = quantity * _base_buy_factor(buy)
+    sell_quantity = _floor(acquired / _base_sell_factor(sell), sell.rules.amount_step)
+    if sell_quantity <= 0:
+        raise ValueError("NO_EXECUTABLE_SELL_QUANTITY")
+    sell_notional = fill_depth(sell.bids, sell_quantity)
+    _check_limits(buy, quantity, buy_notional)
+    _check_limits(sell, sell_quantity, sell_notional)
+    buy_fee = (quantity if buy.fee.currency == "base" else buy_notional) * buy.fee.rate
+    sell_fee = (sell_quantity if sell.fee.currency == "base" else sell_notional) * sell.fee.rate
+    buy_quote = buy_notional + (buy_fee if buy.fee.currency == "quote" else ZERO)
+    sell_quote = sell_notional - (sell_fee if sell.fee.currency == "quote" else ZERO)
+    sell_base = sell_quantity * _base_sell_factor(sell)
+    reasons: list[str] = []
+    for side, market in (("BUY", buy), ("SELL", sell)):
+        if not market.fee.verified:
+            reasons.append(f"{side}_FEE_UNVERIFIED")
+        if not market.rules.verified or market.rules.amount_step is None:
+            reasons.append(f"{side}_MARKET_LIMITS_UNVERIFIED")
+    if not costs.verified:
+        reasons.append("REBALANCING_AND_SLIPPAGE_ASSUMPTIONS_UNVERIFIED")
+    acquisition = proceeds = gross = fees = fx_cost = expenses = net = net_pct = None
+    slippage = rebalancing = None
+    buy_fee_cad = sell_fee_cad = base_fee_value = None
+    fx_usable = True
+    for side, market in (("BUY", buy), ("SELL", sell)):
+        if market.fx is None:
+            reasons.append(f"{side}_CAD_CONVERSION_UNAVAILABLE")
+            fx_usable = False
+        elif market.fx.fresh_until < now:
+            reasons.append(f"{side}_CAD_CONVERSION_STALE")
+            fx_usable = False
+        elif any(
+            timestamp is not None and timestamp > now
+            for timestamp in (market.fx.observed_at, market.fx.available_at)
+        ):
+            reasons.append(f"{side}_CAD_CONVERSION_NOT_YET_AVAILABLE")
+            fx_usable = False
+        elif not market.fx.verified:
+            reasons.append(f"{side}_CAD_CONVERSION_UNVERIFIED")
+    if fx_usable:
+        try:
+            acquisition = required_input(buy.fx.from_cad, buy_quote)
+            proceeds = convert(sell.fx.to_cad, sell_quote)
+            gross_acquisition = required_input(buy.fx.from_cad, buy_notional)
+            gross_proceeds = convert(sell.fx.to_cad, sell_notional)
+            # Base fees have already affected acquired/sold quantities. Value them
+            # at the corresponding leg VWAP for fee disclosure and add them back
+            # only to the defined pre-fee gross figure, never to net cash proceeds.
+            buy_base_value = (
+                gross_acquisition * buy.fee.rate if buy.fee.currency == "base" else ZERO
+            )
+            sell_base_value = (
+                gross_proceeds * sell.fee.rate if sell.fee.currency == "base" else ZERO
+            )
+            buy_fee_cad = acquisition - gross_acquisition + buy_base_value
+            sell_fee_cad = gross_proceeds - proceeds + sell_base_value
+            base_fee_value = buy_base_value + sell_base_value
+            fees = buy_fee_cad + sell_fee_cad
+            gross = gross_proceeds - gross_acquisition + base_fee_value
+            slippage = acquisition * costs.slippage_bps / D(10000)
+            rebalancing = acquisition * costs.rebalancing_bps / D(10000)
+            rebalancing += costs.fixed_rebalancing_cad
+            expenses = slippage + rebalancing
+            net = proceeds - acquisition - expenses
+            net_pct = net / acquisition * D(100)
+            # Round-trip conversion drag is separately observable, already included
+            # in cashflows above; never subtract it again. Zero CAD identity is real.
+        except InsufficientDepth:
+            acquisition = proceeds = gross = fees = fx_cost = expenses = net = net_pct = None
+            slippage = rebalancing = None
+            buy_fee_cad = sell_fee_cad = base_fee_value = None
+            reasons.append("INSUFFICIENT_EXECUTABLE_FX_DEPTH")
+        if acquisition is not None:
+            try:
+                buy_roundtrip = convert(buy.fx.to_cad, buy_quote)
+                sell_replacement = required_input(sell.fx.from_cad, sell_quote)
+                fx_cost = (acquisition - buy_roundtrip + sell_replacement - proceeds) / D(2)
+            except InsufficientDepth:
+                pass  # Optional spread diagnostic must not invalidate executable cashflows.
+    quote_net = None
+    if buy.quote_currency == sell.quote_currency:
+        # Native quote result excludes CAD-denominated fixed rebalancing expense.
+        quote_net = sell_quote - buy_quote
+        quote_net -= buy_quote * (costs.slippage_bps + costs.rebalancing_bps) / D(10000)
+        if costs.fixed_rebalancing_cad and buy.quote_currency == "CAD":
+            quote_net -= costs.fixed_rebalancing_cad
+        elif costs.fixed_rebalancing_cad:
+            reasons.append("NATIVE_PNL_EXCLUDES_FIXED_CAD_EXPENSE")
+    if buy.quote_currency != sell.quote_currency and not fx_usable:
+        reasons.append("CROSS_QUOTE_COMPARISON_REQUIRES_FX")
+    return Evaluation(
+        buy_quantity=quantity,
+        base_acquired=acquired,
+        sell_quantity=sell_quantity,
+        sell_base_required=sell_base,
+        residual_base=acquired - sell_base,
+        buy_vwap=buy_notional / quantity,
+        sell_vwap=sell_notional / sell_quantity,
+        buy_notional=buy_notional,
+        sell_notional=sell_notional,
+        buy_fee_amount=buy_fee,
+        sell_fee_amount=sell_fee,
+        buy_quote_required=buy_quote,
+        sell_quote_received=sell_quote,
+        acquisition_cost_cad=acquisition,
+        sale_proceeds_cad=proceeds,
+        gross_profit_cad=gross,
+        fees_cad=fees,
+        fx_cost_cad=fx_cost,
+        expenses_cad=expenses,
+        net_profit_cad=net,
+        net_return_pct=net_pct,
+        net_profit_quote=quote_net,
+        verified=not reasons and net is not None,
+        reasons=tuple(reasons),
+        capital_requirements={
+            buy.venue: {buy.quote_currency: buy_quote},
+            sell.venue: {sell.base_currency: sell_base},
+        },
+        inventory_projection={
+            buy.venue: {buy.quote_currency: -buy_quote, buy.base_currency: acquired},
+            sell.venue: {sell.base_currency: -sell_base, sell.quote_currency: sell_quote},
+        },
+        slippage_reserve_cad=slippage,
+        rebalancing_cost_cad=rebalancing,
+        buy_fee_cad=buy_fee_cad,
+        sell_fee_cad=sell_fee_cad,
+        base_fee_value_cad=base_fee_value,
+    )
+
+
