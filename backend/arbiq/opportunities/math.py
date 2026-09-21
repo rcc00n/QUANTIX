@@ -433,3 +433,41 @@ def _candidate_quantities(buy: MarketInput, sell: MarketInput, maximum: Decimal)
     return result
 
 
+def _loss_candidates(
+    buy: MarketInput,
+    sell: MarketInput,
+    maximum: Decimal,
+    costs: Costs,
+) -> set[Decimal] | None:
+    """Prove a decreasing continuous envelope before evaluating irrelevant depth.
+
+    Rounding can still favor a slightly larger aligned order. Those outcomes are
+    found/certified by the same exact branch-and-bound, never assumed away.
+    """
+    step = buy.rules.amount_step
+    if step is None or maximum / step <= 32 or buy.fx is None or sell.fx is None:
+        return None
+    minimum = _minimum_quantity(buy, sell)
+    if minimum <= 0 or minimum > maximum:
+        return None
+    try:
+        _, slope = _continuous_net_slope(buy, sell, minimum, costs, left=False)
+    except InsufficientDepth:
+        return None
+    if slope > 0:
+        return None
+    points = {minimum}
+    if minimum + step <= maximum:
+        points.add(minimum + step)
+    if sell.rules.amount_step:
+        ratio = (
+            Fraction(step)
+            * Fraction(_base_buy_factor(buy))
+            / (Fraction(sell.rules.amount_step) * Fraction(_base_sell_factor(sell)))
+        )
+        aligned = _ceil(minimum, step * ratio.denominator)
+        if aligned <= maximum:
+            points.add(aligned)
+    return points
+
+
