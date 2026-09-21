@@ -79,3 +79,26 @@ def quantity_for_notional(
     return quantity
 
 
+@precision
+def conversion_leg_from_book(
+    base_currency: str,
+    quote_currency: str,
+    *,
+    bids: tuple[BookLevel, ...],
+    asks: tuple[BookLevel, ...],
+    reverse: bool = False,
+    fee_rate: Decimal = ZERO,
+    evidence: str = "",
+) -> ConversionLeg:
+    """One executable direction, retaining depth rather than assigning stablecoin parity."""
+    if reverse:
+        return ConversionLeg(
+            quote_currency,
+            base_currency,
+            tuple(ConversionLevel(ONE / x.price, x.quantity * x.price) for x in asks),
+            fee_rate,
+            evidence,
+        )
+    return ConversionLeg(base_currency, quote_currency, bids, fee_rate, evidence)
+
+
