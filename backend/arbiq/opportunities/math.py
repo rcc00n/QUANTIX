@@ -116,3 +116,12 @@ def conversion_capacity(route: ConversionRoute) -> Decimal | None:
     return capacity
 
 
+@precision
+def convert(route: ConversionRoute, amount: Decimal) -> Decimal:
+    """Sell source units through executable depth; deduct each target fee once."""
+    result = amount
+    for leg in route.legs:
+        result = fill_depth(leg.levels, result) * (ONE - leg.fee_rate)
+    return result
+
+
