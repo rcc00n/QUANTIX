@@ -40,3 +40,24 @@ def precision[T](function: Callable[..., T]) -> Callable[..., T]:
     return wrapped
 
 
+class InsufficientDepth(ValueError):
+    """The visible evidence cannot satisfy the requested quantity."""
+
+
+@precision
+def fill_depth(levels: tuple[BookLevel | ConversionLevel, ...], quantity: Decimal) -> Decimal:
+    """Return exact notional, consuming best-to-worst levels without extrapolation."""
+    if not isinstance(quantity, D) or not quantity.is_finite() or quantity < 0:
+        raise ValueError("Quantity must be a nonnegative Decimal")
+    remaining, notional = quantity, ZERO
+    for level in levels:
+        take = min(remaining, level.quantity)
+        notional += take * level.price
+        remaining -= take
+        if remaining == 0:
+            return notional
+    if remaining:
+        raise InsufficientDepth("INSUFFICIENT_OBSERVED_DEPTH")
+    return notional
+
+
