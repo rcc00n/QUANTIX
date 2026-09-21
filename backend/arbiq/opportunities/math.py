@@ -140,3 +140,13 @@ def required_input(route: ConversionRoute, target_amount: Decimal) -> Decimal:
     return result
 
 
+def _floor(value: Decimal, step: Decimal | None) -> Decimal:
+    return value if step is None else (value / step).to_integral_value(rounding=ROUND_FLOOR) * step
+
+
+def _ceil(value: Decimal, step: Decimal | None) -> Decimal:
+    return (
+        value if step is None else (value / step).to_integral_value(rounding=ROUND_CEILING) * step
+    )
+
+
