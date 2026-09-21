@@ -655,3 +655,128 @@ def _certify_optimum(
     return best, checked, not queue
 
 
+@precision
+def optimize_route(
+    buy: MarketInput,
+    sell: MarketInput,
+    *,
+    budget_cad: Decimal,
+    now: datetime,
+    costs: Costs = DEFAULT_COSTS,
+    budgets: tuple[Decimal, ...] = DEFAULT_BUDGETS,
+    max_search_evaluations: int = 4096,
+) -> OptimizationResult:
+    """Maximize net projected profit over depth boundaries and feasible order steps.
+
+    Capital means fee-inclusive BUY acquisition cost; sell inventory is reported
+    separately, never treated as free capital. Results may be losses. No extrapolation.
+    """
+    exact_decimal(budget_cad)
+    if budget_cad <= 0:
+        raise ValueError("Budget must be positive")
+    if (
+        isinstance(max_search_evaluations, bool)
+        or not isinstance(max_search_evaluations, int)
+        or not 1 <= max_search_evaluations <= 4096
+    ):
+        raise ValueError("Search evaluation limit must be an integer between 1 and 4096")
+    utc_timestamp(now)
+    maximum = maximum_quantity(buy, sell)
+    evaluated_count = 0
+    try:
+        maximum_evaluation = evaluate_route(buy, sell, maximum, now=now, costs=costs)
+    except (ValueError, InsufficientDepth):
+        maximum_evaluation = None
+    results: list[BudgetResult] = []
+    search_complete = True
+    unique_budgets = tuple(dict.fromkeys((budget_cad, *budgets)))
+    for budget in unique_budgets:
+        exact_decimal(budget)
+        if budget <= 0:
+            raise ValueError("Budget must be positive")
+        if buy.fx is None or buy.fx.fresh_until < now:
+            results.append(BudgetResult(budget, None, "CAD_ACQUISITION_CONVERSION_UNAVAILABLE"))
+            continue
+        try:
+            capacity = conversion_capacity(buy.fx.from_cad)
+            available_quote = convert(
+                buy.fx.from_cad, min(budget, capacity) if capacity is not None else budget
+            )
+        except InsufficientDepth:
+            # Conversion capacity may cap the budget; do not silently use a rate.
+            results.append(BudgetResult(budget, None, "INSUFFICIENT_EXECUTABLE_FX_DEPTH"))
+            continue
+        if buy.fee.currency == "quote":
+            available_quote /= ONE + buy.fee.rate
+        capped = min(
+            maximum, _floor(quantity_for_notional(buy.asks, available_quote), buy.rules.amount_step)
+        )
+        if sell.fx is not None and sell.fx.fresh_until >= now:
+            sale_quote_capacity = conversion_capacity(sell.fx.to_cad)
+            if sale_quote_capacity is not None:
+                if sell.fee.currency == "quote":
+                    sale_quote_capacity /= ONE - sell.fee.rate
+                sale_quantity_capacity = quantity_for_notional(sell.bids, sale_quote_capacity)
+                capped = min(
+                    capped,
+                    _floor(
+                        sale_quantity_capacity * _base_sell_factor(sell) / _base_buy_factor(buy),
+                        buy.rules.amount_step,
+                    ),
+                )
+        candidates = _loss_candidates(buy, sell, capped, costs)
+        if candidates is None:
+            candidates = _candidate_quantities(buy, sell, capped)
+        best: Evaluation | None = None
+        for quantity in sorted(candidates):
+            try:
+                result = evaluate_route(buy, sell, quantity, now=now, costs=costs)
+                evaluated_count += 1
+            except (ValueError, InsufficientDepth):
+                continue
+            if result.acquisition_cost_cad is None or result.acquisition_cost_cad > budget:
+                continue
+            if result.net_profit_cad is None:
+                continue
+            if best is None or (result.net_profit_cad, -result.acquisition_cost_cad) > (
+                best.net_profit_cad,
+                -best.acquisition_cost_cad,
+            ):
+                best = result
+        best, additional, certified = _certify_optimum(
+            buy,
+            sell,
+            capped,
+            budget,
+            now,
+            costs,
+            best,
+            max_search_evaluations,
+        )
+        evaluated_count += additional
+        search_complete &= certified
+        if best is not None and not certified:
+            best = replace(
+                best,
+                verified=False,
+                reasons=(*best.reasons, "OPTIMIZER_GLOBAL_OPTIMUM_UNCONFIRMED"),
+            )
+        results.append(
+            BudgetResult(budget, best, None if best else "NO_FEASIBLE_SIZE_WITH_CAD_EVIDENCE")
+        )
+    primary = next(result for result in results if result.budget_cad == budget_cad)
+    reasons = () if primary.best else (primary.reason,)
+    if not search_complete:
+        reasons += ("OPTIMIZER_GLOBAL_OPTIMUM_UNCONFIRMED",)
+    return OptimizationResult(
+        primary.best,
+        maximum_evaluation,
+        tuple(results),
+        evaluated_count,
+        reasons,
+        "exact depth/lattice optimum certified by concave bounds"
+        if search_complete
+        else "best evaluated feasible size; global optimum unconfirmed within CPU budget",
+    )
+
+
