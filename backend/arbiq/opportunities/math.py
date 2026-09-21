@@ -150,3 +150,30 @@ def _ceil(value: Decimal, step: Decimal | None) -> Decimal:
     )
 
 
+def _base_buy_factor(market: MarketInput) -> Decimal:
+    return ONE - market.fee.rate if market.fee.currency == "base" else ONE
+
+
+def _base_sell_factor(market: MarketInput) -> Decimal:
+    return ONE + market.fee.rate if market.fee.currency == "base" else ONE
+
+
+def _check_limits(market: MarketInput, quantity: Decimal, notional: Decimal) -> None:
+    rules = market.rules
+    if rules.min_quantity and quantity < rules.min_quantity:
+        raise ValueError("BELOW_MINIMUM_QUANTITY")
+    if rules.min_notional and notional < rules.min_notional:
+        raise ValueError("BELOW_MINIMUM_NOTIONAL")
+    if rules.max_quantity and quantity > rules.max_quantity:
+        raise ValueError("ABOVE_MAXIMUM_QUANTITY")
+    if rules.max_notional and notional > rules.max_notional:
+        raise ValueError("ABOVE_MAXIMUM_NOTIONAL")
+
+
+def _compatible(buy: MarketInput, sell: MarketInput) -> None:
+    if buy.venue == sell.venue:
+        raise ValueError("DUPLICATE_LIQUIDITY_VENUE")
+    if buy.base_currency != sell.base_currency:
+        raise ValueError("INCOMPATIBLE_BASE_IDENTITY")
+
+
