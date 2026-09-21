@@ -383,3 +383,20 @@ def _breakpoints(buy: MarketInput, sell: MarketInput, maximum: Decimal) -> set[D
     return points
 
 
+def _minimum_quantity(buy: MarketInput, sell: MarketInput) -> Decimal:
+    """First buy quantity that can satisfy both legs' amount/notional minimums."""
+    min_sell = sell.rules.min_quantity or ZERO
+    if sell.rules.min_notional:
+        min_sell = max(min_sell, quantity_for_notional(sell.bids, sell.rules.min_notional))
+    min_sell = _ceil(min_sell, sell.rules.amount_step)
+    minimum = max(
+        buy.rules.min_quantity or ZERO, min_sell * _base_sell_factor(sell) / _base_buy_factor(buy)
+    )
+    if buy.rules.min_notional:
+        minimum = max(minimum, quantity_for_notional(buy.asks, buy.rules.min_notional))
+    minimum = _ceil(minimum, buy.rules.amount_step)
+    if minimum == 0 and buy.rules.amount_step:
+        minimum = buy.rules.amount_step
+    return minimum
+
+
