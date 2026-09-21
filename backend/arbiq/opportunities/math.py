@@ -102,3 +102,17 @@ def conversion_leg_from_book(
     return ConversionLeg(base_currency, quote_currency, bids, fee_rate, evidence)
 
 
+@precision
+def conversion_capacity(route: ConversionRoute) -> Decimal | None:
+    """Largest executable source quantity through every hop; None means CAD identity."""
+    capacity: Decimal | None = None
+    for index, leg in enumerate(route.legs):
+        local_capacity = sum((level.quantity for level in leg.levels), ZERO)
+        try:
+            in_source = required_input(ConversionRoute(route.legs[:index]), local_capacity)
+        except InsufficientDepth:
+            continue  # An earlier hop already limits the route more tightly.
+        capacity = in_source if capacity is None else min(capacity, in_source)
+    return capacity
+
+
