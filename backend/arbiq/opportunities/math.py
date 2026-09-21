@@ -471,3 +471,15 @@ def _loss_candidates(
     return points
 
 
+def _leg_marginal(leg: ConversionLeg, amount: Decimal, *, left: bool) -> Decimal:
+    cumulative = ZERO
+    for level in leg.levels:
+        cumulative += level.quantity
+        if amount < cumulative or (left and amount == cumulative):
+            return level.price * (ONE - leg.fee_rate)
+    # At the capacity endpoint only the left derivative is defined.
+    if amount == cumulative:
+        return leg.levels[-1].price * (ONE - leg.fee_rate)
+    raise InsufficientDepth("INSUFFICIENT_EXECUTABLE_FX_DEPTH")
+
+
