@@ -44,3 +44,13 @@ def native_symbols(slug, monitored, priorities, limit):
     return selected
 
 
+def tier(market, priorities, fast_ids):
+    if market.id in fast_ids:
+        return "FAST_LANE"
+    if market.base.symbol in priorities or (
+        market.active is True
+        and market.quote_volume is not None
+        and market.quote_volume >= Decimal("1000000")
+    ):
+        return "STANDARD"
+    return "RESEARCH"
