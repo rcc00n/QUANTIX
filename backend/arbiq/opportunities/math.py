@@ -349,3 +349,37 @@ def maximum_quantity(buy: MarketInput, sell: MarketInput) -> Decimal:
     )
 
 
+def _breakpoints(buy: MarketInput, sell: MarketInput, maximum: Decimal) -> set[Decimal]:
+    points = {maximum, min(_minimum_quantity(buy, sell), maximum)}
+    cumulative = ZERO
+    for level in buy.asks:
+        cumulative += level.quantity
+        points.add(min(cumulative, maximum))
+    cumulative = ZERO
+    for level in sell.bids:
+        cumulative += level.quantity
+        points.add(min(cumulative * _base_sell_factor(sell) / _base_buy_factor(buy), maximum))
+    for market, is_buy in ((buy, True), (sell, False)):
+        for value in (market.rules.min_quantity, market.rules.max_quantity):
+            if value:
+                points.add(
+                    min(
+                        value
+                        if is_buy
+                        else value * _base_sell_factor(sell) / _base_buy_factor(buy),
+                        maximum,
+                    )
+                )
+        if market.rules.min_notional:
+            value = quantity_for_notional(
+                market.asks if is_buy else market.bids, market.rules.min_notional
+            )
+            points.add(
+                min(
+                    value if is_buy else value * _base_sell_factor(sell) / _base_buy_factor(buy),
+                    maximum,
+                )
+            )
+    return points
+
+
