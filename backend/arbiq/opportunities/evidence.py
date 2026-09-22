@@ -39,3 +39,14 @@ def freeze_json(value: Any):
     return value
 
 
+def shared_json(value: Any):
+    """Normalize scalars while reusing only already-frozen financial subtrees."""
+    if isinstance(value, FrozenJSON):
+        return value
+    if isinstance(value, dict):
+        return {str(key): shared_json(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [shared_json(item) for item in value]
+    return safe_json(value)
+
+
