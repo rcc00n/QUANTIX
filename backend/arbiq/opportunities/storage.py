@@ -65,3 +65,29 @@ class OpportunityStore:
             await db.flush()
         return row.id
 
+    async def snapshot(self, db, book):
+        row = await db.scalar(
+            select(OrderBookSnapshot)
+            .where(
+                OrderBookSnapshot.market_id == book.market_id,
+                OrderBookSnapshot.content_sha256 == book.content_sha256,
+                OrderBookSnapshot.received_at == book.received_at,
+            )
+            .limit(1)
+        )
+        if row is None:
+            row = OrderBookSnapshot(
+                market_id=book.market_id,
+                observed_at=book.normalized.observed_at,
+                received_at=book.received_at,
+                bids=[[str(x.price), str(x.quantity)] for x in book.normalized.bids],
+                asks=[[str(x.price), str(x.quantity)] for x in book.normalized.asks],
+                sequence=book.sequence,
+                source=book.source,
+                quality=book.state.value,
+                content_sha256=book.content_sha256,
+            )
+            db.add(row)
+            await db.flush()
+        return row.id
+
