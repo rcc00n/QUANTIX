@@ -102,3 +102,66 @@ def load_costs(data):
     )
 
 
+def resize(payload, budget, *, max_search_evaluations=4096):
+    """Re-evaluate at the original decision time, explicitly historical attribution."""
+    evidence = payload.get("evidence", {})
+    inputs = evidence.get("calculation_inputs")
+    if not inputs:
+        return {
+            **payload,
+            "quantity": None,
+            "net_profit_cad": None,
+            "net_return_pct": None,
+            "acquisition_cost_cad": None,
+            "reasons": [*payload["reasons"], "BUDGET_EVIDENCE_UNAVAILABLE"],
+        }
+    costs = load_costs(inputs["costs"])
+    result = optimize_route(
+        load_input(inputs["buy"]),
+        load_input(inputs["sell"]),
+        budget_cad=budget,
+        now=datetime.fromisoformat(inputs["evaluated_at"]),
+        costs=costs,
+        budgets=(),
+        max_search_evaluations=max_search_evaluations,
+    )
+    best = result.best
+    reasons = list(payload.get("reasons", []))
+    reasons.extend(best.reasons if best else result.reasons)
+    budget_feasibility = "FEASIBLE_PROJECTED_SIZE"
+    if best is None:
+        reasons.append("SELECTED_BUDGET_HAS_NO_FEASIBLE_SIZE")
+        budget_feasibility = "NO_FEASIBLE_SIZE"
+    elif best.net_profit_cad is not None and best.net_profit_cad <= 0:
+        reasons.append("SELECTED_BUDGET_NON_POSITIVE_NET_AFTER_COSTS")
+        budget_feasibility = "NON_POSITIVE_NET"
+    return {
+        **payload,
+        "selected_budget_cad": str(budget),
+        "quantity": str(best.buy_quantity) if best else None,
+        "buy_price": str(best.buy_vwap) if best else None,
+        "sell_price": str(best.sell_vwap) if best else None,
+        "net_profit_cad": str(best.net_profit_cad)
+        if best and best.net_profit_cad is not None
+        else None,
+        "net_return_pct": str(best.net_return_pct)
+        if best and best.net_return_pct is not None
+        else None,
+        "acquisition_cost_cad": str(best.acquisition_cost_cad)
+        if best and best.acquisition_cost_cad is not None
+        else None,
+        "costs": safe_json(asdict(best)) if best else {},
+        "reasons": list(dict.fromkeys(reasons)),
+        "actionable": False,
+        "budget_feasibility": budget_feasibility,
+        "budget_results": safe_json([asdict(value) for value in result.budgets]),
+        "optimizer": {
+            "evaluated_count": result.evaluated_count,
+            "optimality": result.optimality,
+            "max_search_evaluations": max_search_evaluations,
+        },
+        "budget_recalculation": (
+            "retained evidence at original evaluation time; not a fresh quote; "
+            f"{max_search_evaluations}-evaluation search bound; optimality is reported explicitly"
+        ),
+    }
