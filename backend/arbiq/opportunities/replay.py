@@ -218,3 +218,41 @@ def replay_document(
     )
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Replay QUANTIX evidence without network or database writes"
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="Saved replay fixture or retained opportunity JSON",
+    )
+    parser.add_argument(
+        "--at", help="Explicit UTC decision time; future records remain unavailable"
+    )
+    parser.add_argument("--budget-cad", help="Custom decimal CAD acquisition budget")
+    args = parser.parse_args(argv)
+    try:
+        if args.input.stat().st_size > 8 * 1024 * 1024:
+            raise ValueError("Replay input exceeds the 8 MiB limit")
+        document = json.loads(args.input.read_text(), parse_float=Decimal)
+        if not isinstance(document, dict):
+            raise ValueError("Replay document must be a JSON object")
+        result = replay_document(
+            document,
+            at=datetime.fromisoformat(args.at) if args.at else None,
+            budget_cad=Decimal(args.budget_cad) if args.budget_cad else None,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+    except (OSError, ValueError, TypeError, ArithmeticError, KeyError):
+        print(
+            "Replay failed: invalid/incomplete evidence, timestamps, budget or input file.",
+            file=sys.stderr,
+        )
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
