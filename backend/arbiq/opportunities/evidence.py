@@ -29,3 +29,13 @@ class FrozenJSON(dict):
     __ior__ = _immutable
 
 
+def freeze_json(value: Any):
+    if isinstance(value, FrozenJSON):
+        return value
+    if isinstance(value, dict):
+        return FrozenJSON({key: freeze_json(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(freeze_json(item) for item in value)
+    return value
+
+
