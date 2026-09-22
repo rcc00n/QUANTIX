@@ -30,3 +30,12 @@ class ReplayBook:
             raise ValueError("Replay requires provenance")
 
 
+@dataclass(frozen=True, slots=True)
+class ReplayDecision:
+    decision_at: datetime
+    evidence_ids: tuple[str, ...]
+    result: OptimizationResult | None
+    reason: str | None
+    synthetic: bool
+
+
