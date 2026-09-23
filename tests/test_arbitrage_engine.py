@@ -192,6 +192,24 @@ async def test_optimizer_reuse_respects_fx_time_and_exact_economic_inputs(update
         assert reason in next(iter(engine.current.values()))["reasons"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "clock",
+    [
+        None,
+        {"trusted": False, "host_healthy": False},
+        {"trusted": True, "host_healthy": False},
+    ],
+)
+async def test_unhealthy_or_unknown_clock_never_produces_verified_opportunity(clock):
+    engine, buy, sell, _ = engine_fixture()
+    engine.collector.utc_clock = SimpleNamespace(snapshot=lambda: clock) if clock else None
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    body = engine.store.saved[0][1]
+    assert body["status"] != "VERIFIED_MARKET" and body["actionable"] is False
+    assert "HOST_CLOCK_UNHEALTHY" in body["reasons"]
+    if clock is None or not clock["trusted"]:
+        assert "UTC_CLOCK_UNTRUSTED" in body["reasons"]
 
 
 
