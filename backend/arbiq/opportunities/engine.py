@@ -239,3 +239,388 @@ class ArbitrageEngine:
             fx.get(market.quote.symbol),
         )
 
+    async def evaluate_pair(self, buy_id, sell_id, fx, now):
+        evaluation_started = elapsed_seconds()
+        br, bm = self.market_map[buy_id]
+        sr, sm = self.market_map[sell_id]
+        if venue_group(br.slug) == venue_group(sr.slug):
+            return
+        buy = self.collector.cache.get(buy_id, now=now)
+        sell = self.collector.cache.get(sell_id, now=now)
+        if not buy or not sell or not buy.normalized.asks or not sell.normalized.bids:
+            return
+        key = hashlib.sha256(f"{buy_id}:{sell_id}".encode()).hexdigest()
+        if "stream_unsynchronized" in buy.reasons or "stream_unsynchronized" in sell.reasons:
+            await self.reject_unsynchronized(key, now)
+            return
+        stream_epochs = [
+            (rt, rt.native_integrity_epoch)
+            for rt, book in ((br, buy), (sr, sell))
+            if book.source == f"{rt.slug}_ws" and hasattr(rt, "native_integrity_epoch")
+        ]
+        preferences = getattr(self.collector, "terminal_market_preferences", None) or {}
+        if not preferences.get("research_anomaly_scanning", True) and (
+            buy.state == DataState.SUSPICIOUS or sell.state == DataState.SUSPICIOUS
+        ):
+            if key in self.current:
+                await self.invalidate(key, "INVALIDATED", "ANOMALY_RESEARCH_DISABLED", now)
+            self.metrics["anomaly_candidates_disabled_by_policy"] += 1
+            return  # Underlying quality events/books remain retained independently.
+        if key in self.pending_transitions:
+            await self.flush_transitions()
+            if key in self.pending_transitions:
+                return
+        try:
+            # Screen with executable best bid/ask, never ticker/midprice. Cross-quote
+            # screening is only possible with explicit directional CAD evidence.
+            if bm.quote.key == sm.quote.key:
+                raw_positive = sell.normalized.bids[0].price > buy.normalized.asks[0].price
+            elif (buy_fx := fx.get(bm.quote.symbol)) and (sell_fx := fx.get(sm.quote.symbol)):
+                from arbiq.opportunities.math import convert, required_input
+
+                probe = min(
+                    buy.normalized.asks[0].quantity,
+                    sell.normalized.bids[0].quantity,
+                    Decimal("0.000001"),
+                )
+                raw_positive = convert(
+                    sell_fx.to_cad, sell.normalized.bids[0].price * probe
+                ) > required_input(buy_fx.from_cad, buy.normalized.asks[0].price * probe)
+            else:
+                return
+            if not raw_positive:
+                if key in self.current and self.current[key]["status"] not in {
+                    "INVALIDATED",
+                    "EXPIRED",
+                }:
+                    await self.invalidate(key, "INVALIDATED", "OBSERVED_SPREAD_DISAPPEARED", now)
+                return
+            bi = self.market_input(br, bm, buy, fx)
+            si = self.market_input(sr, sm, sell, fx)
+            costs = Costs(
+                slippage_bps=self.config.slippage_bps, rebalancing_bps=self.config.rebalancing_bps
+            )
+            config = self.config
+            projection_input = self.projections.signature(
+                bi, si, buy.normalized, sell.normalized, config, costs, now
+            )
+            result = self.projections.lookup(key, projection_input)
+            if result is None:
+                # Decimal optimization is CPU work; keep network/clock checks and
+                # shutdown responsive even when the economic inputs have changed.
+                result = await asyncio.to_thread(
+                    optimize_route,
+                    bi,
+                    si,
+                    budget_cad=config.default_budget_cad,
+                    now=now,
+                    costs=costs,
+                    budgets=(),
+                    max_search_evaluations=config.max_optimizer_evaluations,
+                )
+                self.projections.remember(key, projection_input, result, config.max_candidates)
+                self.metrics["optimizer_fresh_calculations"] += 1
+            else:
+                self.metrics["optimizer_exact_reuses"] += 1
+        except (ValueError, ArithmeticError):
+            if key in self.current and self.current[key]["status"] not in {
+                "INVALIDATED",
+                "EXPIRED",
+            }:
+                await self.invalidate(
+                    key, "INVALIDATED", "INVALID_MARKET_METADATA_OR_INSUFFICIENT_DEPTH", now
+                )
+            self.invalidations["INVALID_MARKET_METADATA_OR_INSUFFICIENT_DEPTH"] += 1
+            return
+        self.last_seen[key] = time.monotonic()
+        self.metrics["evaluations"] += 1
+        best = result.best
+        cad_budget_unavailable = (
+            best is None
+            and result.maximum is not None
+            and result.maximum.acquisition_cost_cad is None
+        )
+        if cad_budget_unavailable:
+            best = result.maximum
+        completed_at = self.collector.utcnow()
+        # A socket can lose synchronization while Decimal optimization yields the loop.
+        if any(rt.native_integrity_epoch != epoch for rt, epoch in stream_epochs):
+            await self.reject_unsynchronized(key, completed_at)
+            return
+        evaluation_ms = (elapsed_seconds() - evaluation_started) * 1000
+        self.timings.add("route_evaluation_ms", evaluation_ms)
+        reasons = [
+            *book_reasons(buy, completed_at, self.config),
+            *book_reasons(sell, completed_at, self.config),
+        ]
+        if cad_budget_unavailable:
+            reasons.append("BUDGET_NOT_APPLIED_CAD_UNAVAILABLE")
+        clock = (
+            self.collector.utc_clock.snapshot()
+            if self.collector.utc_clock
+            else {"trusted": False, "host_healthy": False}
+        )
+        if not clock["trusted"]:
+            reasons.append("UTC_CLOCK_UNTRUSTED")
+        if not clock["host_healthy"]:
+            reasons.append("HOST_CLOCK_UNHEALTHY")
+        capture_uncertainties = []
+        for b in (buy, sell):
+            try:
+                u = float(b.verification.get("clock", {}).get("uncertainty_ms", 2000)) / 1000
+                if not 0 <= u <= 2:
+                    raise ValueError
+            except (ValueError, TypeError):
+                u = 2
+            capture_uncertainties.append(u)
+        uncertainty = sum(capture_uncertainties)
+        source_skew = (
+            abs((buy.exchange_timestamp - sell.exchange_timestamp).total_seconds())
+            if buy.exchange_timestamp and sell.exchange_timestamp
+            else None
+        )
+        received_skew = abs((buy.received_at - sell.received_at).total_seconds())
+        if source_skew is None:
+            reasons.append("CROSS_BOOK_SOURCE_SYNCHRONIZATION_UNAVAILABLE")
+        elif source_skew + uncertainty > self.config.maximum_book_skew_seconds:
+            reasons.append("LEG_SOURCE_TIME_SKEW_EXCEEDED")
+        if received_skew + uncertainty > self.config.maximum_book_skew_seconds:
+            reasons.append("LEG_OBSERVATION_SKEW_WITH_UNCERTAINTY_EXCEEDED")
+        collector_config = getattr(self.collector, "config", None)
+        if collector_config is not None:
+            from arbiq.market_data.timing import freshness
+
+            for b in (buy, sell):
+                if freshness(b, completed_at, collector_config, clock)["classification"] in {
+                    "STALE",
+                    "UNAVAILABLE",
+                    "CLOCK_UNTRUSTED",
+                }:
+                    reasons.append("FRESHNESS_CLASS_NOT_VERIFIABLE")
+        source_ages = [age_seconds(completed_at, b.exchange_timestamp) for b in (buy, sell)]
+        receive_ages = [age_seconds(completed_at, b.received_at) for b in (buy, sell)]
+        if clock.get("trusted"):
+            if all(a is not None for a in source_ages):
+                source_ms = max(source_ages) * 1000
+                self.timings.add("source_to_evaluation_ms", source_ms)
+                streamed = sum(b.source.endswith("_ws") for b in (buy, sell))
+                transport = ("rest_pair", "mixed_pair", "ws_pair")[streamed]
+                self.timings.add(f"source_to_evaluation_{transport}_ms", source_ms)
+                if streamed == 2:
+                    self.timings.add("ws_pair_source_skew_ms", source_skew * 1000)
+            for book, age in zip((buy, sell), source_ages, strict=True):
+                if age is not None and book.source.endswith("_ws"):
+                    self.timings.add(f"source_to_evaluation_{book.source}_leg_ms", age * 1000)
+            if all(a is not None for a in receive_ages):
+                self.timings.add("receive_to_evaluation_ms", max(receive_ages) * 1000)
+        if (
+            abs((buy.received_at - sell.received_at).total_seconds())
+            > self.config.maximum_book_skew_seconds
+        ):
+            reasons.append("LEG_OBSERVATION_SKEW_EXCEEDED")
+        reasons.extend(best.reasons if best else result.reasons)
+        reasons.extend(
+            [
+                "CANADIAN_PROVINCIAL_ACCOUNT_ELIGIBILITY_UNVERIFIED",
+                "PRE_FUNDED_INVENTORY_ASSUMED_NOT_VERIFIED",
+            ]
+        )
+        if br.health["error_code"] or sr.health["error_code"]:
+            reasons.append("EXCHANGE_CONNECTIVITY_DEGRADED")
+        status = "RESEARCH_ONLY"
+        if best is None:
+            reasons.append("NO_FEASIBLE_EXECUTABLE_SIZE")
+            status = "INVALIDATED"
+        elif best.net_profit_cad is not None and best.net_profit_cad <= 0:
+            reasons.append("NON_POSITIVE_NET_AFTER_COSTS")
+            status = "INVALIDATED"
+        elif best.net_profit_quote is not None and best.net_profit_quote <= 0:
+            reasons.append("NON_POSITIVE_NET_AFTER_COSTS")
+            status = "INVALIDATED"
+        structural = [
+            r
+            for r in reasons
+            if r.startswith(("invalid_", "unordered_"))
+            or r
+            in {
+                "QUOTE_INGESTION_NOT_CURRENT",
+                "SOURCE_TIMESTAMP_NOT_CURRENT",
+                "BOOK_STALE",
+                "BOOK_UNAVAILABLE",
+            }
+        ]
+        if structural:
+            status = "INVALIDATED"
+        reasons = list(dict.fromkeys(reasons))
+        payload = {
+            "base_asset": bm.base.symbol,
+            "buy_exchange": br.slug,
+            "sell_exchange": sr.slug,
+            "buy_symbol": bm.native_symbol,
+            "sell_symbol": sm.native_symbol,
+            "status": status,
+            "actionable": False,
+            "eligibility": "UNVERIFIED",
+            "calculation_version": CALCULATION_VERSION,
+            "expires_at": now + timedelta(seconds=self.config.route_ttl_seconds),
+            "quantity": best.buy_quantity if best else None,
+            "buy_price": best.buy_vwap if best else None,
+            "sell_price": best.sell_vwap if best else None,
+            "net_profit_cad": best.net_profit_cad if best else None,
+            "net_return_pct": best.net_return_pct if best else None,
+            "acquisition_cost_cad": best.acquisition_cost_cad if best else None,
+            "selected_budget_cad": self.config.default_budget_cad,
+            "reasons": reasons,
+            "supporting_received_at": min(buy.received_at, sell.received_at),
+            "supporting_source_at": min(buy.exchange_timestamp, sell.exchange_timestamp)
+            if buy.exchange_timestamp is not None and sell.exchange_timestamp is not None
+            else None,
+            "costs": asdict(best) if best else {},
+            "budget_results": [asdict(x) for x in result.budgets],
+            "maximum_executable": asdict(result.maximum) if result.maximum else None,
+            "optimizer": {
+                "evaluated_count": result.evaluated_count,
+                "optimality": result.optimality,
+                "max_search_evaluations": self.config.max_optimizer_evaluations,
+            },
+            "evidence": {
+                "clock": clock,
+                "buy_quality": buy.state.value,
+                "sell_quality": sell.state.value,
+                "buy_confirmation": buy.verification,
+                "sell_confirmation": sell.verification,
+                "fx_books": self.fx_evidence,
+                "timing": {
+                    "evaluation_started_at": now.isoformat(),
+                    "evaluated_at": completed_at.isoformat(),
+                    "route_evaluation_ms": evaluation_ms,
+                    "buy_book_age_seconds": receive_ages[0],
+                    "sell_book_age_seconds": receive_ages[1],
+                    "buy_source_age_seconds": source_ages[0],
+                    "sell_source_age_seconds": source_ages[1],
+                    "cross_book_receive_skew_seconds": received_skew,
+                    "cross_book_source_skew_seconds": source_skew,
+                    "cross_book_uncertainty_seconds": uncertainty,
+                    "source_comparison_basis": [
+                        b.raw_evidence.get("timestamp_basis") for b in (buy, sell)
+                    ],
+                    "source_clock_independently_verified": False,
+                    "fx_evidence_scope": "available_conversion_graph",
+                    "fx_evidence_oldest_age_seconds": max(
+                        (
+                            a
+                            for b in self.fx_evidence.values()
+                            if (
+                                a := age_seconds(
+                                    completed_at, datetime.fromisoformat(b["received_at"])
+                                )
+                            )
+                            is not None
+                        ),
+                        default=None,
+                    ),
+                    "clock_trusted": clock.get("trusted", False),
+                    "actionable": False,
+                },
+                "calculation_inputs": {
+                    "buy": self.evidence_pool.market_input(bi),
+                    "sell": self.evidence_pool.market_input(si),
+                    "costs": safe_json(asdict(costs)),
+                    "evaluated_at": now.isoformat(),
+                    "max_search_evaluations": self.config.max_optimizer_evaluations,
+                },
+            },
+            "transfer_scenario": {
+                "mode": "TRANSFER_SCENARIO",
+                "guaranteed_executable": False,
+                "reasons": [
+                    "NETWORK_COMPATIBILITY_UNVERIFIED",
+                    "WITHDRAWAL_COSTS_UNVERIFIED",
+                    "TRANSFER_TIMING_UNVERIFIED",
+                    "FUTURE_SELLING_PRICE_UNKNOWN",
+                ],
+                "risk_adjusted_net_cad": None,
+            },
+        }
+        existing = self.current.get(key)
+        if existing:
+            payload.update(id=existing["id"], detected_at=existing["detected_at"], updated_at=now)
+        new = existing is None
+        if new and len(self.current) >= self.config.max_candidates:
+            terminal = [
+                k
+                for k, item in self.current.items()
+                if item["status"] in {"INVALIDATED", "EXPIRED"}
+                and k not in self.pending_transitions
+                and time.monotonic() - self.last_seen.get(k, 0) > self.config.route_ttl_seconds
+            ]
+            if terminal:
+                oldest = min(terminal, key=lambda k: self.last_seen.get(k, 0))
+                self.current.pop(oldest)
+                self.last_seen.pop(oldest, None)
+                self.last_write.pop(oldest, None)
+            else:
+                self.last_seen.pop(key, None)
+                self.metrics["candidate_capacity_limited"] += 1
+                return
+        if key not in self.seen_candidates:
+            self.metrics["detected"] += 1
+            self.seen_candidates[key] = None
+            while len(self.seen_candidates) > self.config.max_candidates * 10:
+                self.seen_candidates.popitem(last=False)
+        self.metrics["raw_discrepancy_evaluations"] += 1
+        rechecked = buy.verification.get("fresh_rest_recheck") and sell.verification.get(
+            "fresh_rest_recheck"
+        )
+        if rechecked:
+            payload["evidence"]["both_legs_rechecked"] = True
+        if status == "RESEARCH_ONLY" and (new or any(r in ANOMALY_REASONS for r in reasons)):
+            for market_id in (buy_id, sell_id):
+                if self.collector.request_confirmation(market_id) == "QUEUED":
+                    self.metrics["rechecked"] += 1
+        now_mono = time.monotonic()
+        while self.writes and now_mono - self.writes[0] >= 60:
+            self.writes.popleft()
+        while self.negative_writes and now_mono - self.negative_writes[0] >= 60:
+            self.negative_writes.popleft()
+        due = (
+            new
+            or existing["status"] != status
+            or now_mono - self.last_write.get(key, 0) >= self.config.persistence_interval_seconds
+        )
+        # Reserve most evidence capacity for potentially positive anomalies. Loss
+        # examples remain durable, but cannot starve interesting research routes.
+        negative_capacity = status != "INVALIDATED" or len(self.negative_writes) < max(
+            1, self.config.max_writes_per_minute // 6
+        )
+        if due and negative_capacity and len(self.writes) < self.config.max_writes_per_minute:
+            body = await self.store.save(
+                key,
+                payload,
+                buy,
+                sell,
+                bm,
+                sm,
+                br.exchange_id,
+                sr.exchange_id,
+                bi.fee.rate,
+                si.fee.rate,
+                now,
+            )
+            self.current[key] = self.evidence_pool.current(body, payload)
+            self.timings.add(
+                "opportunity_publication_ms", (elapsed_seconds() - evaluation_started) * 1000
+            )
+            self.last_write[key] = now_mono
+            self.writes.append(now_mono)
+            if status == "INVALIDATED":
+                self.negative_writes.append(now_mono)
+                self.invalidations[reasons[-1]] += 1
+        elif existing:
+            self.current[key] = self.evidence_pool.current(shared_json(payload), payload)
+            if due:
+                self.metrics["persistence_rate_limited"] += 1
+        elif due:
+            self.metrics["persistence_rate_limited"] += 1
+            self.last_seen.pop(key, None)
+
