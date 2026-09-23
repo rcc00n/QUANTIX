@@ -204,3 +204,38 @@ class ArbitrageEngine:
             )
         return result
 
+    def market_input(self, rt, market, book, fx):
+        def value(name):
+            raw = market.metadata.get(name)
+            return Decimal(raw) if raw is not None and Decimal(raw) > 0 else None
+
+        rules = MarketRules(
+            market.amount_step,
+            value("minimum_quantity"),
+            market.min_notional if market.min_notional and market.min_notional > 0 else None,
+            value("maximum_quantity"),
+            value("maximum_notional"),
+            verified=bool(
+                market.amount_step
+                and value("minimum_quantity") is not None
+                and market.metadata.get("active_status") == "active"
+            ),
+            source="CCXT spot metadata; precision/limits retained with evaluation",
+            price_tick=market.price_tick,
+        )
+        return MarketInput(
+            str(market.id),
+            venue_group(rt.slug),
+            market.base.key,
+            market.quote.symbol,
+            book.normalized.asks,
+            book.normalized.bids,
+            Fee(
+                self.fee_rate(market),
+                verified=False,
+                source="Conservative taker estimate; account tier and fee currency unverified",
+            ),
+            rules,
+            fx.get(market.quote.symbol),
+        )
+
