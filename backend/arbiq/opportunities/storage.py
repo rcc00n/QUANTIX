@@ -91,3 +91,107 @@ class OpportunityStore:
             await db.flush()
         return row.id
 
+    async def save(
+        self,
+        key,
+        payload,
+        buy,
+        sell,
+        buy_market,
+        sell_market,
+        buy_exchange_id,
+        sell_exchange_id,
+        buy_fee,
+        sell_fee,
+        now,
+    ):
+        async with self.sessions() as db:
+            route = await db.scalar(select(ArbitrageRoute).where(ArbitrageRoute.route_key == key))
+            new = route is None
+            old = route.status if route else None
+            if new:
+                route = ArbitrageRoute(
+                    route_key=key,
+                    buy_market_id=buy.market_id,
+                    sell_market_id=sell.market_id,
+                    run_id=self.run_id,
+                    status="DETECTED",
+                    actionable=False,
+                    detected_at=now,
+                    updated_at=now,
+                    expires_at=payload["expires_at"],
+                    revision=0,
+                    payload={},
+                )
+                db.add(route)
+                await db.flush()
+                db.add(
+                    ArbitrageLifecycleEvent(
+                        route_id=route.id,
+                        event_at=now,
+                        status="DETECTED",
+                        reason="Positive observed depth spread; no execution implied",
+                        details={},
+                    )
+                )
+            route.status = payload["status"]
+            route.revision += 1
+            route.run_id = self.run_id
+            route.updated_at = now
+            route.expires_at = payload["expires_at"]
+            body = safe_json(
+                {
+                    **payload,
+                    "id": str(route.id),
+                    "detected_at": route.detected_at,
+                    "updated_at": now,
+                }
+            )
+            route.payload = body
+            buy_id = await self.snapshot(db, buy)
+            sell_id = await self.snapshot(db, sell)
+            bf = await self.fee_version(db, buy_market, buy_exchange_id, now, buy_fee)
+            sf = await self.fee_version(db, sell_market, sell_exchange_id, now, sell_fee)
+            evidence = {
+                **body.get("evidence", {}),
+                "buy_book": buy.model_dump(mode="json"),
+                "sell_book": sell.model_dump(mode="json"),
+                "buy_market_metadata": buy_market.metadata,
+                "sell_market_metadata": sell_market.metadata,
+                "buy_snapshot_id": str(buy_id),
+                "sell_snapshot_id": str(sell_id),
+                "buy_fee_version_id": str(bf),
+                "sell_fee_version_id": str(sf),
+            }
+            db.add(
+                ArbitrageEvaluation(
+                    route_id=route.id,
+                    revision=route.revision,
+                    evaluated_at=now,
+                    buy_snapshot_id=buy_id,
+                    sell_snapshot_id=sell_id,
+                    buy_fee_version_id=bf,
+                    sell_fee_version_id=sf,
+                    quantity=numeric(body.get("quantity")),
+                    acquisition_cost_cad=numeric(body.get("acquisition_cost_cad")),
+                    gross_profit_cad=numeric(body.get("costs", {}).get("gross_profit_cad")),
+                    net_profit_cad=numeric(body.get("net_profit_cad")),
+                    net_return_pct=numeric(body.get("net_return_pct")),
+                    calculation_version=VERSION,
+                    evidence=evidence,
+                    result=body,
+                )
+            )
+            if old != route.status:
+                db.add(
+                    ArbitrageLifecycleEvent(
+                        route_id=route.id,
+                        event_at=now,
+                        status=route.status,
+                        reason=", ".join(body["reasons"]) or "Market spread confirmed",
+                        details={"revision": route.revision},
+                    )
+                )
+            await db.commit()
+            return body
+
