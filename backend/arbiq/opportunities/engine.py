@@ -701,3 +701,110 @@ class ArbitrageEngine:
             ],
         }
 
+    async def run(self):
+        await self.store.expire_previous_runs(self.collector.utcnow())
+        while not self.collector.stop.is_set():
+            self.wake.clear()
+            started = time.monotonic()
+            await self.flush_transitions()
+            selection = tuple(rt.markets for rt in self.collector.runtimes.values())
+            if len(selection) != len(self.selection) or any(
+                current is not previous
+                for current, previous in zip(selection, self.selection, strict=False)
+            ):
+                self.rebuild()
+            now = self.collector.utcnow()
+            if self.config.enabled:
+                # Currency book updates affect every CAD-valued route.
+                pending = self.pending.copy()
+                self.pending.clear()
+                if pending & {"asset:USDC", "asset:USDT", "fiat:USD", "fiat:EUR"}:
+                    pending.update(self.index)
+                fx = self.fx_routes(now)
+                fx_signature = tuple(
+                    sorted((key, b["content_sha256"]) for key, b in self.fx_evidence.items())
+                )
+                ordered_bases = sorted(pending)
+                if ordered_bases:
+                    start = self.base_rotation % len(ordered_bases)
+                    ordered_bases = ordered_bases[start:] + ordered_bases[:start]
+                    self.base_rotation += 1
+                # Rotate producers so a full bounded queue cannot permanently
+                # starve later assets behind BTC/ETH or a high-frequency FX feed.
+                for base in ordered_bases:
+                    ids = sorted(self.index.get(base, ()), key=str)
+                    for buy in ids:
+                        for sell in ids:
+                            buy_rt, buy_market = self.market_map[buy]
+                            sell_rt, sell_market = self.market_map[sell]
+                            if buy == sell or venue_group(buy_rt.slug) == venue_group(sell_rt.slug):
+                                continue
+                            if buy_market.quote.key != sell_market.quote.key and not (
+                                buy_market.quote.symbol in fx and sell_market.quote.symbol in fx
+                            ):
+                                continue
+                            if len(self.jobs) < self.config.max_candidates * 4:
+                                self.jobs.setdefault((buy, sell), elapsed_seconds())
+                            elif (buy, sell) not in self.jobs:
+                                self.metrics["comparison_queue_coalesced"] += 1
+                # Time-slice comparisons. Never hold the event loop through an
+                # entire initial cross-venue sweep; each evaluation gets fresh now.
+                batch_started = time.monotonic()
+                processed = 0
+                while self.jobs and processed < 512 and time.monotonic() - batch_started < 0.5:
+                    (buy, sell), enqueued = self.jobs.popitem(last=False)
+                    if buy not in self.market_map or sell not in self.market_map:
+                        continue
+                    signature = (buy, sell)
+                    decision_now = self.collector.utcnow()
+                    books = [self.collector.cache.get(m, now=decision_now) for m in signature]
+                    clock = self.collector.utc_clock.snapshot() if self.collector.utc_clock else {}
+                    inputs = (
+                        tuple(
+                            (b.content_sha256, b.received_at, b.state, b.reasons) if b else None
+                            for b in books
+                        ),
+                        fx_signature,
+                        id(self.config),
+                        tuple(id(self.market_map[m][1]) for m in signature),
+                        clock.get("trusted"),
+                        clock.get("host_healthy"),
+                    )
+                    if self.last_evaluated.get(signature) == inputs:
+                        self.metrics["identical_comparisons_skipped"] += 1
+                        continue
+                    self.last_evaluated[signature] = inputs
+                    self.last_evaluated.move_to_end(signature)
+                    while len(self.last_evaluated) > self.config.max_candidates * 4:
+                        self.last_evaluated.popitem(last=False)
+                    if enqueued is not None:
+                        self.timings.add(
+                            "comparison_queue_ms", (elapsed_seconds() - enqueued) * 1000
+                        )
+                    await self.evaluate_pair(buy, sell, fx, decision_now)
+                    processed += 1
+                    if processed % 32 == 0:
+                        await asyncio.sleep(0)
+                self.metrics["comparison_attempts"] += processed
+                for key in list(self.current):
+                    if self.current[key]["status"] not in {"INVALIDATED", "EXPIRED"} and (
+                        time.monotonic() - self.last_seen.get(key, 0)
+                        > self.config.route_ttl_seconds
+                    ):
+                        await self.invalidate(key, "EXPIRED", "NO_CURRENT_SUPPORTING_EVIDENCE", now)
+            self.latencies.append((time.monotonic() - started) * 1000)
+            self.heartbeat = time.monotonic()
+            waiters = [
+                asyncio.create_task(self.wake.wait()),
+                asyncio.create_task(self.collector.stop.wait()),
+            ]
+            try:
+                await asyncio.wait(
+                    waiters,
+                    timeout=0.05 if self.jobs else self.config.evaluation_interval_seconds,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                for task in waiters:
+                    task.cancel()
+                await asyncio.gather(*waiters, return_exceptions=True)
