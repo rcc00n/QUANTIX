@@ -624,3 +624,80 @@ class ArbitrageEngine:
             self.metrics["persistence_rate_limited"] += 1
             self.last_seen.pop(key, None)
 
+    async def reject_unsynchronized(self, key, now):
+        if key in self.current and self.current[key]["status"] not in {"INVALIDATED", "EXPIRED"}:
+            await self.invalidate(key, "INVALIDATED", "STREAM_BOOK_UNSYNCHRONIZED", now)
+        self.metrics["unsynchronized_pairs_skipped"] += 1
+
+    async def invalidate(self, key, status, reason, now):
+        current = self.current[key]
+        # Each tracked route owns at most one pending transition. Repeated updates
+        # coalesce, while terminal in-memory states cannot lose their audit write.
+        self.pending_transitions[key] = (UUID(current["id"]), status, reason, now)
+        self.current[key] = {**current, "status": status, "reasons": [reason], "actionable": False}
+        self.invalidations[reason] += 1
+        await self.flush_transitions()
+
+    async def flush_transitions(self):
+        stamp = time.monotonic()
+        while self.writes and stamp - self.writes[0] >= 60:
+            self.writes.popleft()
+        for key in list(self.pending_transitions):
+            if len(self.writes) >= self.config.max_writes_per_minute:
+                self.metrics["transition_persistence_deferred"] += 1
+                break
+            await self.store.transition(*self.pending_transitions[key])
+            self.pending_transitions.pop(key)
+            self.writes.append(stamp)
+
+    def diagnostics(self):
+        coverage = coverage_metrics(
+            {s: r.catalog for s, r in self.collector.runtimes.items()},
+            {s: r.markets for s, r in self.collector.runtimes.items()},
+        )
+        clock = (
+            self.collector.utc_clock.snapshot()
+            if self.collector.utc_clock
+            else {"trusted": False, "host_healthy": False}
+        )
+        statuses = Counter(x["status"] for x in self.current.values())
+        return {
+            "healthy": self.heartbeat > 0 and time.monotonic() - self.heartbeat < 30,
+            "enabled": self.config.enabled,
+            "mode": "paper",
+            "clock_healthy": clock["host_healthy"],
+            "clock": clock,
+            "metrics": {
+                **asdict(coverage),
+                **self.metrics,
+                "processing_latency_ms": round(sum(self.latencies) / len(self.latencies), 3)
+                if self.latencies
+                else None,
+                "max_processing_latency_ms": round(max(self.latencies), 3)
+                if self.latencies
+                else None,
+                "verified_market": statuses["VERIFIED_MARKET"],
+                "research_only": statuses["RESEARCH_ONLY"],
+                "invalidated": statuses["INVALIDATED"],
+                "expired": statuses["EXPIRED"],
+                "pending_assets": len(self.pending),
+                "tracked_routes": len(self.current),
+                "pending_transitions": len(self.pending_transitions),
+                "pending_comparisons": len(self.jobs),
+                "comparison_queue_oldest_seconds": max(
+                    (elapsed_seconds() - t for t in self.jobs.values() if t is not None), default=0
+                ),
+                "pipeline_timings": self.timings.snapshot(),
+                "detected_identity_window": len(self.seen_candidates),
+                **{
+                    f"evidence_pool_{key}": value
+                    for key, value in self.evidence_pool.metrics().items()
+                },
+            },
+            "invalidations": dict(self.invalidations),
+            "calculation_version": CALCULATION_VERSION,
+            "reasons": [
+                "All account/province eligibility and pre-funded inventories remain unverified"
+            ],
+        }
+
