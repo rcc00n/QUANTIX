@@ -112,3 +112,95 @@ class ArbitrageEngine:
         self.evidence_pool.retain(self.market_map)
         self.projections.retain(self.market_map)
 
+    def fee_rate(self, market):
+        advertised = market.metadata.get("advertised_taker_rate")
+        try:
+            value = Decimal(advertised) if advertised is not None else Decimal(0)
+            if not value.is_finite() or not 0 <= value < 1:
+                value = Decimal(0)
+        except (ValueError, TypeError, ArithmeticError):
+            value = Decimal(0)
+        return max(self.config.conservative_taker_rate, value)
+
+    def fx_routes(self, now):
+        """Bounded two-hop executable currency graph; USD/USDC/USDT remain distinct.
+
+        Conversion books are independent of traded crypto legs. Quotes are liquidation
+        bids and acquisition asks, including taker estimates and observed depth.
+        """
+        allowed = {"CAD", "USD", "USDC", "USDT", "EUR"}
+        graph = defaultdict(list)
+        self.fx_evidence = {}
+        for market_id, (rt, market) in self.market_map.items():
+            if (
+                not market.base.verified
+                or not market.quote.verified
+                or market.active is not True
+                or rt.health["error_code"]
+                or market.base.symbol not in allowed
+                or market.quote.symbol not in allowed
+            ):
+                continue
+            book = self.collector.cache.get(market_id, now=now)
+            if (
+                book is None
+                or book.state != DataState.HEALTHY
+                or book_reasons(book, now, self.config)
+            ):
+                continue
+            for reverse in (False, True):
+                leg = conversion_leg_from_book(
+                    market.base.symbol,
+                    market.quote.symbol,
+                    bids=book.normalized.bids,
+                    asks=book.normalized.asks,
+                    reverse=reverse,
+                    fee_rate=self.fee_rate(market),
+                    evidence=str(market_id) + ":" + book.content_sha256,
+                )
+                graph[leg.source_currency].append((leg, book))
+            self.fx_evidence[str(market_id)] = self.evidence_pool.book(book)
+
+        def find(source, target):
+            queue = deque([(source, (), (), {source})])
+            while queue:
+                currency, path, books, visited = queue.popleft()
+                if currency == target:
+                    return path, books
+                if len(path) >= 2:
+                    continue
+                for leg, book in sorted(graph[currency], key=lambda x: x[0].evidence):
+                    if leg.target_currency not in visited:
+                        queue.append(
+                            (
+                                leg.target_currency,
+                                (*path, leg),
+                                (*books, book),
+                                visited | {leg.target_currency},
+                            )
+                        )
+            return None
+
+        result = {"CAD": identity_cad()}
+        for currency in allowed - {"CAD"}:
+            to, back = find(currency, "CAD"), find("CAD", currency)
+            if not to or not back:
+                continue
+            books = (*to[1], *back[1])
+            fresh = min(
+                book.received_at + timedelta(seconds=self.config.maximum_book_age_seconds)
+                for book in books
+            )
+            result[currency] = FXConversion(
+                currency,
+                ConversionRoute(to[0]),
+                ConversionRoute(back[0]),
+                False,
+                fresh,
+                "Executable public conversion books; "
+                "account fee and funding assumptions unverified",
+                observed_at=max(book.exchange_timestamp or book.received_at for book in books),
+                available_at=max(book.received_at for book in books),
+            )
+        return result
+
