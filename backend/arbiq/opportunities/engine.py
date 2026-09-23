@@ -61,3 +61,54 @@ def book_reasons(book, now, config):
     return list(dict.fromkeys(reasons))
 
 
+class ArbitrageEngine:
+    def __init__(self, collector):
+        self.collector = collector
+        self.config = collector.settings.arbitrage
+        self.store = OpportunityStore(collector.store.sessions, collector.store.run_id)
+        self.pending = set()
+        self.wake = asyncio.Event()
+        self.index = defaultdict(set)
+        self.market_map = {}
+        self.current = {}
+        self.last_write = {}
+        self.writes = deque()
+        self.last_seen = {}
+        self.pending_transitions = {}
+        self.metrics = Counter()
+        self.invalidations = Counter()
+        self.latencies = deque(maxlen=100)
+        self.timings = Timings()
+        self.heartbeat = 0.0
+        self.fx_evidence = {}
+        self.jobs = OrderedDict()
+        self.seen_candidates = OrderedDict()
+        self.last_evaluated = OrderedDict()
+        self.selection = ()
+        self.negative_writes = deque()
+        self.base_rotation = 0
+        self.projections = ProjectionCache()
+        self.evidence_pool = EvidencePool(
+            getattr(collector.cache, "limit", self.config.max_candidates)
+        )
+
+    def changed(self, book):
+        if len(self.pending) < self.config.max_candidates:
+            self.pending.add(book.base_key)
+            self.wake.set()
+        else:
+            self.metrics["coalesced_updates"] += 1
+
+    def rebuild(self):
+        self.index.clear()
+        self.market_map.clear()
+        for rt in self.collector.runtimes.values():
+            for market in rt.markets:
+                self.market_map[market.id] = (rt, market)
+                if market.base.verified and market.quote.verified and market.active is not False:
+                    self.index[market.base.key].add(market.id)
+
+        self.selection = tuple(rt.markets for rt in self.collector.runtimes.values())
+        self.evidence_pool.retain(self.market_map)
+        self.projections.retain(self.market_map)
+
