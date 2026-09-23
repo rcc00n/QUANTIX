@@ -160,6 +160,36 @@ async def test_same_economic_inputs_reuse_math_and_publish_new_observation():
         assert first[field] == second[field]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("update", "reason"),
+    [
+        ("expired_fx", "BUY_CAD_CONVERSION_STALE"),
+        ("future_fx", "BUY_CAD_CONVERSION_NOT_YET_AVAILABLE"),
+        ("depth_scale", None),
+        ("changed_budget", None),
+    ],
+)
+async def test_optimizer_reuse_respects_fx_time_and_exact_economic_inputs(update, reason):
+    engine, buy, sell, _ = engine_fixture()
+    original_fx = identity_cad()
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": original_fx}, NOW)
+    fx = original_fx
+    if update == "expired_fx":
+        fx = replace(fx, fresh_until=NOW - timedelta(microseconds=1))
+    elif update == "future_fx":
+        fx = replace(fx, available_at=NOW + timedelta(microseconds=1))
+    elif update == "depth_scale":
+        engine.collector.cache.books[buy.id] = capture(
+            "synthetic-buy", buy, quantities=["10.0", "10.0", "10.0"]
+        )
+    elif update == "changed_budget":
+        engine.config = engine.config.model_copy(update={"default_budget_cad": Decimal("200")})
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": fx}, NOW)
+    assert engine.metrics["optimizer_fresh_calculations"] == 2
+    assert engine.metrics["optimizer_exact_reuses"] == 0
+    if reason:
+        assert reason in next(iter(engine.current.values()))["reasons"]
 
 
 
