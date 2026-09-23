@@ -195,3 +195,24 @@ class OpportunityStore:
             await db.commit()
             return body
 
+    async def transition(self, route_id: UUID, status, reason, now):
+        async with self.sessions() as db:
+            route = await db.get(ArbitrageRoute, route_id)
+            if not route or route.status == status:
+                return
+            route.status = status
+            route.updated_at = now
+            route.payload = {
+                **route.payload,
+                "status": status,
+                "updated_at": now.isoformat(),
+                "actionable": False,
+                "reasons": [reason],
+            }
+            db.add(
+                ArbitrageLifecycleEvent(
+                    route_id=route.id, event_at=now, status=status, reason=reason, details={}
+                )
+            )
+            await db.commit()
+
