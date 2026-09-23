@@ -134,6 +134,30 @@ async def test_exact_real_book_path_retains_evidence_and_unverified_conditions()
     assert engine.metrics["detected"] == 1 and engine.metrics["rechecked"] == 2
 
 
+@pytest.mark.asyncio
+async def test_same_economic_inputs_reuse_math_and_publish_new_observation():
+    engine, buy, sell, _ = engine_fixture()
+    fx = {"CAD": identity_cad()}
+    await engine.evaluate_pair(buy.id, sell.id, fx, NOW)
+    key, first, _, _ = engine.store.saved[0]
+
+    decision = NOW + timedelta(seconds=1)
+    engine.collector.utcnow = lambda: decision
+    engine.collector.cache.books[buy.id] = capture("synthetic-buy", buy, received_at=decision)
+    engine.collector.cache.books[sell.id] = capture(
+        "synthetic-sell", sell, ask="111", bid="110", received_at=decision
+    )
+    engine.last_write[key] = time.monotonic() - engine.config.persistence_interval_seconds - 1
+    await engine.evaluate_pair(buy.id, sell.id, fx, decision)
+    _, second, buy_book, sell_book = engine.store.saved[1]
+    assert engine.metrics["optimizer_fresh_calculations"] == 1
+    assert engine.metrics["optimizer_exact_reuses"] == 1
+    assert engine.metrics["evaluations"] == 2
+    assert buy_book.received_at == sell_book.received_at == decision
+    assert second["supporting_received_at"] == decision.isoformat()
+    assert second["evidence"]["timing"]["evaluated_at"] == decision.isoformat()
+    for field in ("costs", "budget_results", "maximum_executable", "optimizer"):
+        assert first[field] == second[field]
 
 
 
