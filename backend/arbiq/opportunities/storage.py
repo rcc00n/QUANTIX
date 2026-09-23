@@ -216,3 +216,33 @@ class OpportunityStore:
             )
             await db.commit()
 
+    async def expire_previous_runs(self, now):
+        async with self.sessions() as db:
+            rows = (
+                await db.scalars(
+                    select(ArbitrageRoute).where(
+                        ArbitrageRoute.run_id != self.run_id,
+                        ArbitrageRoute.status.not_in(["INVALIDATED", "EXPIRED"]),
+                    )
+                )
+            ).all()
+            for route in rows:
+                route.status = "EXPIRED"
+                route.updated_at = now
+                route.payload = {
+                    **route.payload,
+                    "status": "EXPIRED",
+                    "actionable": False,
+                    "updated_at": now.isoformat(),
+                    "reasons": ["collector_restarted_requires_new_evidence"],
+                }
+                db.add(
+                    ArbitrageLifecycleEvent(
+                        route_id=route.id,
+                        event_at=now,
+                        status="EXPIRED",
+                        reason="collector_restarted_requires_new_evidence",
+                        details={},
+                    )
+                )
+            await db.commit()
