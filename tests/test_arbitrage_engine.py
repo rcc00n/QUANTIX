@@ -315,6 +315,16 @@ async def test_unaffordable_minimum_does_not_fallback_to_over_budget_maximum():
     assert "NO_FEASIBLE_EXECUTABLE_SIZE" in body["reasons"]
 
 
+def test_updates_coalesce_by_asset_and_pending_capacity_is_bounded():
+    engine, buy, _, _ = engine_fixture(config=EngineConfig(max_candidates=10))
+    book = engine.collector.cache.books[buy.id]
+    for _ in range(100):
+        engine.changed(book)
+    assert engine.pending == {"asset:BTC"}
+    for index in range(20):
+        engine.changed(book.model_copy(update={"base_key": f"synthetic:{index}"}))
+    assert len(engine.pending) == 10
+    assert engine.metrics["coalesced_updates"] > 0
 
 
 
