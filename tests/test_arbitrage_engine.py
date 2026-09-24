@@ -375,6 +375,22 @@ async def test_malformed_metadata_invalidates_prior_route_without_extending_evid
     )
 
 
+@pytest.mark.asyncio
+async def test_deferred_terminal_transition_is_retried_within_shared_write_budget():
+    engine, buy, sell, _ = engine_fixture(config=EngineConfig(max_writes_per_minute=1))
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    key = next(iter(engine.current))
+    await engine.invalidate(key, "EXPIRED", "SYNTHETIC_EXPIRY", NOW)
+    assert engine.current[key]["status"] == "EXPIRED"
+    assert key in engine.pending_transitions
+    assert not engine.store.transition.await_count
+    await engine.flush_transitions()
+    assert not engine.store.transition.await_count
+    engine.writes.clear()  # Synthetic passage of a complete rate-limit window.
+    await engine.flush_transitions()
+    assert engine.store.transition.await_count == 1
+    assert not engine.pending_transitions
+    assert len(engine.writes) == 1
 
 
 
