@@ -327,6 +327,17 @@ def test_updates_coalesce_by_asset_and_pending_capacity_is_bounded():
     assert engine.metrics["coalesced_updates"] > 0
 
 
+@pytest.mark.asyncio
+async def test_unchanged_route_does_not_write_each_tick_and_rate_budget_is_bounded():
+    engine, buy, sell, _ = engine_fixture(config=EngineConfig(max_writes_per_minute=1))
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    assert len(engine.store.saved) == 1
+    key = next(iter(engine.current))
+    engine.last_write[key] = 0
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    assert len(engine.store.saved) == 1
+    assert engine.metrics["persistence_rate_limited"] == 1
 
 
 
