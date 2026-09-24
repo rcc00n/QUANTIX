@@ -353,6 +353,26 @@ async def test_disappeared_spread_invalidates_prior_evaluation():
     )
 
 
+@pytest.mark.asyncio
+async def test_malformed_metadata_invalidates_prior_route_without_extending_evidence_age():
+    engine, buy, sell, _ = engine_fixture()
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    key = next(iter(engine.current))
+    last_seen = engine.last_seen[key]
+    rt, discovered = engine.market_map[buy.id]
+    engine.market_map[buy.id] = (
+        rt,
+        replace(
+            discovered,
+            metadata={**discovered.metadata, "minimum_quantity": "SYNTHETIC-BAD"},
+        ),
+    )
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    assert engine.current[key]["status"] == "INVALIDATED"
+    assert engine.last_seen[key] == last_seen
+    assert engine.store.transition.await_args.args[2] == (
+        "INVALID_MARKET_METADATA_OR_INSUFFICIENT_DEPTH"
+    )
 
 
 
