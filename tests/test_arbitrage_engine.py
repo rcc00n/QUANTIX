@@ -393,6 +393,18 @@ async def test_deferred_terminal_transition_is_retried_within_shared_write_budge
     assert len(engine.writes) == 1
 
 
+@pytest.mark.asyncio
+async def test_terminal_capacity_is_reclaimed_without_growing_causal_maps():
+    engine, buy, sell, _ = engine_fixture(config=EngineConfig(max_candidates=10))
+    for index in range(10):
+        key = f"synthetic-old-{index}"
+        engine.current[key] = {"id": str(uuid4()), "status": "EXPIRED"}
+        engine.last_seen[key] = index
+        engine.last_write[key] = index
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    assert len(engine.current) == 10
+    assert len(engine.last_seen) == 10 and len(engine.last_write) == 10
+    assert "synthetic-old-0" not in engine.current
 
 
 
