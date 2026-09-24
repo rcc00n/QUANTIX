@@ -275,6 +275,28 @@ async def test_crossed_book_cannot_produce_executable_quantity():
     assert engine.invalidations["INVALID_MARKET_METADATA_OR_INSUFFICIENT_DEPTH"] == 1
 
 
+@pytest.mark.asyncio
+async def test_absent_fx_suppresses_cad_projection_without_stablecoin_parity():
+    engine, _, _, _ = engine_fixture()
+    buy, sell = (
+        market("synthetic-buy", quote="USDC"),
+        market("synthetic-sell", quote="USDC"),
+    )
+    for slug, discovered, ask, bid in (
+        ("synthetic-buy", buy, "100", "99"),
+        ("synthetic-sell", sell, "111", "110"),
+    ):
+        rt = engine.collector.runtimes[slug]
+        rt.markets = rt.catalog = [discovered]
+        engine.collector.cache.books[discovered.id] = capture(slug, discovered, ask=ask, bid=bid)
+    engine.rebuild()
+    await engine.evaluate_pair(buy.id, sell.id, {}, NOW)
+    body = engine.store.saved[0][1]
+    assert body["net_profit_cad"] is None
+    assert body["acquisition_cost_cad"] is None
+    assert body["status"] == "RESEARCH_ONLY"
+    assert any("conversion" in reason.lower() for reason in body["reasons"])
+    assert "BUDGET_NOT_APPLIED_CAD_UNAVAILABLE" in body["reasons"]
 
 
 
