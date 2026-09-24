@@ -235,6 +235,12 @@ async def test_exchange_disconnect_is_visible_and_nonactionable():
     assert body["actionable"] is False and body["status"] != "VERIFIED_MARKET"
 
 
+@pytest.mark.asyncio
+async def test_coinbase_adapters_are_one_underlying_venue():
+    engine, buy, sell, requests = engine_fixture(buy_slug="coinbase", sell_slug="coinbaseexchange")
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    assert not engine.store.saved and not requests
+    assert engine.diagnostics()["metrics"]["compatible_intersections"] == 0
 
 
 
