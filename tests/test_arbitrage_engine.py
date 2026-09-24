@@ -299,6 +299,20 @@ async def test_absent_fx_suppresses_cad_projection_without_stablecoin_parity():
     assert "BUDGET_NOT_APPLIED_CAD_UNAVAILABLE" in body["reasons"]
 
 
+@pytest.mark.asyncio
+async def test_unaffordable_minimum_does_not_fallback_to_over_budget_maximum():
+    engine, buy, sell, _ = engine_fixture(config=EngineConfig(default_budget_cad="100"))
+    rt, discovered = engine.market_map[buy.id]
+    engine.market_map[buy.id] = (
+        rt,
+        replace(discovered, metadata={**discovered.metadata, "minimum_quantity": "2"}),
+    )
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    body = engine.store.saved[0][1]
+    assert body["status"] == "INVALIDATED"
+    assert body["quantity"] is None
+    assert body["net_profit_cad"] is None
+    assert "NO_FEASIBLE_EXECUTABLE_SIZE" in body["reasons"]
 
 
 
