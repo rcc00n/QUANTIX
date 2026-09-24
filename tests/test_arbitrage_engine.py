@@ -212,6 +212,17 @@ async def test_unhealthy_or_unknown_clock_never_produces_verified_opportunity(cl
         assert "UTC_CLOCK_UNTRUSTED" in body["reasons"]
 
 
+@pytest.mark.asyncio
+async def test_stale_book_is_invalidated_and_never_verified():
+    engine, buy, sell, _ = engine_fixture()
+    engine.collector.cache.books[buy.id] = capture(
+        "synthetic-buy", buy, received_at=NOW - timedelta(seconds=90)
+    )
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    body = engine.store.saved[0][1]
+    assert body["status"] == "INVALIDATED"
+    assert "BOOK_STALE" in body["reasons"]
+    assert body["actionable"] is False
 
 
 
