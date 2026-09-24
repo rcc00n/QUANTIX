@@ -225,6 +225,14 @@ async def test_stale_book_is_invalidated_and_never_verified():
     assert body["actionable"] is False
 
 
+@pytest.mark.asyncio
+async def test_exchange_disconnect_is_visible_and_nonactionable():
+    engine, buy, sell, _ = engine_fixture()
+    engine.market_map[buy.id][0].health["error_code"] = "NETWORK_UNAVAILABLE"
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    body = engine.store.saved[0][1]
+    assert "EXCHANGE_CONNECTIVITY_DEGRADED" in body["reasons"]
+    assert body["actionable"] is False and body["status"] != "VERIFIED_MARKET"
 
 
 
