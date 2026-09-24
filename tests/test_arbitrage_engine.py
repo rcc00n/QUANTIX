@@ -266,6 +266,13 @@ async def test_extreme_dislocation_preserves_shallow_evidence_and_requests_fresh
     assert Decimal(body["net_profit_cad"]) < Decimal(2)
 
 
+@pytest.mark.asyncio
+async def test_crossed_book_cannot_produce_executable_quantity():
+    engine, buy, sell, requests = engine_fixture()
+    engine.collector.cache.books[buy.id] = capture("synthetic-buy", buy, ask="90", bid="100")
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    assert not engine.store.saved and not requests
+    assert engine.invalidations["INVALID_MARKET_METADATA_OR_INSUFFICIENT_DEPTH"] == 1
 
 
 
