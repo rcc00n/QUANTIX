@@ -340,6 +340,17 @@ async def test_unchanged_route_does_not_write_each_tick_and_rate_budget_is_bound
     assert engine.metrics["persistence_rate_limited"] == 1
 
 
+@pytest.mark.asyncio
+async def test_disappeared_spread_invalidates_prior_evaluation():
+    engine, buy, sell, _ = engine_fixture()
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    engine.collector.cache.books[sell.id] = capture("synthetic-sell", sell, ask="100", bid="99")
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    assert next(iter(engine.current.values()))["status"] == "INVALIDATED"
+    assert engine.store.transition.await_args.args[1:3] == (
+        "INVALIDATED",
+        "OBSERVED_SPREAD_DISAPPEARED",
+    )
 
 
 
