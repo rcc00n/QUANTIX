@@ -243,6 +243,27 @@ async def test_coinbase_adapters_are_one_underlying_venue():
     assert engine.diagnostics()["metrics"]["compatible_intersections"] == 0
 
 
+@pytest.mark.asyncio
+async def test_extreme_dislocation_preserves_shallow_evidence_and_requests_fresh_rechecks():
+    engine, buy, sell, requests = engine_fixture()
+    book = capture("synthetic-buy", buy, ask="50", bid="49", quantities=["0.01"] * 3)
+    engine.collector.cache.books[buy.id] = book.classified(
+        DataState.SUSPICIOUS,
+        reasons=("extreme_reference_discrepancy",),
+        verification={
+            "status": "REPEATED_WITH_REFERENCE_DISAGREEMENT",
+            "fresh_rest_recheck": True,
+            "independent_reference_count": 3,
+        },
+    )
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    _, body, retained, _ = engine.store.saved[0]
+    assert body["status"] == "RESEARCH_ONLY"
+    assert "ANOMALY_REQUIRES_FRESH_INDEPENDENT_RECHECK" in body["reasons"]
+    assert requests == {buy.id, sell.id}
+    assert retained.raw_evidence == book.raw_evidence
+    assert Decimal(body["quantity"]) <= Decimal("0.03")
+    assert Decimal(body["net_profit_cad"]) < Decimal(2)
 
 
 
