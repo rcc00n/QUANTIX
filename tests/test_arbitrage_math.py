@@ -153,6 +153,21 @@ def test_observed_prices_must_align_with_known_exchange_tick():
         replace(buy, rules=replace(RULES, price_tick=D("0.03")))
 
 
+@pytest.mark.parametrize(
+    "rules,message",
+    [
+        (replace(RULES, min_quantity=D(2)), "BELOW_MINIMUM_QUANTITY"),
+        (replace(RULES, min_notional=D(300)), "BELOW_MINIMUM_NOTIONAL"),
+        (replace(RULES, max_quantity=D("0.5")), "ABOVE_MAXIMUM_QUANTITY"),
+        (replace(RULES, max_notional=D(50)), "ABOVE_MAXIMUM_NOTIONAL"),
+    ],
+)
+def test_order_limits_checked_on_each_leg(rules, message):
+    buy, sell = markets()
+    with pytest.raises(ValueError, match=message):
+        run(replace(buy, rules=rules), sell)
+    with pytest.raises(ValueError, match=message):
+        run(buy, replace(sell, rules=rules))
 
 
 
