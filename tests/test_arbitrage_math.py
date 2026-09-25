@@ -269,6 +269,23 @@ def test_multihop_conversion_and_capacity():
         convert(route, D(51))
 
 
+@pytest.mark.parametrize(
+    "conversion,reason",
+    [
+        (None, "SELL_CAD_CONVERSION_UNAVAILABLE"),
+        (
+            replace(fx(), fresh_until=NOW - timedelta(seconds=1)),
+            "SELL_CAD_CONVERSION_STALE",
+        ),
+    ],
+)
+def test_missing_or_stale_fx_suppresses_cad_profit(conversion, reason):
+    buy, sell = markets()
+    sell = replace(sell, quote_currency="USDT", fx=conversion)
+    result = run(buy, sell)
+    assert result.net_profit_cad is None
+    assert not result.verified
+    assert reason in result.reasons
 
 
 
