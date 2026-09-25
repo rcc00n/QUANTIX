@@ -238,6 +238,12 @@ def test_stablecoin_depeg_and_directional_conversion(bid, expected):
     assert result.net_profit_quote is None
 
 
+def test_fx_acquisition_uses_ask_and_liquidation_uses_bid():
+    conversion = fx()
+    assert convert(conversion.to_cad, D(10)) == D(13)
+    assert required_input(conversion.from_cad, D(10)) == D(14)
+    assert conversion_capacity(conversion.to_cad) == D(100000)
+    assert conversion_capacity(conversion.from_cad) == D(140000)
 
 
 
