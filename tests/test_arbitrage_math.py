@@ -207,6 +207,14 @@ def test_marketable_execution_rejects_maker_fee_claim():
         Fee(D("0.001"), execution="maker")
 
 
+def test_unknown_fees_and_limits_never_become_verified_or_zero_by_default():
+    buy, sell = markets()
+    buy = replace(buy, fee=Fee(D("0.006")), rules=MarketRules())
+    result = run(buy, sell)
+    assert result.buy_fee_amount == D("0.600")
+    assert not result.verified
+    assert "BUY_FEE_UNVERIFIED" in result.reasons
+    assert "BUY_MARKET_LIMITS_UNVERIFIED" in result.reasons
 
 
 
