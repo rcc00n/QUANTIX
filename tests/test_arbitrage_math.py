@@ -202,6 +202,9 @@ def test_base_fees_reduce_acquisition_and_increase_seller_inventory():
     assert result.net_profit_cad == result.gross_profit_cad - result.fees_cad
 
 
+def test_marketable_execution_rejects_maker_fee_claim():
+    with pytest.raises(ValueError, match="taker"):
+        Fee(D("0.001"), execution="maker")
 
 
 
