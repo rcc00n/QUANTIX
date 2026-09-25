@@ -117,6 +117,11 @@ def test_multilevel_asks_and_bids_weighted_execution():
     assert result.mode == "PRE_FUNDED"
 
 
+@pytest.mark.parametrize("quantity", ["3.01", "10", "1000000"])
+def test_impossible_depth_cannot_create_executable_quantity(quantity):
+    buy, sell = markets()
+    with pytest.raises(InsufficientDepth):
+        run(buy, sell, quantity)
 
 
 
