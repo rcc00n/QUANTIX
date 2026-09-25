@@ -146,6 +146,11 @@ def test_step_rounding_and_residual_not_monetized():
     assert result.net_profit_cad == D("5.50")
 
 
+def test_observed_prices_must_align_with_known_exchange_tick():
+    buy, _ = markets()
+    assert replace(buy, rules=replace(RULES, price_tick=D("0.01")))
+    with pytest.raises(ValueError, match="price precision"):
+        replace(buy, rules=replace(RULES, price_tick=D("0.03")))
 
 
 
