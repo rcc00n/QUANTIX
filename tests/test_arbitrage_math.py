@@ -170,6 +170,21 @@ def test_order_limits_checked_on_each_leg(rules, message):
         run(buy, replace(sell, rules=rules))
 
 
+def test_quote_fees_included_once_in_cashflow_and_capital():
+    buy, sell = markets()
+    buy = replace(buy, fee=Fee(D("0.01"), verified=True))
+    sell = replace(sell, fee=Fee(D("0.02"), verified=True))
+    result = run(buy, sell)
+    assert result.buy_fee_amount == D(1)
+    assert result.sell_fee_amount == D("2.60")
+    assert result.buy_quote_required == D(101)
+    assert result.sale_proceeds_cad == D("127.40")
+    assert result.fees_cad == D("3.60")
+    assert result.net_profit_cad == D("26.40")
+    assert result.capital_requirements == {
+        "venue-a": {"CAD": D(101)},
+        "venue-b": {"BTC": D(1)},
+    }
 
 
 
