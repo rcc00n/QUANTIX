@@ -246,6 +246,13 @@ def test_fx_acquisition_uses_ask_and_liquidation_uses_bid():
     assert conversion_capacity(conversion.from_cad) == D(140000)
 
 
+def test_fx_depth_multiple_levels_and_fees_are_not_double_counted():
+    forward = ConversionLeg("USD", "CAD", levels(("1.4", 10), ("1.3", 20)), D("0.01"))
+    route = ConversionRoute((forward,))
+    assert convert(route, D(20)) == D("26.73")
+    assert required_input(route, D("26.73")) == D(20)
+    with pytest.raises(InsufficientDepth):
+        convert(route, D(31))
 
 
 
