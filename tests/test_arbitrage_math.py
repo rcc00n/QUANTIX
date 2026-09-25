@@ -217,6 +217,15 @@ def test_unknown_fees_and_limits_never_become_verified_or_zero_by_default():
     assert "BUY_MARKET_LIMITS_UNVERIFIED" in result.reasons
 
 
+def test_reserve_and_rebalancing_costs_and_inventory_projection():
+    buy, sell = markets()
+    costs = Costs(D(10), D(20), D(2), True)
+    result = evaluate_route(buy, sell, D(1), now=NOW, costs=costs)
+    assert result.slippage_reserve_cad == D("0.1")
+    assert result.rebalancing_cost_cad == D("2.2")
+    assert result.net_profit_cad == D("27.7")
+    assert result.inventory_projection["venue-a"] == {"CAD": D(-100), "BTC": D(1)}
+    assert result.inventory_projection["venue-b"] == {"BTC": D(-1), "CAD": D(130)}
 
 
 
