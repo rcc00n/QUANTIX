@@ -255,6 +255,18 @@ def test_fx_depth_multiple_levels_and_fees_are_not_double_counted():
         convert(route, D(31))
 
 
+def test_multihop_conversion_and_capacity():
+    route = ConversionRoute(
+        (
+            ConversionLeg("USDT", "USD", levels(("0.98", 100))),
+            ConversionLeg("USD", "CAD", levels(("1.4", 49))),
+        )
+    )
+    assert conversion_capacity(route) == D(50)
+    assert convert(route, D(50)) == D("68.6")
+    assert required_input(route, D("68.6")) == D(50)
+    with pytest.raises(InsufficientDepth):
+        convert(route, D(51))
 
 
 
