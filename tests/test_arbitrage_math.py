@@ -187,6 +187,19 @@ def test_quote_fees_included_once_in_cashflow_and_capital():
     }
 
 
+def test_base_fees_reduce_acquisition_and_increase_seller_inventory():
+    buy, sell = markets()
+    buy = replace(buy, fee=Fee(D("0.1"), "base", True))
+    sell = replace(sell, fee=Fee(D("0.1"), "base", True))
+    result = run(buy, sell)
+    assert result.base_acquired == D("0.9")
+    assert result.sell_quantity == D("0.81")
+    assert result.sell_base_required == D("0.891")
+    assert result.residual_base == D("0.009")
+    assert result.net_profit_cad == D("5.30")
+    assert result.fees_cad == D("20.530")
+    assert result.base_fee_value_cad == D("20.530")
+    assert result.net_profit_cad == result.gross_profit_cad - result.fees_cad
 
 
 
