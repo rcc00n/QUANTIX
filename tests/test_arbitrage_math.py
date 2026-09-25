@@ -288,6 +288,16 @@ def test_missing_or_stale_fx_suppresses_cad_profit(conversion, reason):
     assert reason in result.reasons
 
 
+def test_unverified_fx_is_labeled_and_insufficient_fx_depth_is_not_extrapolated():
+    buy, sell = markets()
+    conversion = replace(fx(), verified=False)
+    result = run(buy, replace(sell, quote_currency="USDT", fx=conversion))
+    assert result.net_profit_cad is not None
+    assert not result.verified
+    assert "SELL_CAD_CONVERSION_UNVERIFIED" in result.reasons
+    result = run(buy, replace(sell, quote_currency="USDT", fx=fx(quantity="1")))
+    assert result.net_profit_cad is None
+    assert "INSUFFICIENT_EXECUTABLE_FX_DEPTH" in result.reasons
 
 
 
