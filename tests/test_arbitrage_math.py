@@ -228,6 +228,14 @@ def test_reserve_and_rebalancing_costs_and_inventory_projection():
     assert result.inventory_projection["venue-b"] == {"BTC": D(-1), "CAD": D(130)}
 
 
+@pytest.mark.parametrize("bid,expected", [("1.30", "69"), ("0.50", "-35")])
+def test_stablecoin_depeg_and_directional_conversion(bid, expected):
+    buy, sell = markets()
+    sell = replace(sell, quote_currency="USDT", fx=fx(bid=bid))
+    result = run(buy, sell)
+    assert result.net_profit_cad == D(expected)
+    assert result.sale_proceeds_cad == D(130) * D(bid)
+    assert result.net_profit_quote is None
 
 
 
