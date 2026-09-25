@@ -124,6 +124,15 @@ def test_impossible_depth_cannot_create_executable_quantity(quantity):
         run(buy, sell, quantity)
 
 
+def test_partial_available_depth_caps_optimizer_not_fabricated_fills():
+    buy, sell = markets()
+    sell = replace(sell, bids=levels((130, "0.123")))
+    assert maximum_quantity(buy, sell) == D("0.12")
+    result = optimize_route(
+        buy, sell, budget_cad=D(1000), now=NOW, costs=NO_COST, budgets=()
+    )
+    assert result.maximum.buy_quantity == D("0.12")
+    assert result.best.sell_quantity <= D("0.123")
 
 
 
