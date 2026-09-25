@@ -135,6 +135,15 @@ def test_partial_available_depth_caps_optimizer_not_fabricated_fills():
     assert result.best.sell_quantity <= D("0.123")
 
 
+def test_step_rounding_and_residual_not_monetized():
+    buy, sell = markets()
+    buy = replace(buy, rules=replace(RULES, amount_step=D("0.03")))
+    sell = replace(sell, rules=replace(RULES, amount_step=D("0.05")))
+    result = run(buy, sell, "0.299")
+    assert result.buy_quantity == D("0.27")
+    assert result.sell_quantity == D("0.25")
+    assert result.residual_base == D("0.02")
+    assert result.net_profit_cad == D("5.50")
 
 
 
