@@ -407,5 +407,17 @@ async def test_terminal_capacity_is_reclaimed_without_growing_causal_maps():
     assert "synthetic-old-0" not in engine.current
 
 
+@pytest.mark.asyncio
+async def test_run_expires_unsupported_routes_and_reports_latency():
+    engine, buy, sell, _ = engine_fixture()
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    key = hashlib.sha256(f"{buy.id}:{sell.id}".encode()).hexdigest()
+    engine.last_seen[key] = time.monotonic() - engine.config.route_ttl_seconds - 1
+    engine.store.transition.side_effect = lambda *args: engine.collector.stop.set()
+    await asyncio.wait_for(engine.run(), 1)
+    assert engine.current[key]["status"] == "EXPIRED"
+    assert engine.store.expire_previous_runs.await_count == 1
+    assert engine.diagnostics()["healthy"]
+    assert engine.diagnostics()["metrics"]["processing_latency_ms"] is not None
 
 
