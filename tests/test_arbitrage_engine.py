@@ -421,3 +421,12 @@ async def test_run_expires_unsupported_routes_and_reports_latency():
     assert engine.diagnostics()["metrics"]["processing_latency_ms"] is not None
 
 
+def test_identity_index_excludes_wrapped_and_inactive_markets():
+    engine, _, _, _ = engine_fixture()
+    rt = engine.collector.runtimes["synthetic-buy"]
+    wrapped = market("synthetic-buy", base="WBTC")
+    inactive = replace(market("synthetic-buy", base="ETH"), active=False)
+    rt.markets.extend([wrapped, inactive])
+    engine.rebuild()
+    assert wrapped.id not in {i for ids in engine.index.values() for i in ids}
+    assert inactive.id not in {i for ids in engine.index.values() for i in ids}
