@@ -300,6 +300,17 @@ def test_unverified_fx_is_labeled_and_insufficient_fx_depth_is_not_extrapolated(
     assert "INSUFFICIENT_EXECUTABLE_FX_DEPTH" in result.reasons
 
 
+def test_same_prices_and_positive_raw_spread_can_be_negative_after_fees():
+    buy, sell = markets()
+    sell = replace(
+        sell,
+        asks=levels((102, 5)),
+        bids=levels((100, 5)),
+        fee=Fee(D("0.01"), verified=True),
+    )
+    assert run(buy, sell).net_profit_cad == -1
+    sell = replace(sell, bids=levels(("100.5", 5)))
+    assert run(buy, sell).net_profit_cad == D("-0.505")
 
 
 
