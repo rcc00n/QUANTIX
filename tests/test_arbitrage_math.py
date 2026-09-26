@@ -371,6 +371,25 @@ def test_fee_negative_routes_are_proved_without_enumerating_thousands_of_sizes()
     assert "certified" in result.optimality
 
 
+def test_many_depth_levels_do_not_increase_work_for_proven_fee_negative_route():
+    buy, sell = markets()
+    buy = replace(
+        buy,
+        asks=levels(*((100 + index, 1) for index in range(25))),
+        fee=Fee(D("0.006"), verified=True),
+    )
+    sell = replace(
+        sell,
+        bids=levels(*((D("100.1") - D("0.01") * index, 1) for index in range(25))),
+        asks=levels((101, 30)),
+        fee=Fee(D("0.006"), verified=True),
+    )
+    result = optimize_route(buy, sell, budget_cad=D(1000), now=NOW, costs=NO_COST)
+    assert result.best.buy_quantity == D("0.01")
+    assert (
+        result.evaluated_count <= 21
+    )  # Two/three minimum candidates for seven budgets.
+    assert "certified" in result.optimality
 
 
 
