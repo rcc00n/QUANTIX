@@ -353,6 +353,22 @@ def test_budget_fee_inclusive_and_custom_budget_exact():
     assert result.best.acquisition_cost_cad <= D("25.50")
 
 
+def test_fee_negative_routes_are_proved_without_enumerating_thousands_of_sizes():
+    buy, sell = markets()
+    buy = replace(buy, fee=Fee(D("0.006"), verified=True))
+    sell = replace(
+        sell,
+        bids=levels(("100.1", 10)),
+        asks=levels((101, 10)),
+        fee=Fee(D("0.006"), verified=True),
+    )
+    result = optimize_route(buy, sell, budget_cad=D(1000), now=NOW, costs=NO_COST)
+    assert result.best.buy_quantity == D("0.01")
+    assert result.best.net_profit_cad < 0
+    assert (
+        result.evaluated_count < 50
+    )  # All seven budgets, deterministic CPU-work assertion.
+    assert "certified" in result.optimality
 
 
 
