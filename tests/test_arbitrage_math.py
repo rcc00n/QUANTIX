@@ -392,6 +392,32 @@ def test_many_depth_levels_do_not_increase_work_for_proven_fee_negative_route():
     assert "certified" in result.optimality
 
 
+def test_loss_fast_path_preserves_better_inventory_alignment_over_first_feasible_size():
+    buy, sell = markets()
+    buy = replace(
+        buy,
+        rules=replace(RULES, amount_step=D("0.03")),
+        fee=Fee(D("0.006"), verified=True),
+    )
+    sell = replace(
+        sell,
+        bids=levels(("100.1", 10)),
+        asks=levels((101, 10)),
+        rules=replace(RULES, amount_step=D("0.05")),
+        fee=Fee(D("0.006"), verified=True),
+    )
+    result = optimize_route(
+        buy, sell, budget_cad=D(1000), now=NOW, costs=NO_COST, budgets=()
+    )
+    first = run(buy, sell, "0.06")
+    assert result.best.buy_quantity == D("0.15")
+    assert result.best.net_profit_cad > first.net_profit_cad
+    oracle = max(
+        (run(buy, sell, str(D("0.03") * index)) for index in range(2, 101)),
+        key=lambda value: (value.net_profit_cad, -value.acquisition_cost_cad),
+    )
+    assert result.best == oracle
+    assert result.evaluated_count < 40
 
 
 
