@@ -530,6 +530,26 @@ def test_search_cap_validation(limit):
         )
 
 
+def test_optimizer_rounding_matches_exhaustive_synthetic_oracle():
+    buy, sell = markets()
+    for buy_step, sell_step in product(("0.03", "0.07"), ("0.05", "0.11")):
+        a = replace(buy, rules=replace(RULES, amount_step=D(buy_step)))
+        b = replace(sell, rules=replace(RULES, amount_step=D(sell_step)))
+        result = optimize_route(
+            a, b, budget_cad=D(180), now=NOW, costs=NO_COST, budgets=()
+        )
+        possible = []
+        for index in range(1, int(D(3) / D(buy_step)) + 1):
+            try:
+                item = run(a, b, str(D(buy_step) * index))
+            except ValueError:
+                continue
+            if item.acquisition_cost_cad <= 180:
+                possible.append(item)
+        oracle = max(
+            possible, key=lambda x: (x.net_profit_cad, -x.acquisition_cost_cad)
+        )
+        assert result.best == oracle
 
 
 
