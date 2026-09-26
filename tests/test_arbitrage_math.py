@@ -492,6 +492,33 @@ def test_large_lattice_base_fees_and_incompatible_steps_match_exhaustive_oracle(
     assert "certified" in result.optimality
 
 
+def test_live_search_cap_returns_deterministic_feasible_size_without_claiming_global_optimum():
+    buy, sell = markets()
+    buy = replace(
+        buy,
+        rules=replace(RULES, amount_step=D("0.0001")),
+        fee=Fee(D("0.001"), "base", True),
+    )
+    sell = replace(
+        sell,
+        rules=replace(RULES, amount_step=D("0.0007")),
+        fee=Fee(D("0.002"), "base", True),
+    )
+    kwargs = {
+        "budget_cad": D(320),
+        "now": NOW,
+        "costs": NO_COST,
+        "budgets": (),
+        "max_search_evaluations": 1,
+    }
+    result = optimize_route(buy, sell, **kwargs)
+    assert result == optimize_route(buy, sell, **kwargs)
+    assert result.best is not None
+    assert result.best.net_profit_cad > 0
+    assert result.best.acquisition_cost_cad <= D(320)
+    assert not result.best.verified
+    assert "OPTIMIZER_GLOBAL_OPTIMUM_UNCONFIRMED" in result.best.reasons
+    assert "OPTIMIZER_GLOBAL_OPTIMUM_UNCONFIRMED" in result.reasons
 
 
 
