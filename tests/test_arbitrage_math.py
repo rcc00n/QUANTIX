@@ -437,6 +437,15 @@ def test_optimizer_caps_size_by_executable_cad_conversion_depth():
     assert result.best.buy_quantity == D("0.0769")
 
 
+def test_optimizer_respects_max_quantity_and_max_notional():
+    buy, sell = markets()
+    buy = replace(buy, rules=replace(RULES, max_notional=D(150)))
+    sell = replace(sell, rules=replace(RULES, max_quantity=D("1.2")))
+    result = optimize_route(
+        buy, sell, budget_cad=D(1000), now=NOW, costs=NO_COST, budgets=()
+    )
+    assert result.maximum.buy_quantity == D("1.2")
+    assert result.best.buy_quantity <= D("1.2")
 
 
 
