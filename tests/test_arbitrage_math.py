@@ -552,6 +552,17 @@ def test_optimizer_rounding_matches_exhaustive_synthetic_oracle():
         assert result.best == oracle
 
 
+@pytest.mark.parametrize("currency", ["quote", "base"])
+def test_increasing_fees_never_improves_fixed_quantity_profit(currency):
+    buy, sell = markets()
+    for buy_fee, sell_fee in product(("0", "0.001", "0.01"), repeat=2):
+        a = replace(buy, fee=Fee(D(buy_fee), currency, True))
+        b = replace(sell, fee=Fee(D(sell_fee), currency, True))
+        baseline = run(a, b, "2")
+        expensive = run(
+            replace(a, fee=Fee(D(buy_fee) + D("0.001"), currency, True)), b, "2"
+        )
+        assert expensive.net_profit_cad <= baseline.net_profit_cad
 
 
 
