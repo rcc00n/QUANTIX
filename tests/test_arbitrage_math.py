@@ -324,6 +324,22 @@ def test_extreme_genuine_anomaly_retained_but_tiny_depth_is_not_large_profit():
     assert result.maximum.buy_quantity == D("0.04")
 
 
+def test_optimizer_prefers_profitable_small_size_over_negative_deeper_size():
+    buy, sell = markets()
+    buy = replace(buy, asks=levels((100, 1), (150, 2)))
+    result = optimize_route(
+        buy,
+        sell,
+        budget_cad=D(1000),
+        now=NOW,
+        costs=NO_COST,
+        budgets=(D(50), D(100), D(250)),
+    )
+    assert result.best.buy_quantity == 1
+    assert result.best.net_profit_cad == 30
+    assert result.maximum.net_profit_cad < 0
+    assert result.budgets[1].best.buy_quantity == D("0.50")
+    assert result.budgets[2].best.buy_quantity == 1
 
 
 
