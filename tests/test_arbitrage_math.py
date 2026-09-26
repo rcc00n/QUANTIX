@@ -448,6 +448,16 @@ def test_optimizer_respects_max_quantity_and_max_notional():
     assert result.best.buy_quantity <= D("1.2")
 
 
+def test_optimizer_large_lattice_certifies_without_enumerating_millions_of_ticks():
+    buy, sell = markets()
+    buy = replace(buy, rules=replace(RULES, amount_step=D("0.00000001")))
+    sell = replace(sell, rules=replace(RULES, amount_step=D("0.00000001")))
+    result = optimize_route(
+        buy, sell, budget_cad=D(320), now=NOW, costs=NO_COST, budgets=()
+    )
+    assert result.best.buy_quantity == 3
+    assert result.evaluated_count < 100
+    assert "certified" in result.optimality
 
 
 
