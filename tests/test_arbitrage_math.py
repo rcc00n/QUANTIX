@@ -460,6 +460,36 @@ def test_optimizer_large_lattice_certifies_without_enumerating_millions_of_ticks
     assert "certified" in result.optimality
 
 
+def test_large_lattice_base_fees_and_incompatible_steps_match_exhaustive_oracle():
+    buy, sell = markets()
+    buy = replace(
+        buy,
+        rules=replace(RULES, amount_step=D("0.0001")),
+        fee=Fee(D("0.001"), "base", True),
+    )
+    sell = replace(
+        sell,
+        rules=replace(RULES, amount_step=D("0.0007")),
+        fee=Fee(D("0.002"), "base", True),
+    )
+    result = optimize_route(
+        buy, sell, budget_cad=D(320), now=NOW, costs=NO_COST, budgets=()
+    )
+    oracle = None
+    for index in range(1, 30001):
+        try:
+            candidate = run(buy, sell, str(D("0.0001") * index))
+        except ValueError:
+            continue
+        if oracle is None or (
+            candidate.net_profit_cad,
+            -candidate.acquisition_cost_cad,
+        ) > (oracle.net_profit_cad, -oracle.acquisition_cost_cad):
+            oracle = candidate
+    assert result.best == oracle
+    assert result.best.buy_quantity == D("2.9994")
+    assert result.evaluated_count < 100
+    assert "certified" in result.optimality
 
 
 
