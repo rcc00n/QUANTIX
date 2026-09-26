@@ -521,6 +521,13 @@ def test_live_search_cap_returns_deterministic_feasible_size_without_claiming_gl
     assert "OPTIMIZER_GLOBAL_OPTIMUM_UNCONFIRMED" in result.reasons
 
 
+@pytest.mark.parametrize("limit", [0, -1, 4097, True, 1.5, "128"])
+def test_search_cap_validation(limit):
+    buy, sell = markets()
+    with pytest.raises(ValueError, match="Search evaluation limit"):
+        optimize_route(
+            buy, sell, budget_cad=D(100), now=NOW, max_search_evaluations=limit
+        )
 
 
 
