@@ -565,6 +565,21 @@ def test_increasing_fees_never_improves_fixed_quantity_profit(currency):
         assert expensive.net_profit_cad <= baseline.net_profit_cad
 
 
+def test_increasing_fees_cannot_improve_optimized_profit():
+    buy, sell = markets()
+    baseline = optimize_route(
+        buy, sell, budget_cad=D(250), now=NOW, costs=NO_COST, budgets=()
+    )
+    for rate in ("0.001", "0.005", "0.02"):
+        expensive = optimize_route(
+            replace(buy, fee=Fee(D(rate), verified=True)),
+            sell,
+            budget_cad=D(250),
+            now=NOW,
+            costs=NO_COST,
+            budgets=(),
+        )
+        assert expensive.best.net_profit_cad <= baseline.best.net_profit_cad
 
 
 
