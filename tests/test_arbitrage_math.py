@@ -342,6 +342,15 @@ def test_optimizer_prefers_profitable_small_size_over_negative_deeper_size():
     assert result.budgets[2].best.buy_quantity == 1
 
 
+def test_budget_fee_inclusive_and_custom_budget_exact():
+    buy, sell = markets()
+    buy = replace(buy, fee=Fee(D("0.01"), verified=True))
+    result = optimize_route(
+        buy, sell, budget_cad=D("25.50"), now=NOW, costs=NO_COST, budgets=()
+    )
+    assert result.best.buy_quantity == D("0.25")
+    assert result.best.acquisition_cost_cad == D("25.25")
+    assert result.best.acquisition_cost_cad <= D("25.50")
 
 
 
