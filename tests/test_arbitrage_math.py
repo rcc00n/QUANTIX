@@ -313,6 +313,15 @@ def test_same_prices_and_positive_raw_spread_can_be_negative_after_fees():
     assert run(buy, sell).net_profit_cad == D("-0.505")
 
 
+def test_extreme_genuine_anomaly_retained_but_tiny_depth_is_not_large_profit():
+    buy, sell = markets()
+    buy = replace(buy, asks=levels((50, "0.04")), bids=levels((49, 1)))
+    result = optimize_route(
+        buy, sell, budget_cad=D(10000), now=NOW, costs=NO_COST, budgets=()
+    )
+    assert result.best.buy_notional == D(2)
+    assert result.best.net_profit_cad == D("3.2")
+    assert result.maximum.buy_quantity == D("0.04")
 
 
 
