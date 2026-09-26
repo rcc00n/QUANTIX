@@ -420,6 +420,21 @@ def test_loss_fast_path_preserves_better_inventory_alignment_over_first_feasible
     assert result.evaluated_count < 40
 
 
+def test_optimizer_caps_size_by_executable_cad_conversion_depth():
+    buy, sell = markets()
+    buy = replace(buy, rules=replace(RULES, amount_step=D("0.0001")))
+    sell = replace(
+        sell,
+        quote_currency="USDT",
+        fx=fx(quantity="10"),
+        rules=replace(RULES, amount_step=D("0.0001")),
+    )
+    result = optimize_route(
+        buy, sell, budget_cad=D(1000), now=NOW, costs=NO_COST, budgets=()
+    )
+    assert result.best is not None
+    assert result.best.sell_quote_received <= D(10)
+    assert result.best.buy_quantity == D("0.0769")
 
 
 
