@@ -762,6 +762,17 @@ def test_resize_uses_pinned_decision_and_reports_infeasible_custom_budget():
     assert not tiny["actionable"]
 
 
+def test_replay_fixture_cli_reports_synthetic_and_obeys_explicit_decision_time(capsys):
+    fixture = Path(__file__).parent / "fixtures" / "synthetic_arbitrage_replay_v1.json"
+    assert main(["--input", str(fixture), "--budget-cad", "100"]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["kind"] == "SYNTHETIC"
+    assert output["decisions"][0]["synthetic"]
+    assert D(output["decisions"][0]["result"]["best"]["net_profit_cad"]) == 30
+    assert not output["actionable"]
+    document = json.loads(fixture.read_text())
+    before = replay_document(document, at=NOW - timedelta(seconds=1))
+    assert before["decisions"][0]["reason"] == "EVIDENCE_NOT_YET_AVAILABLE"
 
 
 
