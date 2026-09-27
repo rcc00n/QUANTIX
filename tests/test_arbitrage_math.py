@@ -804,5 +804,46 @@ def test_retained_replay_cannot_backdate_fee_and_configuration_assumptions():
         replay_document(document, at=NOW - timedelta(seconds=1))
 
 
+def test_retained_replay_honors_original_scanner_search_cap():
+    buy, sell = markets()
+    buy = replace(
+        buy,
+        rules=replace(RULES, amount_step=D("0.0001")),
+        fee=Fee(D("0.001"), "base", True),
+    )
+    sell = replace(
+        sell,
+        rules=replace(RULES, amount_step=D("0.0007")),
+        fee=Fee(D("0.002"), "base", True),
+    )
+    original = optimize_route(
+        buy,
+        sell,
+        budget_cad=D(320),
+        now=NOW,
+        costs=NO_COST,
+        budgets=(),
+        max_search_evaluations=1,
+    )
+    evidence = {
+        "calculation_inputs": {
+            "buy": dump_input(buy),
+            "sell": dump_input(sell),
+            "costs": safe_json(asdict(NO_COST)),
+            "evaluated_at": NOW.isoformat(),
+            "max_search_evaluations": 1,
+        }
+    }
+    for side in ("buy", "sell"):
+        evidence[f"{side}_book"] = {
+            "exchange_timestamp": NOW.isoformat(),
+            "received_at": NOW.isoformat(),
+        }
+        evidence[f"{side}_snapshot_id"] = f"SYNTHETIC-{side}-snapshot"
+    document = {"selected_budget_cad": "320", "synthetic": True, "evidence": evidence}
+    replayed = replay_document(document)
+    assert replayed["max_search_evaluations"] == 1
+    assert replayed["decisions"][0]["result"] == safe_json(asdict(original))
+    assert not replayed["decisions"][0]["result"]["best"]["verified"]
 
 
