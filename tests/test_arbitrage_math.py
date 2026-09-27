@@ -663,6 +663,23 @@ def test_replay_uses_only_evidence_available_at_decision_and_expires_stale_quote
     assert all(item.synthetic for item in output)
 
 
+def test_replay_future_source_timestamp_never_backfills_prior_decision():
+    buy, sell = markets()
+    records = (
+        ReplayBook(buy, NOW, NOW, "SYNTHETIC-buy", True),
+        ReplayBook(
+            sell, NOW + timedelta(seconds=20), NOW, "SYNTHETIC-future-source", True
+        ),
+    )
+    result = replay_route(
+        records,
+        buy_market_id=buy.market_id,
+        sell_market_id=sell.market_id,
+        decision_times=(NOW,),
+        budget_cad=D(100),
+        costs=NO_COST,
+    )
+    assert result[0].reason == "EVIDENCE_NOT_YET_AVAILABLE"
 
 
 
