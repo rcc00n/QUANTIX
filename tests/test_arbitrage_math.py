@@ -721,6 +721,18 @@ def test_financial_result_independent_of_callers_decimal_precision():
         ).best.buy_quantity == D("2.36")
 
 
+def test_retained_serialization_roundtrip_keeps_fee_precision_limits_and_fx_times():
+    buy, sell = markets()
+    conversion = replace(fx(), observed_at=NOW, available_at=NOW)
+    sell = replace(
+        sell,
+        quote_currency="USDT",
+        fx=conversion,
+        rules=replace(RULES, price_tick=D("0.01")),
+    )
+    assert dump_input(load_input(dump_input(sell))) == dump_input(sell)
+    assert dump_input(sell)["asks"][0] == {"price": "131", "quantity": "5"}
+    assert run(buy, load_input(dump_input(sell))) == run(buy, sell)
 
 
 
