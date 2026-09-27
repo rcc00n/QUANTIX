@@ -775,6 +775,16 @@ def test_replay_fixture_cli_reports_synthetic_and_obeys_explicit_decision_time(c
     assert before["decisions"][0]["reason"] == "EVIDENCE_NOT_YET_AVAILABLE"
 
 
+def test_replay_cli_rejects_unlabeled_fixture_and_invalid_utc(tmp_path, capsys):
+    fixture = Path(__file__).parent / "fixtures" / "synthetic_arbitrage_replay_v1.json"
+    document = json.loads(fixture.read_text())
+    del document["kind"]
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text(json.dumps(document))
+    assert main(["--input", str(invalid)]) == 2
+    assert "Replay failed" in capsys.readouterr().err
+    assert main(["--input", str(fixture), "--at", "2026-01-01T00:00:00"]) == 2
+    assert "Replay failed" in capsys.readouterr().err
 
 
 
