@@ -847,3 +847,7 @@ def test_retained_replay_honors_original_scanner_search_cap():
     assert not replayed["decisions"][0]["result"]["best"]["verified"]
 
 
+@pytest.mark.parametrize("value", [0.1, True, D("NaN"), D("Infinity"), D(-1)])
+def test_invalid_financial_inputs_rejected(value):
+    with pytest.raises((ValueError, TypeError)):
+        Fee(value)
