@@ -53,5 +53,14 @@ def test_allocation_respects_filters_capacity_and_conversion_anchors():
     assert metrics(catalogs, selected).directed_comparisons == 2
 
 
+def test_inactive_and_unverified_assets_do_not_count():
+    m = market("a")
+    assert (
+        metrics(
+            {"a": [m], "b": [replace(m, active=False)]},
+            {"a": [m], "b": [replace(m, active=False)]},
+        ).compatible_intersections
+        == 0
+    )
 
 
