@@ -682,6 +682,32 @@ def test_replay_future_source_timestamp_never_backfills_prior_decision():
     assert result[0].reason == "EVIDENCE_NOT_YET_AVAILABLE"
 
 
+@pytest.mark.parametrize(
+    "observed,available,reason",
+    [
+        (None, None, "REPLAY_FX_PROVENANCE_INCOMPLETE"),
+        (NOW, NOW + timedelta(seconds=1), "REPLAY_FX_EVIDENCE_NOT_YET_AVAILABLE"),
+        (NOW + timedelta(seconds=1), NOW, "REPLAY_FX_EVIDENCE_NOT_YET_AVAILABLE"),
+    ],
+)
+def test_replay_cannot_use_future_or_undated_fx_evidence(observed, available, reason):
+    buy, sell = markets()
+    conversion = replace(fx(), observed_at=observed, available_at=available)
+    sell = replace(sell, quote_currency="USDT", fx=conversion)
+    records = (
+        ReplayBook(buy, NOW, NOW, "SYNTHETIC-buy", True),
+        ReplayBook(sell, NOW, NOW, "SYNTHETIC-sell", True),
+    )
+    result = replay_route(
+        records,
+        buy_market_id=buy.market_id,
+        sell_market_id=sell.market_id,
+        decision_times=(NOW,),
+        budget_cad=D(100),
+        costs=NO_COST,
+    )
+    assert result[0].result is None
+    assert result[0].reason == reason
 
 
 
