@@ -582,6 +582,12 @@ def test_increasing_fees_cannot_improve_optimized_profit():
         assert expensive.best.net_profit_cad <= baseline.best.net_profit_cad
 
 
+def test_duplicate_coinbase_venue_and_wrapped_identity_rejected():
+    buy, sell = markets()
+    with pytest.raises(ValueError, match="DUPLICATE_LIQUIDITY_VENUE"):
+        run(replace(buy, venue="coinbase"), replace(sell, venue="coinbase"))
+    with pytest.raises(ValueError, match="INCOMPATIBLE_BASE_IDENTITY"):
+        run(buy, replace(sell, base_currency="exchange:wrapped:BTC"))
 
 
 
