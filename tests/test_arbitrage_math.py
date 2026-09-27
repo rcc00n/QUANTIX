@@ -590,6 +590,19 @@ def test_duplicate_coinbase_venue_and_wrapped_identity_rejected():
         run(buy, replace(sell, base_currency="exchange:wrapped:BTC"))
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"asks": levels((100, 1), (90, 1))},
+        {"bids": levels((99, 1), (101, 1))},
+        {"bids": levels((101, 1))},
+        {"base_currency": ""},
+    ],
+)
+def test_invalid_market_metadata_and_crossed_or_unsorted_books_rejected(change):
+    buy, _ = markets()
+    with pytest.raises(ValueError):
+        replace(buy, **change)
 
 
 
