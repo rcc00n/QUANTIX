@@ -735,6 +735,31 @@ def test_retained_serialization_roundtrip_keeps_fee_precision_limits_and_fx_time
     assert run(buy, load_input(dump_input(sell))) == run(buy, sell)
 
 
+def test_resize_uses_pinned_decision_and_reports_infeasible_custom_budget():
+    buy, sell = markets()
+    inputs = {
+        "buy": dump_input(buy),
+        "sell": dump_input(sell),
+        "costs": safe_json(asdict(NO_COST)),
+        "evaluated_at": NOW.isoformat(),
+    }
+    payload = {
+        "evidence": {"calculation_inputs": inputs},
+        "reasons": [],
+        "selected_budget_cad": "100",
+        "actionable": False,
+    }
+    sized = resize(payload, D(250))
+    assert sized["quantity"] == "2.36"
+    assert sized["selected_budget_cad"] == "250"
+    assert sized["budget_recalculation"].startswith("retained evidence")
+    assert sized["optimizer"]["max_search_evaluations"] == 4096
+    assert "4096-evaluation" in sized["budget_recalculation"]
+    tiny = resize(payload, D("0.01"))
+    assert tiny["quantity"] is None
+    assert tiny["budget_feasibility"] == "NO_FEASIBLE_SIZE"
+    assert "SELECTED_BUDGET_HAS_NO_FEASIBLE_SIZE" in tiny["reasons"]
+    assert not tiny["actionable"]
 
 
 
