@@ -64,3 +64,15 @@ def test_inactive_and_unverified_assets_do_not_count():
     )
 
 
+def test_recent_quality_and_research_relevance_influence_quote_allocation():
+    catalogs = {
+        v: [market(v, "BTC", "USDT"), market(v, "BTC", "USDC")]
+        for v in ("kraken", "ndax")
+    }
+    config = CollectorConfig(max_markets_per_exchange=1)
+    selected = allocate(
+        catalogs, config, quality={(v, "BTC/USDT"): "STALE" for v in catalogs}
+    )
+    assert all(items[0].quote.symbol == "USDC" for items in selected.values())
+    selected = allocate(catalogs, config, relevance={("asset:BTC", "asset:USDT"): 3})
+    assert all(items[0].quote.symbol == "USDT" for items in selected.values())
