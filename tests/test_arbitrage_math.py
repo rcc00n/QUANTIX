@@ -633,6 +633,34 @@ def test_unknown_transfer_network_and_fees_consuming_asset_are_explicit():
     assert "TRANSFER_FEES_CONSUME_AVAILABLE_ASSET" in result.reasons
 
 
+def test_replay_uses_only_evidence_available_at_decision_and_expires_stale_quotes():
+    buy, sell = markets()
+    future_sell = replace(sell, asks=levels((1001, 10)), bids=levels((1000, 10)))
+    records = (
+        ReplayBook(buy, NOW, NOW, "SYNTHETIC-buy-1", True),
+        ReplayBook(sell, NOW, NOW, "SYNTHETIC-sell-1", True),
+        ReplayBook(
+            future_sell, NOW, NOW + timedelta(seconds=10), "SYNTHETIC-future", True
+        ),
+    )
+    output = replay_route(
+        records,
+        buy_market_id=buy.market_id,
+        sell_market_id=sell.market_id,
+        decision_times=(
+            NOW + timedelta(seconds=5),
+            NOW + timedelta(seconds=11),
+            NOW + timedelta(seconds=70),
+        ),
+        budget_cad=D(100),
+        costs=NO_COST,
+    )
+    assert output[0].result.best.net_profit_cad == 30
+    assert "SYNTHETIC-future" not in output[0].evidence_ids
+    assert output[1].result.best.net_profit_cad == 900
+    assert output[2].result is None
+    assert output[2].reason == "REPLAY_EVIDENCE_STALE"
+    assert all(item.synthetic for item in output)
 
 
 
