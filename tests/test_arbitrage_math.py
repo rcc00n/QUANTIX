@@ -710,6 +710,15 @@ def test_replay_cannot_use_future_or_undated_fx_evidence(observed, available, re
     assert result[0].reason == reason
 
 
+def test_financial_result_independent_of_callers_decimal_precision():
+    buy, sell = markets()
+    expected = run(buy, sell, "2")
+    with localcontext() as context:
+        context.prec = 4
+        assert run(buy, sell, "2") == expected
+        assert optimize_route(
+            buy, sell, budget_cad=D(250), now=NOW, costs=NO_COST, budgets=()
+        ).best.buy_quantity == D("2.36")
 
 
 
