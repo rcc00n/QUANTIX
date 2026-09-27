@@ -622,6 +622,15 @@ def test_transfer_scenario_is_separate_uncertain_and_not_a_fill():
     assert "FUTURE_SELLING_PRICE_UNKNOWN" in result.reasons
 
 
+def test_unknown_transfer_network_and_fees_consuming_asset_are_explicit():
+    buy, sell = markets()
+    assumptions = TransferAssumptions(
+        None, False, False, False, D(2), D(0), None, None, D(20)
+    )
+    result = transfer_scenario(buy, sell, D(1), assumptions, now=NOW, costs=NO_COST)
+    assert result.risk_adjusted_net_cad is None
+    assert "NETWORK_COMPATIBILITY_UNVERIFIED" in result.reasons
+    assert "TRANSFER_FEES_CONSUME_AVAILABLE_ASSET" in result.reasons
 
 
 
