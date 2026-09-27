@@ -787,6 +787,21 @@ def test_replay_cli_rejects_unlabeled_fixture_and_invalid_utc(tmp_path, capsys):
     assert "Replay failed" in capsys.readouterr().err
 
 
+def test_retained_replay_cannot_backdate_fee_and_configuration_assumptions():
+    buy, sell = markets()
+    document = {
+        "selected_budget_cad": "100",
+        "evidence": {
+            "calculation_inputs": {
+                "buy": dump_input(buy),
+                "sell": dump_input(sell),
+                "costs": safe_json(asdict(NO_COST)),
+                "evaluated_at": NOW.isoformat(),
+            }
+        },
+    }
+    with pytest.raises(ValueError, match="before their original decision"):
+        replay_document(document, at=NOW - timedelta(seconds=1))
 
 
 
