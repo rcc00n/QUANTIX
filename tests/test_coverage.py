@@ -33,6 +33,24 @@ def test_aliases_and_identity_do_not_create_false_intersections():
     assert metrics(catalogs, catalogs).compatible_intersections == 0
 
 
+def test_allocation_respects_filters_capacity_and_conversion_anchors():
+    catalogs = {
+        v: [
+            market(v, "BTC", "CAD"),
+            market(v, "USDC", "CAD"),
+            market(v, "ETH"),
+            market(v, "SOL"),
+        ]
+        for v in ("kraken", "ndax")
+    }
+    selected = allocate(catalogs, CollectorConfig(max_markets_per_exchange=2))
+    assert all(len(x) == 2 for x in selected.values())
+    assert all(any(m.base.symbol == "USDC" for m in x) for x in selected.values())
+    selected = allocate(
+        catalogs, CollectorConfig(max_markets_per_exchange=2, base_assets=["ETH"])
+    )
+    assert all([m.base.symbol for m in x] == ["ETH"] for x in selected.values())
+    assert metrics(catalogs, selected).directed_comparisons == 2
 
 
 
