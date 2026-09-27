@@ -605,6 +605,21 @@ def test_invalid_market_metadata_and_crossed_or_unsorted_books_rejected(change):
         replace(buy, **change)
 
 
+def test_transfer_scenario_is_separate_uncertain_and_not_a_fill():
+    buy, sell = markets()
+    assumptions = TransferAssumptions(
+        "SYNTHETIC-network", True, True, True, D("0.01"), D("0.02"), 3, 600, D(10)
+    )
+    result = transfer_scenario(buy, sell, D(1), assumptions, now=NOW, costs=NO_COST)
+    assert result.observed.net_profit_cad == 30
+    assert result.delivered_base == D("0.97")
+    assert result.hypothetical_current_quote_proceeds == D("126.10")
+    assert result.risk_adjusted_quote_proceeds == D("113.490")
+    assert result.risk_adjusted_net_cad == D("13.490")
+    assert result.mode == "TRANSFER_SCENARIO"
+    assert not result.guaranteed_executable
+    assert not result.actual_execution
+    assert "FUTURE_SELLING_PRICE_UNKNOWN" in result.reasons
 
 
 
