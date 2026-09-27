@@ -78,5 +78,32 @@ def test_book_and_full_input_are_reused_only_when_unchanged():
     assert canonical(cached) == canonical(safe_json(book.model_dump(mode="json")))
 
 
+def test_shared_json_is_exactly_equivalent_and_immutable():
+    pool = EvidencePool(2)
+    book = synthetic_book()
+    source = synthetic_input(book.market_id)
+    payload = {
+        "quantity": Decimal("0.001"),
+        "utc": NOW,
+        "evidence": {
+            "fx_books": {str(book.market_id): pool.book(book)},
+            "calculation_inputs": {
+                "buy": pool.market_input(source),
+                "sell": pool.market_input(source),
+            },
+        },
+    }
+    original = safe_json(payload)
+    shared = pool.current(shared_json(payload), payload)
+    assert canonical(shared) == canonical(original)
+    assert (
+        shared["evidence"]["calculation_inputs"]["buy"]
+        is shared["evidence"]["calculation_inputs"]["sell"]
+    )
+    with pytest.raises(TypeError, match="immutable"):
+        shared["evidence"]["calculation_inputs"]["buy"]["asks"][0]["price"] = "1"
+    with pytest.raises(TypeError, match="immutable"):
+        shared["evidence"]["fx_books"].clear()
+    assert canonical(pool.market_input(source)) == canonical(dump_input(source))
 
 
