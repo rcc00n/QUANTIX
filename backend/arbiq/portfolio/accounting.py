@@ -81,3 +81,23 @@ async def _existing(db, session_id, key, request):
     return row
 
 
+async def _account(db, session_id, exchange_id, asset_id, role):
+    row = await db.scalar(
+        select(VirtualAccount).where(
+            VirtualAccount.session_id == session_id,
+            VirtualAccount.exchange_id.is_(None)
+            if exchange_id is None
+            else VirtualAccount.exchange_id == exchange_id,
+            VirtualAccount.asset_id == asset_id,
+            VirtualAccount.role == role,
+        )
+    )
+    if row is None:
+        row = VirtualAccount(
+            session_id=session_id, exchange_id=exchange_id, asset_id=asset_id, role=role
+        )
+        db.add(row)
+        await db.flush()
+    return row
+
+
