@@ -40,3 +40,15 @@ def valid_price(price, now, maximum_age_seconds, *, cad=False):
     return price.cad_per_unit, price.verified, None
 
 
+def missing_status(reason, price):
+    if reason == "VALUATION_EVIDENCE_STALE":
+        return "STALE"
+    if price and price.cad_per_unit is None:
+        blockers = price.provenance.get("valuation_blockers", []) or [price.source]
+        if blockers and all(
+            item in {"valuation_book_stale", "cad_conversion_stale"} for item in blockers
+        ):
+            return "STALE"
+    return "UNKNOWN"
+
+
