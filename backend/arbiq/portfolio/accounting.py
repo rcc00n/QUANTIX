@@ -572,3 +572,267 @@ def _add_basis(p, amount, cad_value):
     )
 
 
+@decimal_context
+async def execute_leg(
+    db,
+    session_id,
+    exchange_id,
+    base_asset_id,
+    quote_asset_id,
+    side,
+    quantity,
+    quote_notional,
+    fee_quantity,
+    fee_currency,
+    base_cad_per_unit,
+    quote_cad_per_unit,
+    now,
+    key,
+    source_id,
+    evidence,
+    *,
+    from_reserved=True,
+    reservation_key=None,
+):
+    quantity = positive(quantity)
+    quote_notional = positive(quote_notional, "quote notional")
+    fee_quantity = positive(fee_quantity, "fee", zero=True)
+    if (
+        side not in {"buy", "sell"}
+        or fee_currency not in {"base", "quote"}
+        or base_asset_id == quote_asset_id
+    ):
+        raise AccountingError("Invalid paper execution identity")
+    for rate in (base_cad_per_unit, quote_cad_per_unit):
+        if rate is not None and (
+            not isinstance(rate, Decimal) or not rate.is_finite() or rate <= 0
+        ):
+            raise AccountingError("Invalid CAD valuation evidence")
+    if from_reserved and not reservation_key:
+        raise AccountingError("Execution requires its owned reservation")
+    await lock_session(db, session_id)
+    request = {
+        "event": "PAPER_LEG",
+        "exchange_id": exchange_id,
+        "base_asset_id": base_asset_id,
+        "quote_asset_id": quote_asset_id,
+        "side": side,
+        "quantity": quantity,
+        "quote_notional": quote_notional,
+        "fee_quantity": fee_quantity,
+        "fee_currency": fee_currency,
+        "base_cad_per_unit": base_cad_per_unit,
+        "quote_cad_per_unit": quote_cad_per_unit,
+        "from_reserved": from_reserved,
+        "reservation_key": reservation_key,
+        "source_id": source_id,
+    }
+    existing = await _existing(db, session_id, key, request)
+    if existing:
+        movement = await db.scalar(
+            select(AccountingMovement).where(AccountingMovement.journal_id == existing.id)
+        )
+        d = movement.details
+        return LegAccounting(
+            existing.id,
+            True,
+            Decimal(d["base_change"]),
+            Decimal(d["quote_change"]),
+            Decimal(d["cost_basis_removed_cad"])
+            if d.get("cost_basis_removed_cad") is not None
+            else None,
+            movement.realized_trading_cad,
+            movement.realized_fx_cad,
+            movement.fees_cad,
+        )
+    base = await position(db, session_id, exchange_id, base_asset_id)
+    quote = await position(db, session_id, exchange_id, quote_asset_id)
+    role = "reserved" if from_reserved else "available"
+    owned = await owned_reservation(db, session_id, reservation_key) if from_reserved else {}
+    with localcontext() as ctx:
+        ctx.prec = 78
+        base_fee = fee_quantity if fee_currency == "base" else ZERO
+        quote_fee = fee_quantity if fee_currency == "quote" else ZERO
+        if side == "buy":
+            base_change = quantity - base_fee
+            quote_change = -(quote_notional + quote_fee)
+            spending = quote
+            spend_amount = -quote_change
+            if base_change <= 0:
+                raise AccountingError("Fees consume acquired virtual asset")
+        else:
+            base_change = -(quantity + base_fee)
+            quote_change = quote_notional - quote_fee
+            spending = base
+            spend_amount = -base_change
+            if quote_change <= 0:
+                raise AccountingError("Fees consume virtual sale proceeds")
+        capacity = (
+            spending.reserved_quantity
+            if from_reserved
+            else spending.quantity - spending.reserved_quantity
+        )
+        if capacity < spend_amount:
+            raise InsufficientBalance("Insufficient virtual funds at execution")
+        if from_reserved and owned.get((exchange_id, spending.asset_id), ZERO) < spend_amount:
+            raise InsufficientBalance("Simulation cannot spend another reservation")
+        removed = _remove_basis(spending, spend_amount)
+        if from_reserved:
+            spending.reserved_quantity = stored(spending.reserved_quantity - spend_amount)
+        q_value = (
+            stored(quote_notional * quote_cad_per_unit) if quote_cad_per_unit is not None else None
+        )
+        quote_net_value = (
+            stored(quote_change * quote_cad_per_unit) if quote_cad_per_unit is not None else None
+        )
+        if side == "buy":
+            acquisition = (
+                stored(-quote_change * quote_cad_per_unit)
+                if quote_cad_per_unit is not None
+                else None
+            )
+            _add_basis(base, base_change, acquisition)
+            realized_fx = (
+                stored(acquisition - removed)
+                if acquisition is not None and removed is not None
+                else None
+            )
+            realized_trading = ZERO
+        else:
+            _add_basis(quote, quote_change, quote_net_value)
+            realized_trading = (
+                stored(quote_net_value - removed)
+                if quote_net_value is not None and removed is not None
+                else None
+            )
+            realized_fx = ZERO
+        rate = base_cad_per_unit if fee_currency == "base" else quote_cad_per_unit
+        fee_cad = (
+            stored(fee_quantity * rate)
+            if rate is not None
+            else (ZERO if fee_quantity == 0 else None)
+        )
+        for p in (base, quote):
+            p.updated_at = now
+        entries = []
+        if side == "buy":
+            bv = stored(quantity * base_cad_per_unit) if base_cad_per_unit is not None else None
+            entries += await _pair(
+                db,
+                session_id,
+                exchange_id,
+                base_asset_id,
+                "available",
+                quantity,
+                bv,
+                memo="Paper buy observed depth",
+            )
+            entries += await _pair(
+                db,
+                session_id,
+                exchange_id,
+                quote_asset_id,
+                role,
+                -quote_notional,
+                -q_value if q_value is not None else None,
+                memo="Paper buy quote principal",
+            )
+        else:
+            bv = stored(quantity * base_cad_per_unit) if base_cad_per_unit is not None else None
+            entries += await _pair(
+                db,
+                session_id,
+                exchange_id,
+                base_asset_id,
+                role,
+                -quantity,
+                -bv if bv is not None else None,
+                memo="Paper sell observed depth",
+            )
+            entries += await _pair(
+                db,
+                session_id,
+                exchange_id,
+                quote_asset_id,
+                "available",
+                quote_notional,
+                q_value,
+                memo="Paper sell quote principal",
+            )
+        if fee_quantity:
+            fee_asset = base_asset_id if fee_currency == "base" else quote_asset_id
+            fee_role = (
+                role
+                if (
+                    (side == "buy" and fee_currency == "quote")
+                    or (side == "sell" and fee_currency == "base")
+                )
+                else "available"
+            )
+            entries += await _pair(
+                db,
+                session_id,
+                exchange_id,
+                fee_asset,
+                fee_role,
+                -fee_quantity,
+                -fee_cad if fee_cad is not None else None,
+                counter_role="expense",
+                memo="Explicit simulated taker fee",
+            )
+        consumption = (
+            [
+                {
+                    "exchange_id": str(exchange_id),
+                    "asset_id": str(spending.asset_id),
+                    "quantity": str(spend_amount),
+                }
+            ]
+            if from_reserved
+            else []
+        )
+        details = {
+            "base_change": str(base_change),
+            "quote_change": str(quote_change),
+            "cost_basis_removed_cad": str(removed) if removed is not None else None,
+            "side": side,
+            "base_asset_id": str(base_asset_id),
+            "quote_asset_id": str(quote_asset_id),
+            "exchange_id": str(exchange_id),
+            "fee_currency": fee_currency,
+            "fee_quantity": str(fee_quantity),
+            "quote_notional": str(quote_notional),
+            "quantity": str(quantity),
+            "reservation_key": reservation_key,
+            "reservation_consumption": consumption,
+            "cost_convention": (
+                "Fees included in cashflows/basis; disclosed fees are never deducted twice"
+            ),
+        }
+        journal = await _post(
+            db,
+            session_id,
+            "PAPER_LEG",
+            key,
+            now,
+            request,
+            evidence,
+            entries,
+            source_id=source_id,
+            realized_trading=realized_trading,
+            realized_fx=realized_fx,
+            fees=fee_cad,
+            details=details,
+        )
+    return LegAccounting(
+        journal,
+        False,
+        stored(base_change),
+        stored(quote_change),
+        removed,
+        realized_trading,
+        realized_fx,
+        fee_cad,
+    )
+
+
