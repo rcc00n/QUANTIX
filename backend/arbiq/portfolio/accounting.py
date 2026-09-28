@@ -563,3 +563,12 @@ def _remove_basis(p, amount):
     return removed
 
 
+def _add_basis(p, amount, cad_value):
+    p.quantity = stored(p.quantity + amount)
+    p.cost_basis_cad = (
+        stored(p.cost_basis_cad + cad_value)
+        if p.cost_basis_cad is not None and cad_value is not None
+        else None
+    )
+
+
