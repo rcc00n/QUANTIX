@@ -542,3 +542,24 @@ async def release_remaining(db, session_id, reservation_key, now, key, evidence)
     )
 
 
+def _remove_basis(p, amount):
+    if amount > p.quantity:
+        raise InsufficientBalance("Cannot dispose of nonexistent virtual inventory")
+    with localcontext() as ctx:
+        ctx.prec = 78
+        removed = (
+            stored(p.cost_basis_cad * amount / p.quantity)
+            if p.cost_basis_cad is not None and p.quantity
+            else None
+        )
+        p.quantity = stored(p.quantity - amount)
+        p.cost_basis_cad = (
+            stored(p.cost_basis_cad - removed)
+            if p.cost_basis_cad is not None and removed is not None
+            else None
+        )
+        if p.quantity == 0:
+            p.cost_basis_cad = ZERO
+    return removed
+
+
