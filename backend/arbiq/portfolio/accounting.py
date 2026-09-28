@@ -375,3 +375,73 @@ async def fund(db, session_id, exchange_id, asset_id, quantity, cad_value, now, 
     return journal
 
 
+@decimal_context
+def _combine(requirements):
+    result = defaultdict(lambda: ZERO)
+    for r in requirements:
+        positive(r.quantity)
+        result[(r.exchange_id, r.asset_id)] += r.quantity
+    return [
+        (key, stored(value))
+        for key, value in sorted(result.items(), key=lambda x: (str(x[0][0]), str(x[0][1])))
+    ]
+
+
+@decimal_context
+async def reserve(db, session_id, requirements, now, key, evidence):
+    await lock_session(db, session_id)
+    combined = _combine(requirements)
+    request = {
+        "event": "RESERVATION",
+        "requirements": [
+            {"exchange_id": x, "asset_id": a, "quantity": q} for (x, a), q in combined
+        ],
+    }
+    existing = await _existing(db, session_id, key, request)
+    if existing:
+        return existing.id
+    if not combined:
+        raise AccountingError("Empty reservation")
+    positions = []
+    for (exchange_id, asset_id), amount in combined:
+        p = await position(db, session_id, exchange_id, asset_id)
+        if p.quantity - p.reserved_quantity < amount:
+            raise InsufficientBalance("Insufficient available virtual inventory")
+        positions.append((p, amount))
+    entries = []
+    with localcontext() as ctx:
+        ctx.prec = 78
+        for p, amount in positions:
+            value = (
+                stored(p.cost_basis_cad * amount / p.quantity)
+                if p.cost_basis_cad is not None
+                else None
+            )
+            avail = await _account(db, session_id, p.exchange_id, p.asset_id, "available")
+            reserved = await _account(db, session_id, p.exchange_id, p.asset_id, "reserved")
+            entries.extend(
+                [
+                    (
+                        avail,
+                        -amount,
+                        -value if value is not None else None,
+                        "Reserve for one simulation",
+                    ),
+                    (reserved, amount, value, "Reserve for one simulation"),
+                ]
+            )
+            p.reserved_quantity = stored(p.reserved_quantity + amount)
+            p.updated_at = now
+    return await _post(
+        db,
+        session_id,
+        "RESERVATION",
+        key,
+        now,
+        request,
+        evidence,
+        entries,
+        details={"reservation_key": key},
+    )
+
+
