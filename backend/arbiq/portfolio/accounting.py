@@ -235,3 +235,22 @@ async def _post(
     return row.id
 
 
+async def _pair(
+    db,
+    session_id,
+    exchange_id,
+    asset_id,
+    role,
+    quantity,
+    cad_value,
+    counter_role="equity",
+    memo="Paper accounting",
+):
+    account = await _account(db, session_id, exchange_id, asset_id, role)
+    counter = await _account(db, session_id, None, asset_id, counter_role)
+    return [
+        (account, quantity, cad_value, memo),
+        (counter, -quantity, -cad_value if cad_value is not None else None, memo),
+    ]
+
+
