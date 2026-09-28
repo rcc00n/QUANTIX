@@ -477,3 +477,68 @@ async def owned_reservation(db, session_id, reservation_key):
     return remaining
 
 
+@decimal_context
+async def release_remaining(db, session_id, reservation_key, now, key, evidence):
+    await lock_session(db, session_id)
+    # Repeated releases use the original committed request, independently of the
+    # remaining quantity (which is zero after the first successful release).
+    existing = await db.scalar(select(Journal).where(Journal.idempotency_key == key))
+    if existing:
+        if (
+            existing.session_id != session_id
+            or existing.provenance.get("request", {}).get("reservation_key") != reservation_key
+        ):
+            raise AccountingError("Release idempotency key mismatch")
+        return existing.id
+    remaining = await owned_reservation(db, session_id, reservation_key)
+    active = [(k, q) for k, q in remaining.items() if q > 0]
+    if not active:
+        return None
+    entries = []
+    consumption = []
+    with localcontext() as ctx:
+        ctx.prec = 78
+        for (exchange_id, asset_id), amount in active:
+            p = await position(db, session_id, exchange_id, asset_id)
+            if p.reserved_quantity < amount:
+                raise AccountingError("Reserved ledger is inconsistent")
+            value = (
+                stored(p.cost_basis_cad * amount / p.quantity)
+                if p.cost_basis_cad is not None
+                else None
+            )
+            reserved = await _account(db, session_id, exchange_id, asset_id, "reserved")
+            avail = await _account(db, session_id, exchange_id, asset_id, "available")
+            entries.extend(
+                [
+                    (
+                        reserved,
+                        -amount,
+                        -value if value is not None else None,
+                        "Release unused simulation reservation",
+                    ),
+                    (avail, amount, value, "Release unused simulation reservation"),
+                ]
+            )
+            p.reserved_quantity = stored(p.reserved_quantity - amount)
+            p.updated_at = now
+            consumption.append(
+                {
+                    "exchange_id": str(exchange_id),
+                    "asset_id": str(asset_id),
+                    "quantity": str(amount),
+                }
+            )
+    return await _post(
+        db,
+        session_id,
+        "RESERVATION_RELEASE",
+        key,
+        now,
+        {"reservation_key": reservation_key},
+        evidence,
+        entries,
+        details={"reservation_key": reservation_key, "reservation_consumption": consumption},
+    )
+
+
