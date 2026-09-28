@@ -101,3 +101,21 @@ async def _account(db, session_id, exchange_id, asset_id, role):
     return row
 
 
+async def _ledger_quantities(db, session_id, exchange_id, asset_id):
+    rows = (
+        await db.execute(
+            select(VirtualAccount.role, func.coalesce(func.sum(LedgerEntry.quantity), 0))
+            .outerjoin(LedgerEntry, LedgerEntry.account_id == VirtualAccount.id)
+            .where(
+                VirtualAccount.session_id == session_id,
+                VirtualAccount.exchange_id == exchange_id,
+                VirtualAccount.asset_id == asset_id,
+                VirtualAccount.role.in_(["available", "reserved"]),
+            )
+            .group_by(VirtualAccount.role)
+        )
+    ).all()
+    amounts = dict(rows)
+    return amounts.get("available", ZERO), amounts.get("reserved", ZERO)
+
+
