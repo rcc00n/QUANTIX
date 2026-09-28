@@ -119,3 +119,33 @@ async def _ledger_quantities(db, session_id, exchange_id, asset_id):
     return amounts.get("available", ZERO), amounts.get("reserved", ZERO)
 
 
+@decimal_context
+async def position(db, session_id, exchange_id, asset_id):
+    row = await db.scalar(
+        select(PortfolioPosition)
+        .where(
+            PortfolioPosition.session_id == session_id,
+            PortfolioPosition.exchange_id == exchange_id,
+            PortfolioPosition.asset_id == asset_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    available, reserved = await _ledger_quantities(db, session_id, exchange_id, asset_id)
+    if row is None:
+        row = PortfolioPosition(
+            session_id=session_id,
+            exchange_id=exchange_id,
+            asset_id=asset_id,
+            quantity=available + reserved,
+            reserved_quantity=reserved,
+            cost_basis_cad=ZERO if available + reserved == 0 else None,
+            updated_at=datetime.now(UTC),
+        )
+        db.add(row)
+        await db.flush()
+    elif row.quantity != available + reserved or row.reserved_quantity != reserved:
+        raise AccountingError("Position cache does not reconcile to immutable ledger")
+    return row
+
+
