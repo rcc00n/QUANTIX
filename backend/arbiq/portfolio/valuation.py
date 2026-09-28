@@ -365,3 +365,104 @@ def calculate(
         )
 
 
+async def research_scope(db, session_id, requested=False):
+    from arbiq.paper_trading.models import PaperControl
+
+    control = await db.get(PaperControl, session_id)
+    return control.classification == "RESEARCH" if control is not None else bool(requested)
+
+
+async def snapshot(
+    db,
+    session_id,
+    prices,
+    now,
+    *,
+    research_only=False,
+    persist=True,
+    maximum_age_seconds=60,
+    benchmark_prices=None,
+):
+    session = await lock_session(db, session_id)
+    research_only = await research_scope(db, session_id, research_only)
+    await reconcile(db, session_id)
+    rows = (
+        await db.execute(
+            select(PortfolioPosition, Asset, Exchange)
+            .join(Asset, Asset.id == PortfolioPosition.asset_id)
+            .join(Exchange, Exchange.id == PortfolioPosition.exchange_id)
+            .where(PortfolioPosition.session_id == session_id)
+            .order_by(Exchange.slug, Asset.symbol)
+        )
+    ).all()
+    positions = [
+        {
+            "exchange_id": p.exchange_id,
+            "exchange": exchange.slug,
+            "asset_id": p.asset_id,
+            "asset": asset.symbol,
+            "canonical_key": asset.canonical_key,
+            "kind": asset.kind,
+            "quantity": p.quantity,
+            "reserved_quantity": p.reserved_quantity,
+            "cost_basis_cad": p.cost_basis_cad,
+        }
+        for p, asset, exchange in rows
+    ]
+    movement_columns = (
+        AccountingMovement.external_flow_cad,
+        AccountingMovement.realized_trading_cad,
+        AccountingMovement.realized_fx_cad,
+        AccountingMovement.fees_cad,
+        AccountingMovement.expenses_cad,
+    )
+    expressions = [func.count()]
+    for column in movement_columns:
+        expressions.extend((func.sum(column), func.count(column)))
+    amounts = (
+        await db.execute(select(*expressions).where(AccountingMovement.session_id == session_id))
+    ).one()
+    totals = [
+        stored(amounts[1 + 2 * i] or ZERO) if amounts[2 + 2 * i] == amounts[0] else None
+        for i in range(len(movement_columns))
+    ]
+    last = await db.scalar(
+        select(PortfolioCheckpoint)
+        .where(PortfolioCheckpoint.session_id == session_id)
+        .order_by(PortfolioCheckpoint.as_of.desc(), PortfolioCheckpoint.created_at.desc())
+        .limit(1)
+    )
+    prior = (
+        Decimal(last.payload["high_water_equity_cad"])
+        if last and last.payload.get("high_water_equity_cad") is not None
+        else None
+    )
+    payload = calculate(
+        positions,
+        prices,
+        session.benchmark_snapshot.get("holdings", []),
+        now,
+        initial_equity_cad=session.initial_equity_cad,
+        external_flow_cad=totals[0],
+        realized_trading_cad=totals[1],
+        realized_fx_cad=totals[2],
+        fees_cad=totals[3],
+        expenses_cad=totals[4],
+        previous_peak_cad=prior,
+        benchmark_prices=benchmark_prices,
+        maximum_age_seconds=maximum_age_seconds,
+        research_only=research_only,
+    )
+    payload["session_id"] = str(session_id)
+    payload["name"] = session.name
+    if persist:
+        row = PortfolioCheckpoint(
+            session_id=session_id,
+            as_of=now,
+            payload=payload,
+            calculation_version=ACCOUNTING_VERSION,
+        )
+        db.add(row)
+        await db.flush()
+        payload = {**payload, "checkpoint_id": str(row.id)}
+    return payload
