@@ -254,3 +254,124 @@ async def _pair(
     ]
 
 
+@decimal_context
+async def fund(db, session_id, exchange_id, asset_id, quantity, cad_value, now, key, evidence):
+    quantity = positive(quantity)
+    cad_value = positive(cad_value, "initial CAD value")
+    session = await lock_session(db, session_id)
+    request = {
+        "event": "INITIAL_FUNDING",
+        "exchange_id": exchange_id,
+        "asset_id": asset_id,
+        "quantity": quantity,
+        "cad_value": cad_value,
+    }
+    existing = await _existing(db, session_id, key, request)
+    if existing:
+        return existing.id
+    asset = await db.get(Asset, asset_id)
+    if asset is None:
+        raise AccountingError("Funding asset not found")
+    if asset.canonical_key == "fiat:CAD" and quantity != cad_value:
+        raise AccountingError("CAD funding must equal its CAD value")
+    previous = list(
+        await db.scalars(
+            select(AccountingMovement).where(AccountingMovement.session_id == session_id)
+        )
+    )
+    if any(x.event_type != "INITIAL_FUNDING" for x in previous):
+        raise AccountingError("Initial funding is closed after portfolio activity")
+    funded = sum((Decimal(x.details["funding_cad"]) for x in previous), ZERO)
+    if funded + cad_value > session.initial_equity_cad:
+        raise AccountingError("Initial allocations exceed starting equity")
+    p = await position(db, session_id, exchange_id, asset_id)
+    with localcontext() as ctx:
+        ctx.prec = 78
+        p.quantity = stored(p.quantity + quantity)
+        p.cost_basis_cad = (
+            stored((p.cost_basis_cad or ZERO) + cad_value) if p.cost_basis_cad is not None else None
+        )
+        p.updated_at = now
+        entries = await _pair(
+            db,
+            session_id,
+            exchange_id,
+            asset_id,
+            "available",
+            quantity,
+            cad_value,
+            memo="Initial virtual funding; CAD basis charged",
+        )
+        journal = await _post(
+            db,
+            session_id,
+            "INITIAL_FUNDING",
+            key,
+            now,
+            request,
+            evidence,
+            entries,
+            external_flow=cad_value,
+            details={
+                "funding_cad": str(cad_value),
+                "quantity": str(quantity),
+                "asset_id": str(asset_id),
+                "exchange_id": str(exchange_id),
+            },
+        )
+        statement = insert(Asset).values(
+            canonical_key="fiat:CAD",
+            symbol="CAD",
+            kind="fiat",
+            identifiers={"identity_verified": True},
+        )
+        await db.execute(statement.on_conflict_do_nothing(index_elements=[Asset.canonical_key]))
+        cad_id = await db.scalar(select(Asset.id).where(Asset.canonical_key == "fiat:CAD"))
+        fx = FXQuote(
+            base_asset_id=asset_id,
+            quote_asset_id=cad_id,
+            rate=stored(cad_value / quantity),
+            observed_at=now,
+            source="Initial paper inventory valuation",
+            provenance={
+                "kind": "INITIAL_VALUATION_NOT_EXECUTION",
+                "evidence": safe_json(evidence),
+                "cad_value": str(cad_value),
+            },
+        )
+        db.add(fx)
+        await db.flush()
+        account = await _account(db, session_id, exchange_id, asset_id, "available")
+        db.add(
+            VirtualDeposit(
+                account_id=account.id,
+                journal_id=journal,
+                fx_quote_id=fx.id,
+                quantity=quantity,
+                cad_equivalent=cad_value,
+                is_initial=True,
+            )
+        )
+        snapshot = dict(session.benchmark_snapshot or {})
+        holdings = list(snapshot.get("holdings", []))
+        holdings.append(
+            {
+                "exchange_id": str(exchange_id),
+                "asset_id": str(asset_id),
+                "quantity": str(quantity),
+                "initial_cad_value": str(cad_value),
+                "source_journal_id": str(journal),
+            }
+        )
+        session.benchmark_snapshot = {
+            **snapshot,
+            "holdings": holdings,
+            "convention": (
+                "Original funded units held unchanged; "
+                "same future valuation inputs as actual portfolio"
+            ),
+        }
+        await db.flush()
+    return journal
+
+
