@@ -69,3 +69,15 @@ async def lock_session(db, session_id: UUID) -> PaperSession:
     return session
 
 
+async def _existing(db, session_id, key, request):
+    if not isinstance(key, str) or not 1 <= len(key) <= 180:
+        raise AccountingError("Invalid idempotency key")
+    row = await db.scalar(select(Journal).where(Journal.idempotency_key == key))
+    if row and (
+        row.session_id != session_id
+        or row.provenance.get("request_fingerprint") != _fingerprint(request)
+    ):
+        raise AccountingError("Idempotency key reused for different accounting inputs")
+    return row
+
+
