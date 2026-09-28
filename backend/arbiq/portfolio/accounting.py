@@ -836,3 +836,171 @@ async def execute_leg(
     )
 
 
+@decimal_context
+async def transfer(
+    db,
+    session_id,
+    from_exchange_id,
+    to_exchange_id,
+    asset_id,
+    quantity,
+    fee_quantity,
+    cad_per_unit,
+    requested_at,
+    settled_at,
+    key,
+    evidence,
+    *,
+    reservation_key=None,
+):
+    """Settle explicitly configured virtual transfer; no instantaneous network claim.
+
+    quantity is the amount credited at destination; fee_quantity is additional
+    source inventory consumed. Root's scheduler must wait for settlement first.
+    """
+    from datetime import timedelta
+
+    from arbiq.db.models import InventoryTransfer
+
+    quantity = positive(quantity)
+    fee_quantity = positive(fee_quantity, "transfer fee", zero=True)
+    if from_exchange_id == to_exchange_id:
+        raise AccountingError("Transfer venues must differ")
+    utc_timestamp(requested_at)
+    utc_timestamp(settled_at)
+    delay = evidence.get("settlement_delay_seconds")
+    if (
+        isinstance(delay, bool)
+        or not isinstance(delay, int)
+        or delay < 0
+        or settled_at < requested_at + timedelta(seconds=delay)
+    ):
+        raise AccountingError("Transfer settlement delay has not elapsed")
+    if not evidence.get("network_compatible_verified") and not (
+        evidence.get("research_only") and evidence.get("network_compatible_assumed")
+    ):
+        raise AccountingError("Transfer network compatibility is unverified")
+    if cad_per_unit is not None and (
+        not isinstance(cad_per_unit, Decimal) or not cad_per_unit.is_finite() or cad_per_unit <= 0
+    ):
+        raise AccountingError("Invalid transfer CAD rate")
+    await lock_session(db, session_id)
+    request = {
+        "event": "INVENTORY_TRANSFER",
+        "from_exchange_id": from_exchange_id,
+        "to_exchange_id": to_exchange_id,
+        "asset_id": asset_id,
+        "quantity": quantity,
+        "fee_quantity": fee_quantity,
+        "cad_per_unit": cad_per_unit,
+        "requested_at": requested_at.isoformat(),
+        "settled_at": settled_at.isoformat(),
+        "reservation_key": reservation_key,
+    }
+    existing = await _existing(db, session_id, key, request)
+    if existing:
+        return existing.id
+    source = await position(db, session_id, from_exchange_id, asset_id)
+    target = await position(db, session_id, to_exchange_id, asset_id)
+    with localcontext() as ctx:
+        ctx.prec = 78
+        debit = quantity + fee_quantity
+        available = (
+            source.reserved_quantity
+            if reservation_key
+            else source.quantity - source.reserved_quantity
+        )
+        if available < debit:
+            raise InsufficientBalance("Transfer exceeds funded virtual inventory")
+        if reservation_key:
+            owned = await owned_reservation(db, session_id, reservation_key)
+            if owned.get((from_exchange_id, asset_id), ZERO) < debit:
+                raise InsufficientBalance("Transfer cannot spend another reservation")
+        removed = _remove_basis(source, debit)
+        target_basis = stored(removed * quantity / debit) if removed is not None else None
+        fee_basis = stored(removed - target_basis) if removed is not None else None
+        if reservation_key:
+            source.reserved_quantity = stored(source.reserved_quantity - debit)
+        _add_basis(target, quantity, target_basis)
+        source.updated_at = settled_at
+        target.updated_at = settled_at
+        role = "reserved" if reservation_key else "available"
+        from_account = await _account(db, session_id, from_exchange_id, asset_id, role)
+        to_account = await _account(db, session_id, to_exchange_id, asset_id, "available")
+        amount_value = stored(quantity * cad_per_unit) if cad_per_unit is not None else None
+        fee_value = (
+            stored(fee_quantity * cad_per_unit)
+            if cad_per_unit is not None
+            else (ZERO if not fee_quantity else None)
+        )
+        entries = [
+            (
+                from_account,
+                -quantity,
+                -amount_value if amount_value is not None else None,
+                "Settle virtual transfer source",
+            ),
+            (to_account, quantity, amount_value, "Settle virtual transfer destination"),
+        ]
+        if fee_quantity:
+            entries += await _pair(
+                db,
+                session_id,
+                from_exchange_id,
+                asset_id,
+                role,
+                -fee_quantity,
+                -fee_value if fee_value is not None else None,
+                counter_role="expense",
+                memo="Virtual withdrawal/network cost",
+            )
+        details = {
+            "reservation_key": reservation_key,
+            "reservation_consumption": [
+                {
+                    "exchange_id": str(from_exchange_id),
+                    "asset_id": str(asset_id),
+                    "quantity": str(debit),
+                }
+            ]
+            if reservation_key
+            else [],
+            "from_exchange_id": str(from_exchange_id),
+            "to_exchange_id": str(to_exchange_id),
+            "asset_id": str(asset_id),
+            "quantity": str(quantity),
+            "fee_quantity": str(fee_quantity),
+            "fee_basis_cad": str(fee_basis) if fee_basis is not None else None,
+            "expense_embedded_in_realized": True,
+        }
+        journal = await _post(
+            db,
+            session_id,
+            "INVENTORY_TRANSFER",
+            key,
+            settled_at,
+            request,
+            evidence,
+            entries,
+            realized_trading=-fee_basis if fee_basis is not None else None,
+            expenses=fee_value,
+            details=details,
+        )
+        db.add(
+            InventoryTransfer(
+                session_id=session_id,
+                from_account_id=from_account.id,
+                to_account_id=to_account.id,
+                journal_id=journal,
+                quantity=quantity,
+                expense_quantity=fee_quantity,
+                expense_asset_id=asset_id,
+                expense_cad=fee_value,
+                requested_at=requested_at,
+                settled_at=settled_at,
+                status="settled",
+                assumptions=safe_json(evidence),
+            )
+        )
+        await db.flush()
+    return journal
