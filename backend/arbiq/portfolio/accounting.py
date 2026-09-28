@@ -149,3 +149,24 @@ async def position(db, session_id, exchange_id, asset_id):
     return row
 
 
+@decimal_context
+async def reconcile(db, session_id):
+    rows = list(
+        await db.scalars(
+            select(PortfolioPosition).where(PortfolioPosition.session_id == session_id)
+        )
+    )
+    for row in rows:
+        available, reserved = await _ledger_quantities(
+            db, session_id, row.exchange_id, row.asset_id
+        )
+        if (
+            row.quantity != available + reserved
+            or row.reserved_quantity != reserved
+            or available < 0
+            or reserved < 0
+        ):
+            raise AccountingError("Portfolio ledger reconciliation failed")
+    return True
+
+
