@@ -445,3 +445,35 @@ async def reserve(db, session_id, requirements, now, key, evidence):
     )
 
 
+@decimal_context
+async def owned_reservation(db, session_id, reservation_key):
+    journal = await db.scalar(
+        select(Journal).where(
+            Journal.session_id == session_id,
+            Journal.idempotency_key == reservation_key,
+            Journal.event_type == "RESERVATION",
+        )
+    )
+    if journal is None:
+        raise AccountingError("Reservation ownership not found")
+    original = journal.provenance["request"]["requirements"]
+    remaining = {
+        (UUID(r["exchange_id"]), UUID(r["asset_id"])): Decimal(r["quantity"]) for r in original
+    }
+    movements = list(
+        await db.scalars(
+            select(AccountingMovement).where(
+                AccountingMovement.session_id == session_id,
+                AccountingMovement.details["reservation_key"].as_string() == reservation_key,
+            )
+        )
+    )
+    for movement in movements:
+        for r in movement.details.get("reservation_consumption", []):
+            key = (UUID(r["exchange_id"]), UUID(r["asset_id"]))
+            remaining[key] = remaining.get(key, ZERO) - Decimal(r["quantity"])
+    if any(v < 0 for v in remaining.values()):
+        raise AccountingError("Reservation ownership overconsumed")
+    return remaining
+
+
