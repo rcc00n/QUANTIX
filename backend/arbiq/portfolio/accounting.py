@@ -170,3 +170,68 @@ async def reconcile(db, session_id):
     return True
 
 
+@decimal_context
+async def _post(
+    db,
+    session_id,
+    event,
+    key,
+    now,
+    request,
+    evidence,
+    entries,
+    *,
+    source_id=None,
+    realized_trading=ZERO,
+    realized_fx=ZERO,
+    fees=ZERO,
+    expenses=ZERO,
+    external_flow=ZERO,
+    details=None,
+):
+    utc_timestamp(now)
+    nonzero = [(a, stored(q), stored(v), memo) for a, q, v, memo in entries if q != 0]
+    totals = defaultdict(lambda: ZERO)
+    for account, q, _, _ in nonzero:
+        totals[account.asset_id] += q
+    if len(nonzero) < 2 or any(totals.values()):
+        raise AccountingError("Journal must balance by canonical asset")
+    row = Journal(
+        session_id=session_id,
+        event_type=event,
+        idempotency_key=key,
+        effective_at=now,
+        source_id=source_id,
+        provenance={
+            "accounting_version": ACCOUNTING_VERSION,
+            "request_fingerprint": _fingerprint(request),
+            "request": _canonical(request),
+            "evidence": safe_json(evidence),
+        },
+    )
+    db.add(row)
+    await db.flush()
+    for account, q, v, memo in nonzero:
+        db.add(
+            LedgerEntry(
+                journal_id=row.id, account_id=account.id, quantity=q, cad_value=v, memo=memo
+            )
+        )
+    db.add(
+        AccountingMovement(
+            session_id=session_id,
+            journal_id=row.id,
+            event_type=event,
+            effective_at=now,
+            realized_trading_cad=stored(realized_trading),
+            realized_fx_cad=stored(realized_fx),
+            fees_cad=stored(fees),
+            expenses_cad=stored(expenses),
+            external_flow_cad=stored(external_flow),
+            details=safe_json(details or {}),
+        )
+    )
+    await db.flush()
+    return row.id
+
+
