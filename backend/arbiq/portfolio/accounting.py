@@ -60,3 +60,12 @@ def _fingerprint(request):
     ).hexdigest()
 
 
+async def lock_session(db, session_id: UUID) -> PaperSession:
+    session = await db.scalar(
+        select(PaperSession).where(PaperSession.id == session_id).with_for_update()
+    )
+    if session is None:
+        raise AccountingError("Paper session not found")
+    return session
+
+
