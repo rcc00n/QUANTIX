@@ -24,3 +24,19 @@ def complete_sum(values):
         return stored(sum(values, ZERO))
 
 
+def valid_price(price, now, maximum_age_seconds, *, cad=False):
+    if cad:
+        return Decimal(1), True, None
+    if price is None or price.cad_per_unit is None:
+        return None, False, "CAD_PRICE_UNAVAILABLE"
+    if price.observed_at is None or price.received_at is None:
+        return None, False, "VALUATION_TIMESTAMP_UNAVAILABLE"
+    for timestamp in (price.observed_at, price.received_at):
+        age = (now - timestamp).total_seconds()
+        if age < 0:
+            return None, False, "VALUATION_EVIDENCE_FROM_FUTURE"
+        if age > maximum_age_seconds:
+            return None, False, "VALUATION_EVIDENCE_STALE"
+    return price.cad_per_unit, price.verified, None
+
+
