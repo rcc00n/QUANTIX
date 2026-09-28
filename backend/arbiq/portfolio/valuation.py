@@ -52,3 +52,59 @@ def missing_status(reason, price):
     return "UNKNOWN"
 
 
+@decimal_context
+def inventory_imbalance(positions, benchmark_holdings):
+    """Units required to restore initial venue shares, excluding transfer costs."""
+    initial = {}
+    current = {}
+    for holding in benchmark_holdings:
+        asset = str(holding["asset_id"])
+        venue = str(holding["exchange_id"])
+        group = initial.setdefault(asset, {})
+        group[venue] = group.get(venue, ZERO) + Decimal(str(holding["quantity"]))
+    for position in positions:
+        asset = str(position["asset_id"])
+        venue = str(position["exchange_id"])
+        group = current.setdefault(asset, {})
+        group[venue] = group.get(venue, ZERO) + position["quantity"]
+    output = []
+    with localcontext() as ctx:
+        ctx.prec = 78
+        for asset, venues in sorted(current.items()):
+            total = sum(venues.values(), ZERO)
+            target = initial.get(asset, {})
+            initial_total = sum(target.values(), ZERO)
+            shares = (
+                {venue: quantity / initial_total for venue, quantity in target.items()}
+                if initial_total
+                else {}
+            )
+            required = (
+                sum(
+                    (
+                        abs(venues.get(venue, ZERO) - total * shares.get(venue, ZERO))
+                        for venue in set(venues) | set(shares)
+                    ),
+                    ZERO,
+                )
+                / 2
+                if shares
+                else None
+            )
+            output.append(
+                {
+                    "asset_id": asset,
+                    "current_quantity": stored(total),
+                    "current_by_exchange": venues,
+                    "initial_target_shares": shares,
+                    "quantity_to_rebalance": stored(required),
+                    "imbalance_pct": stored(required / total * 100)
+                    if required is not None and total > 0
+                    else None,
+                    "reason": None if shares else "NO_INITIAL_ALLOCATION_TARGET",
+                    "costs_included": False,
+                }
+            )
+    return output
+
+
