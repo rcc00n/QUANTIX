@@ -107,3 +107,20 @@ def test_shared_json_is_exactly_equivalent_and_immutable():
     assert canonical(pool.market_input(source)) == canonical(dump_input(source))
 
 
+def test_pool_replacement_eviction_does_not_modify_retained_history():
+    pool = EvidencePool(1)
+    first = synthetic_book()
+    retained = pool.book(first)
+    pool.book(synthetic_book())
+    assert len(pool.books) == 1
+    pool.retain([])
+    assert len(pool.books) == 0
+    assert retained["market_id"] == str(first.market_id)
+    assert retained["normalized"]["asks"][0]["price"] == "100"
+    assert pool.metrics()["entry_limit"] == 1
+    with pytest.raises(ValueError):
+        EvidencePool(0)
+    value = freeze_json({"items": [{"x": "1"}]})
+    assert isinstance(value, FrozenJSON)
+    with pytest.raises(TypeError):
+        value.update({"items": []})
