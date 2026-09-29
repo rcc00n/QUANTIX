@@ -193,3 +193,51 @@ class AllocationPlan:
         }
 
 
+def _timestamp(raw: datetime | str) -> datetime:
+    return utc_timestamp(raw if isinstance(raw, datetime) else datetime.fromisoformat(raw))
+
+
+def _causal_mark(allocation: PricedAllocation, as_of: datetime) -> bool:
+    if allocation.cell.asset == CAD:
+        return True
+    evidence = allocation.evidence.get("mark", allocation.evidence)
+    if not isinstance(evidence, Mapping):
+        return False
+    try:
+        received = _timestamp(evidence["received_at"])
+        observed = evidence.get("observed_at")
+        return received <= as_of and (observed is None or _timestamp(observed) <= received)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _bounded_route_options(
+    demands: Sequence[RouteDemand], group: Callable[[str], str], as_of: datetime | None
+) -> tuple[dict[str, list[RouteDemand]], set[str]]:
+    if len(demands) > MAX_ROUTE_OPTIONS or len({d.route_id for d in demands}) > MAX_ROUTES:
+        raise ValueError("Funding evidence exceeds the bounded planning window")
+    if as_of is not None:
+        utc_timestamp(as_of)
+    evidence_by_route: dict[str, list[RouteDemand]] = defaultdict(list)
+    seen = set()
+    excluded = set()
+    for route in sorted(demands, key=lambda d: (d.route_id, d.budget_cad)):
+        key = route.route_id, route.budget_cad
+        if key in seen:
+            raise ValueError("Each route can supply one exact observation per budget")
+        seen.add(key)
+        if group(route.buy.cell.exchange) == group(route.sell.cell.exchange):
+            excluded.add("SAME_LIQUIDITY_VENUE")
+            continue
+        if as_of is not None and (
+            route.evaluated_at is None
+            or route.evaluated_at > as_of
+            or not _causal_mark(route.buy, as_of)
+            or not _causal_mark(route.sell, as_of)
+        ):
+            excluded.add("CAUSAL_FUNDING_EVIDENCE_UNAVAILABLE")
+            continue
+        evidence_by_route[route.route_id].append(route)
+    return evidence_by_route, excluded
+
+
