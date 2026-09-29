@@ -211,6 +211,17 @@ def _causal_mark(allocation: PricedAllocation, as_of: datetime) -> bool:
         return False
 
 
+def _exposures(allocations, group, stablecoins):
+    by_venue, by_asset = defaultdict(Decimal), defaultdict(Decimal)
+    stable = ZERO
+    for item in allocations:
+        by_venue[group(item.cell.exchange)] += item.cad_value
+        by_asset[item.cell.asset] += item.cad_value
+        if item.cell.asset in stablecoins:
+            stable += item.cad_value
+    return by_venue, by_asset, stable
+
+
 def _bounded_route_options(
     demands: Sequence[RouteDemand], group: Callable[[str], str], as_of: datetime | None
 ) -> tuple[dict[str, list[RouteDemand]], set[str]]:
