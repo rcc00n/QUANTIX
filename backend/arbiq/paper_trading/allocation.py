@@ -434,6 +434,17 @@ def _route_details(by_route, available, constraints, group, stablecoins):
     return rows, median
 
 
+def _inventory_payload(target, coverage, details, median):
+    tier = next(row for row in coverage if Decimal(row["trade_amount_cad"]) == target)
+    return {
+        "coverage_by_size": list(coverage),
+        "route_capacity": list(details),
+        "funded_route_count": tier["funded_alternative_routes"],
+        "simultaneous_funded_route_count": tier["simultaneous_funded_routes"],
+        "median_funded_acquisition_cad": _fmt(median) if median is not None else None,
+    }
+
+
 def _inventory_metrics(by_route, available, constraints, group, stablecoins):
     coverage = tuple(
         _at_size(by_route, available, size, constraints.min_buy_capital_cad)
