@@ -41,3 +41,13 @@ def _fmt(value: Decimal) -> str:
     return format(value, "f")
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class Cell:
+    exchange: str
+    asset: str
+
+    def __post_init__(self):
+        if not self.exchange or not self.asset:
+            raise ValueError("Funding cell requires an exchange and canonical asset")
+
+
