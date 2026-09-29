@@ -51,3 +51,33 @@ class Cell:
             raise ValueError("Funding cell requires an exchange and canonical asset")
 
 
+@dataclass(frozen=True, slots=True)
+class PricedAllocation:
+    cell: Cell
+    quantity: Decimal
+    cad_rate: Decimal
+    evidence: Mapping = field(default_factory=dict, compare=False)
+    cad_value: Decimal = field(init=False)
+
+    @decimal_context
+    def __post_init__(self):
+        if _exact(self.quantity) <= 0 or _exact(self.cad_rate) <= 0:
+            raise ValueError("Funding quantities and sourced CAD rates must be positive")
+        if self.cell.asset == CAD and self.cad_rate != ONE:
+            raise ValueError("CAD allocation must use the CAD identity")
+        value = stored(self.quantity * self.cad_rate)
+        if value is None or value <= 0:
+            raise ValueError("Funding contribution must have a positive CAD basis")
+        object.__setattr__(self, "cad_value", value)
+
+    def payload(self) -> dict:
+        return {
+            "exchange": self.cell.exchange,
+            "asset": self.cell.asset,
+            "quantity": _fmt(self.quantity),
+            "cad_rate": _fmt(self.cad_rate),
+            "cad_value": _fmt(self.cad_value),
+            "evidence": dict(self.evidence),
+        }
+
+
