@@ -222,6 +222,67 @@ def _exposures(allocations, group, stablecoins):
     return by_venue, by_asset, stable
 
 
+def _reserves(active, constraints, reserve_venues, group, stablecoins):
+    total = constraints.capital_cad
+    allocated = sum((a.cad_value for a in active), ZERO)
+    left = min(
+        max(ZERO, total - allocated),
+        _money(total * constraints.max_reserve_pct / HUNDRED),
+    )
+    by_venue, by_asset, _ = _exposures(active, group, stablecoins)
+    asset_room = max(ZERO, _money(total * constraints.max_asset_pct / HUNDRED) - by_asset[CAD])
+    left = min(left, asset_room)
+    venue_cap = _money(total * constraints.max_venue_pct / HUNDRED)
+    reserves = []
+    for venue in sorted(reserve_venues, key=lambda v: (by_venue[group(v)], v)):
+        venue_room = max(ZERO, venue_cap - by_venue[group(venue)])
+        quantity = min(left, venue_room)
+        if quantity:
+            reserves.append(
+                PricedAllocation(
+                    Cell(venue, CAD), quantity, ONE, {"source": "CAD_IDENTITY", "reserve": True}
+                )
+            )
+            by_venue[group(venue)] += quantity
+            left -= quantity
+        if left == 0:
+            break
+    reserve_cad = sum((a.cad_value for a in reserves), ZERO)
+    return reserves, reserve_cad, total - allocated - reserve_cad
+
+
+def _rank(route, policy, active, group):
+    liquidity = route.liquidity_cad or route.acquisition_cad
+    reliability = route.reliability
+    profit = route.net_profit_cad or ZERO
+    # Count retained eligible observations as frequency evidence. This score ranks
+    # alternatives only; it is never used as an estimated annual return.
+    opportunity = profit * route.frequency * reliability
+    if policy == "LIQUIDITY_WEIGHTED":
+        return (-(liquidity * reliability), -route.frequency, -opportunity, route.route_id)
+    if policy == "ROUTE_OPTIMIZED":
+        return (-opportunity, -(profit / route.pair_cad), -liquidity, route.route_id)
+    funded_groups = {group(cell.exchange) for cell in active}
+    new_groups = len(
+        {group(route.buy.cell.exchange), group(route.sell.cell.exchange)} - funded_groups
+    )
+    new_assets = len(
+        {route.buy.cell.asset, route.sell.cell.asset} - {cell.asset for cell in active}
+    )
+    return (
+        not route.profitable,
+        -new_groups,
+        -new_assets,
+        -(reliability * liquidity),
+        -opportunity,
+        route.route_id,
+    )
+
+
+def _fits(route: RouteDemand, available: Mapping[Cell, Decimal]) -> bool:
+    return all(available.get(item.cell, ZERO) >= item.quantity for item in (route.buy, route.sell))
+
+
 def _bounded_route_options(
     demands: Sequence[RouteDemand], group: Callable[[str], str], as_of: datetime | None
 ) -> tuple[dict[str, list[RouteDemand]], set[str]]:
@@ -252,3 +313,158 @@ def _bounded_route_options(
     return evidence_by_route, excluded
 
 
+@decimal_context
+def optimize_allocation(
+    policy: AllocationPolicy,
+    constraints: AllocationConstraints,
+    demands: Sequence[RouteDemand],
+    reserve_venues: Sequence[str],
+    stablecoin_assets: Sequence[str] = (),
+    *,
+    venue_groups: Mapping[str, str] | None = None,
+    as_of: datetime | None = None,
+) -> AllocationPlan:
+    """Select complete observed pairs, prefer target size, and retain capped CAD reserves.
+
+    Different routes may reuse an existing quantity in the alternative count.
+    Simultaneous count consumes held units each time and is a feasible lower bound.
+    Reserve-labelled cash is not used to claim planning coverage. A resulting venue
+    CAD account can use the cash under its separately selected live paper strategy.
+    """
+    if policy not in ("LIQUIDITY_WEIGHTED", "ROUTE_OPTIMIZED", "DIVERSIFIED_HYBRID"):
+        raise ValueError("Unsupported paired allocation policy")
+    if len(reserve_venues) > MAX_VENUES:
+        raise ValueError("Funding evidence exceeds the bounded planning window")
+    stablecoins = set(stablecoin_assets)
+    reserves = set(reserve_venues)
+    venue_groups = venue_groups or {}
+
+    def group(exchange):
+        return venue_groups.get(exchange, exchange)
+
+    active: dict[Cell, PricedAllocation] = {}
+    evidence_by_route, excluded = _bounded_route_options(demands, group, as_of)
+
+    eligible = {
+        rid: [
+            r
+            for r in options
+            if r.acquisition_cad >= constraints.min_buy_capital_cad
+            and (r.profitable or policy != "ROUTE_OPTIMIZED")
+        ]
+        for rid, options in evidence_by_route.items()
+    }
+    chosen = {}
+    for target_sized in (True, False):
+        remaining = {}
+        for rid, options in eligible.items():
+            if rid in chosen:
+                continue
+            sized = [
+                r
+                for r in options
+                if (r.acquisition_cad >= constraints.target_trade_cad) == target_sized
+            ]
+            if target_sized:
+                sized.sort(key=lambda r: (r.acquisition_cad, r.budget_cad))
+            else:
+                sized.sort(key=lambda r: (-r.acquisition_cad, r.budget_cad))
+            if sized:
+                remaining[rid] = sized
+        while remaining:
+            rid = min(remaining, key=lambda key: _rank(remaining[key][0], policy, active, group))
+            for route in remaining.pop(rid):
+                trial, _ = _try_pair(active, route, constraints, group, stablecoins)
+                if trial is not None:
+                    active, chosen[rid] = trial, route
+                    break
+
+    # After broad target placement, upgrade where larger observed sizes fit. Larger
+    # independently priced cells replace smaller ones, so liquidity is never counted twice.
+    for route in sorted(
+        (
+            route
+            for options in eligible.values()
+            for route in options
+            if route.acquisition_cad > constraints.target_trade_cad
+        ),
+        key=lambda r: (_rank(r, policy, active, group), -r.acquisition_cad, r.budget_cad),
+    ):
+        selected = chosen.get(route.route_id)
+        if selected is None or route.acquisition_cad <= selected.acquisition_cad:
+            continue
+        trial, _ = _try_pair(active, route, constraints, group, stablecoins)
+        if trial is not None:
+            active, chosen[route.route_id] = trial, route
+
+    reserves, reserve_cad, unallocated = _reserves(
+        tuple(active.values()), constraints, reserves, group, stablecoins
+    )
+    allocations = tuple(active[key] for key in sorted(active)) + tuple(reserves)
+    deployed = sum((item.cad_value for item in active.values()), ZERO)
+    total = constraints.capital_cad
+    active_venues = len({group(key.exchange) for key in active})
+    by_exchange, by_asset, stable = _exposures(allocations, lambda exchange: exchange, stablecoins)
+    by_group, _, _ = _exposures(allocations, group, stablecoins)
+
+    def share(value):
+        return _fmt(_money(value * HUNDRED / total))
+
+    def breakdown(values):
+        return {
+            k: {"cad_value": _fmt(v), "share_pct": share(v)} for k, v in sorted(values.items()) if v
+        }
+
+    summary = {
+        "allocated_cad": _fmt(total - unallocated),
+        "invested_cad": _fmt(deployed),
+        "reserve_cad": _fmt(reserve_cad),
+        "reserve_pct": share(reserve_cad),
+        "by_exchange": breakdown(by_exchange),
+        "by_venue_group": breakdown(by_group),
+        "by_asset": breakdown(by_asset),
+        "stablecoin_cad": _fmt(stable),
+        "stablecoin_pct": share(stable),
+        "funded_venues": active_venues,
+        "funded_cells": len(active),
+    }
+    available = {cell: item.quantity for cell, item in active.items()}
+    coverage, details, median = _inventory_metrics(
+        evidence_by_route, available, constraints, group, stablecoins
+    )
+    failures = []
+    if unallocated:
+        failures.append("UNPLACED_CAD_WITHIN_RESERVE_AND_CONCENTRATION_LIMITS")
+    if reserve_cad * HUNDRED < total * constraints.reserve_pct:
+        failures.append("REQUIRED_RESERVE_UNFUNDED")
+    if active_venues < constraints.min_venues:
+        failures.append("MINIMUM_FUNDED_VENUES_UNAVAILABLE")
+    reasons = failures + sorted(excluded)
+    if not any(
+        row["funded_alternative_routes"]
+        for row in coverage
+        if Decimal(row["trade_amount_cad"]) == constraints.target_trade_cad
+    ):
+        reasons.append("TARGET_TRADE_SIZE_NOT_FUNDED")
+    all_routes = [r for options in evidence_by_route.values() for r in options]
+    if not any(
+        route.profitable and route.acquisition_cad >= constraints.min_buy_capital_cad
+        for route in all_routes
+    ):
+        reasons.append(
+            "NO_POSITIVE_SIZED_ROUTE"
+            if any(r.net_profit_cad is not None for r in all_routes)
+            else "PROFITABILITY_EVIDENCE_UNAVAILABLE"
+        )
+    return AllocationPlan(
+        policy,
+        constraints,
+        allocations,
+        unallocated,
+        not failures,
+        tuple(reasons),
+        summary,
+        coverage,
+        details,
+        median,
+    )
