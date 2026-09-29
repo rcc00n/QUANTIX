@@ -485,6 +485,40 @@ def _bounded_route_options(
 
 
 @decimal_context
+def describe_inventory(
+    constraints: AllocationConstraints,
+    demands: Sequence[RouteDemand],
+    available: Mapping[Cell, Decimal],
+    *,
+    venue_groups: Mapping[str, str] | None = None,
+    stablecoin_assets: Sequence[str] = (),
+    as_of: datetime | None = None,
+) -> dict:
+    """Assess fixed available quantities without reallocating or changing the portfolio.
+
+    Callers supply ledger spendable units for a baseline or freeze an earlier plan's
+    quantities for a later assessment. Each assessment uses only its own supplied
+    observations. Reserved units and balances kept out of the experiment are excluded
+    by the caller before creating this view.
+    """
+    if any(_exact(quantity) < 0 for quantity in available.values()):
+        raise ValueError("Available inventory cannot be negative")
+    aliases = venue_groups or {}
+
+    def group(exchange):
+        return aliases.get(exchange, exchange)
+
+    by_route, excluded = _bounded_route_options(demands, group, as_of)
+    coverage, details, median = _inventory_metrics(
+        by_route, available, constraints, group, set(stablecoin_assets)
+    )
+    return {
+        **_inventory_payload(constraints.target_trade_cad, coverage, details, median),
+        "inventory_evidence_exclusions": sorted(excluded),
+    }
+
+
+@decimal_context
 def optimize_allocation(
     policy: AllocationPolicy,
     constraints: AllocationConstraints,
