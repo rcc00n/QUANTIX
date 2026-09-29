@@ -251,6 +251,31 @@ def _reserves(active, constraints, reserve_venues, group, stablecoins):
     return reserves, reserve_cad, total - allocated - reserve_cad
 
 
+def _try_pair(active, route, constraints, group, stablecoins):
+    proposal = dict(active)
+    for demand in (route.buy, route.sell):
+        current = proposal.get(demand.cell)
+        if current is None or current.quantity < demand.quantity:
+            proposal[demand.cell] = demand
+    if len(proposal) > MAX_ACTIVE_CELLS:
+        return None, "ACTIVE_CELL_LIMIT"
+    if any(item.cad_value < constraints.min_cell_cad for item in proposal.values()):
+        return None, "BELOW_MINIMUM_USEFUL_CELL"
+    total = constraints.capital_cad
+    invested = sum((item.cad_value for item in proposal.values()), ZERO)
+    invest_cap = _money(total * (HUNDRED - constraints.reserve_pct) / HUNDRED)
+    if invested > invest_cap:
+        return None, "INSUFFICIENT_CAPITAL_FOR_BOTH_LEGS"
+    by_venue, by_asset, stable = _exposures(proposal.values(), group, stablecoins)
+    if any(value * HUNDRED > total * constraints.max_venue_pct for value in by_venue.values()):
+        return None, "VENUE_CONCENTRATION_LIMIT"
+    if any(value * HUNDRED > total * constraints.max_asset_pct for value in by_asset.values()):
+        return None, "ASSET_CONCENTRATION_LIMIT"
+    if stable * HUNDRED > total * constraints.max_stablecoin_pct:
+        return None, "STABLECOIN_EXPOSURE_LIMIT"
+    return proposal, None
+
+
 def _rank(route, policy, active, group):
     liquidity = route.liquidity_cad or route.acquisition_cad
     reliability = route.reliability
