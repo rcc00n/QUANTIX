@@ -122,3 +122,34 @@ class RouteDemand:
         return self.net_profit_cad is not None and self.net_profit_cad > ZERO
 
 
+@dataclass(frozen=True, slots=True)
+class AllocationConstraints:
+    capital_cad: Decimal
+    target_trade_cad: Decimal = Decimal(250)
+    min_buy_capital_cad: Decimal = Decimal(50)
+    min_cell_cad: Decimal = Decimal(25)
+    max_venue_pct: Decimal = Decimal(60)
+    max_asset_pct: Decimal = HUNDRED
+    max_reserve_pct: Decimal = HUNDRED
+    max_stablecoin_pct: Decimal = Decimal(50)
+    min_venues: int = 2
+    reserve_pct: Decimal = Decimal(10)
+
+    def __post_init__(self):
+        if _exact(self.capital_cad) <= 0 or _exact(self.target_trade_cad) <= 0:
+            raise ValueError("Capital and target must be positive")
+        if _exact(self.min_buy_capital_cad) < 0 or _exact(self.min_cell_cad) < 0:
+            raise ValueError("Minimum allocation and buy capital must be nonnegative")
+        if type(self.min_venues) is not int or not 1 <= self.min_venues <= MAX_VENUES:
+            raise ValueError("A bounded minimum paid-in venue count is required")
+        shares = (
+            self.max_venue_pct,
+            self.max_asset_pct,
+            self.max_reserve_pct,
+            self.max_stablecoin_pct,
+            self.reserve_pct,
+        )
+        if any(not ZERO <= _exact(share) <= HUNDRED for share in shares):
+            raise ValueError("Funding constraint percentages must be within 0 to 100")
+
+
