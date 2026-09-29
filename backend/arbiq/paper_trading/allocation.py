@@ -81,3 +81,44 @@ class PricedAllocation:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class RouteDemand:
+    route_id: str
+    budget_cad: Decimal
+    acquisition_cad: Decimal
+    buy: PricedAllocation
+    sell: PricedAllocation
+    net_profit_cad: Decimal | None
+    frequency: int = 1
+    liquidity_cad: Decimal | None = None
+    reliability: Decimal = ONE
+    evaluation_id: str | None = None
+    evaluated_at: datetime | None = None
+    projected_costs: Mapping[str, str | None] | None = field(default=None, compare=False)
+
+    def __post_init__(self):
+        if not self.route_id or self.buy.cell.exchange == self.sell.cell.exchange:
+            raise ValueError("A funding route requires two different venues")
+        if not ZERO < _exact(self.acquisition_cad) <= _exact(self.budget_cad):
+            raise ValueError("Actual acquisition must be positive and within its CAD budget")
+        if self.net_profit_cad is not None:
+            _exact(self.net_profit_cad)
+        if self.liquidity_cad is not None and _exact(self.liquidity_cad) <= 0:
+            raise ValueError("Supplied liquidity must be positive")
+        if not ZERO <= _exact(self.reliability) <= ONE:
+            raise ValueError("Route confidence must be between zero and one")
+        if type(self.frequency) is not int or not 1 <= self.frequency <= 1_000_000:
+            raise ValueError("Positive bounded historical count required")
+        if self.evaluated_at is not None:
+            utc_timestamp(self.evaluated_at)
+
+    @property
+    @decimal_context
+    def pair_cad(self) -> Decimal:
+        return self.buy.cad_value + self.sell.cad_value
+
+    @property
+    def profitable(self) -> bool:
+        return self.net_profit_cad is not None and self.net_profit_cad > ZERO
+
+
