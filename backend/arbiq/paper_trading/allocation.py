@@ -308,6 +308,141 @@ def _fits(route: RouteDemand, available: Mapping[Cell, Decimal]) -> bool:
     return all(available.get(item.cell, ZERO) >= item.quantity for item in (route.buy, route.sell))
 
 
+def _simultaneous(routes: Sequence[list[RouteDemand]], available: Mapping[Cell, Decimal]) -> int:
+    """One demonstrably reservable greedy set, with no reused inventory units."""
+    remaining = dict(available)
+    count = 0
+    ordered = sorted(
+        routes, key=lambda options: (len(options), options[0].pair_cad, options[0].route_id)
+    )
+    for options in ordered:
+        for route in options:
+            if not _fits(route, remaining):
+                continue
+            for item in (route.buy, route.sell):
+                remaining[item.cell] -= item.quantity
+            count += 1
+            break
+    return count
+
+
+def _at_size(by_route, available, threshold, minimum):
+    considered = 0
+    funded = []
+    effective_minimum = max(threshold, minimum)
+    for options in by_route.values():
+        sized = [route for route in options if route.acquisition_cad >= effective_minimum]
+        if sized:
+            considered += 1
+        matches = sorted(
+            (route for route in sized if _fits(route, available)),
+            key=lambda route: (route.pair_cad, route.acquisition_cad, route.budget_cad),
+        )
+        if matches:
+            funded.append(matches)
+    return {
+        "trade_amount_cad": _fmt(threshold),
+        "effective_minimum_cad": _fmt(effective_minimum),
+        "considered_routes": considered,
+        "funded_alternative_routes": len(funded),
+        "simultaneous_funded_routes": _simultaneous(funded, available),
+        "profitable_funded_routes": sum(
+            any(route.profitable for route in options) for options in funded
+        ),
+    }
+
+
+def _route_details(by_route, available, constraints, group, stablecoins):
+    rows, maxima = [], []
+    for route_id, options in by_route.items():
+        maximum_observed = max(options, key=lambda x: (x.acquisition_cad, x.budget_cad))
+        viable = [x for x in options if x.acquisition_cad >= constraints.min_buy_capital_cad]
+        funded = [x for x in viable if _fits(x, available)]
+        maximum = max(funded, key=lambda x: (x.acquisition_cad, x.budget_cad), default=None)
+        if maximum is not None:
+            maxima.append(maximum.acquisition_cad)
+        target = min(
+            (x for x in viable if x.acquisition_cad >= constraints.target_trade_cad),
+            key=lambda x: (x.acquisition_cad, x.budget_cad),
+            default=None,
+        )
+        selected = target or maximum_observed
+        deficits = []
+        for item in (selected.buy, selected.sell):
+            current = available.get(item.cell, ZERO)
+            deficits.append(
+                {
+                    "exchange": item.cell.exchange,
+                    "asset": item.cell.asset,
+                    "required_quantity": _fmt(item.quantity),
+                    "available_quantity": _fmt(current),
+                    "deficit_quantity": _fmt(max(ZERO, item.quantity - current)),
+                }
+            )
+        _, constraint = _try_pair({}, selected, constraints, group, stablecoins)
+        limiting = []
+        if target is None:
+            limiting.append("TARGET_ACQUISITION_NOT_OBSERVED")
+        if selected.acquisition_cad < constraints.min_buy_capital_cad:
+            limiting.append("BELOW_MINIMUM_BUY_CAPITAL")
+        if not _fits(selected, available):
+            limiting.append("INSUFFICIENT_PRE_FUNDED_INVENTORY")
+        if selected.net_profit_cad is None:
+            limiting.append("CAD_PROFITABILITY_UNAVAILABLE")
+        elif selected.net_profit_cad <= 0:
+            limiting.append("NON_POSITIVE_NET_PROJECTION")
+        if constraint:
+            limiting.append(constraint)
+        rows.append(
+            {
+                "route_id": route_id,
+                "maximum_funded_acquisition_cad": _fmt(maximum.acquisition_cad)
+                if maximum
+                else None,
+                "maximum_observed_acquisition_cad": _fmt(maximum_observed.acquisition_cad),
+                "projected_net_profit_cad": (
+                    _fmt(maximum.net_profit_cad)
+                    if maximum and maximum.net_profit_cad is not None
+                    else None
+                ),
+                "target_pinned": {
+                    "budget_cad": _fmt(selected.budget_cad),
+                    "acquisition_cad": _fmt(selected.acquisition_cad),
+                    "target_met": target is not None,
+                    "buy": deficits[0],
+                    "sell": deficits[1],
+                    "deficits": deficits,
+                    "net_profit_cad": _fmt(selected.net_profit_cad)
+                    if selected.net_profit_cad is not None
+                    else None,
+                    "evaluation_id": selected.evaluation_id,
+                    "projected_costs": dict(selected.projected_costs)
+                    if selected.projected_costs is not None
+                    else None,
+                },
+                "limiting_constraints": limiting,
+                "fundable_with_reallocation": target is not None
+                and not _fits(selected, available)
+                and constraint is None,
+                "actionable": False,
+            }
+        )
+    maxima.sort()
+    median = None
+    if maxima:
+        median = stored((maxima[(len(maxima) - 1) // 2] + maxima[len(maxima) // 2]) / 2)
+    return rows, median
+
+
+def _inventory_metrics(by_route, available, constraints, group, stablecoins):
+    coverage = tuple(
+        _at_size(by_route, available, size, constraints.min_buy_capital_cad)
+        for size in sorted(set(TRADE_SIZES) | {constraints.target_trade_cad})
+    )
+    details, median = _route_details(by_route, available, constraints, group, stablecoins)
+    return coverage, tuple(details), median
+
+
 def _bounded_route_options(
     demands: Sequence[RouteDemand], group: Callable[[str], str], as_of: datetime | None
 ) -> tuple[dict[str, list[RouteDemand]], set[str]]:
