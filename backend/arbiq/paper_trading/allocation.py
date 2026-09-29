@@ -153,3 +153,43 @@ class AllocationConstraints:
             raise ValueError("Funding constraint percentages must be within 0 to 100")
 
 
+@dataclass(frozen=True, slots=True)
+class AllocationPlan:
+    policy: AllocationPolicy
+    constraints: AllocationConstraints
+    allocations: tuple[PricedAllocation, ...]
+    unallocated_cad: Decimal
+    feasible: bool
+    reasons: tuple[str, ...]
+    allocation_summary: dict
+    coverage_by_size: tuple[dict, ...]
+    route_capacity: tuple[dict, ...]
+    median_funded_acquisition_cad: Decimal | None
+
+    @decimal_context
+    def as_payload(self) -> dict:
+        return {
+            "allocation_version": VERSION,
+            "policy": self.policy,
+            "capital_cad": _fmt(self.constraints.capital_cad),
+            "trade_amount_cad": _fmt(self.constraints.target_trade_cad),
+            "constraints": {
+                definition.name: _fmt(value) if isinstance(value, Decimal) else value
+                for definition in fields(self.constraints)
+                for value in (getattr(self.constraints, definition.name),)
+            },
+            "allocations": [allocation.payload() for allocation in self.allocations],
+            "total_cad": _fmt(self.constraints.capital_cad - self.unallocated_cad),
+            "unallocated_cad": _fmt(self.unallocated_cad),
+            "feasible": self.feasible,
+            "reasons": list(self.reasons),
+            "allocation_summary": self.allocation_summary,
+            **_inventory_payload(
+                self.constraints.target_trade_cad,
+                self.coverage_by_size,
+                self.route_capacity,
+                self.median_funded_acquisition_cad,
+            ),
+        }
+
+
