@@ -39,6 +39,14 @@ def test_secret_file_rejects_invalid_content(tmp_path, content):
         read_secret_file(str(p))
 
 
+def test_config_can_load_protected_credentials_without_environment_values(tmp_path):
+    db = tmp_path / "database"
+    db.write_text("postgresql+asyncpg://synthetic:synthetic@db/synthetic_test")
+    pw = tmp_path / "hash"
+    pw.write_text(HASH)
+    config = Settings(_env_file=None, database_url_file=str(db), admin_password_hash_file=str(pw))
+    assert config.database_url.get_secret_value().endswith("synthetic_test")
+    assert HASH not in repr(config)
 
 
 
