@@ -154,6 +154,36 @@ def test_partial_valuation_reports_nonzero_blocking_assets_and_exact_subtotal():
     assert stale["valuation_status"] == "STALE" and stale["valued_subtotal_cad"] is None
 
 
+def test_benchmark_uses_original_units_and_rejects_wrong_depth_size():
+    rows = synthetic_positions()
+    p = rows[0]
+    key = (p["exchange_id"], p["asset_id"])
+    holdings = [
+        {
+            "exchange_id": str(p["exchange_id"]),
+            "asset_id": str(p["asset_id"]),
+            "quantity": "1",
+        }
+    ]
+    args = {
+        "initial_equity_cad": D(100),
+        "external_flow_cad": D(100),
+        "realized_trading_cad": D(0),
+        "realized_fx_cad": D(0),
+        "fees_cad": D(0),
+        "expenses_cad": D(0),
+    }
+    result = calculate(rows, {key: synthetic_mark("60", "2")}, holdings, NOW, **args)
+    assert result["no_trading_benchmark_cad"] is None
+    result = calculate(
+        rows,
+        {key: synthetic_mark("60", "2")},
+        holdings,
+        NOW,
+        benchmark_prices={key: synthetic_mark("65", "1")},
+        **args,
+    )
+    assert D(result["no_trading_benchmark_cad"]) == 65 and D(result["strategy_excess_cad"]) == 55
 
 
 
