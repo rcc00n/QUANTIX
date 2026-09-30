@@ -97,6 +97,21 @@ def test_unrealized_equity_utilization_drawdown_are_distinct():
     assert D(loss["net_simulated_pnl_cad"]) == -20
 
 
+@pytest.mark.parametrize(
+    "price",
+    [
+        None,
+        synthetic_mark("50", observed=NOW - timedelta(seconds=61)),
+        synthetic_mark("50", observed=NOW + timedelta(seconds=1)),
+        PriceEvidence(D(50), None, None),
+    ],
+)
+def test_missing_stale_future_or_untimestamped_marks_never_invent_equity(price):
+    rows = synthetic_positions()
+    key = (rows[0]["exchange_id"], rows[0]["asset_id"])
+    result = values(rows, {key: price} if price else {})
+    assert result["equity_cad"] is None and result["unrealized_pnl_cad"] is None
+    assert result["valuation_verified"] is False and result["limitations"]
 
 
 
