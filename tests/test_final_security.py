@@ -66,5 +66,15 @@ def test_production_requires_exact_https_origin_and_secure_cookie():
             settings(**(secure | overrides))
 
 
+def test_ai_cannot_enable_without_explicit_current_free_authorization():
+    for values in ({}, {"ai_free_allowance_authorized": True}):
+        with pytest.raises(ValidationError):
+            settings(ai_enabled=True, **values)
+    with pytest.raises(ValidationError):
+        settings(
+            ai_enabled=True, ai_free_allowance_authorized=True,
+            nvidia_api_key="synthetic-key", nvidia_model="synthetic-model",
+            ai_free_allowance_expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        )
 
 
