@@ -186,6 +186,20 @@ def test_benchmark_uses_original_units_and_rejects_wrong_depth_size():
     assert D(result["no_trading_benchmark_cad"]) == 65 and D(result["strategy_excess_cad"]) == 55
 
 
+def test_empty_statistics_and_research_isolation():
+    empty = summarize_trades([])
+    assert empty["completed_simulations"] == 0 and empty["win_rate_pct"] is None
+    rows = [
+        {
+            "status": "COMPLETED",
+            "classification": "RESEARCH",
+            "state": {"result": {"net_pnl_cad": "900"}},
+        }
+    ]
+    assert summarize_trades(rows)["completed_simulations"] == 0
+    result = summarize_trades(rows, research_only=True)
+    assert result["completed_simulations"] == 1 and D(result["win_rate_pct"]) == 100
+    assert D(result["net_completed_trade_pnl_cad"]) == 900
 
 
 
