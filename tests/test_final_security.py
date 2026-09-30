@@ -31,6 +31,12 @@ def test_secret_file_precedence_and_missing_file_fail_closed(tmp_path, monkeypat
         secret_environment("SYNTHETIC_SECRET")
 
 
+@pytest.mark.parametrize("content", ["", "a\nb", "a\x00b", "x" * 16385])
+def test_secret_file_rejects_invalid_content(tmp_path, content):
+    p = tmp_path / "synthetic-secret"
+    p.write_text(content)
+    with pytest.raises(ValueError):
+        read_secret_file(str(p))
 
 
 
