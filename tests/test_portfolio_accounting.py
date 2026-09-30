@@ -114,6 +114,44 @@ def test_missing_stale_future_or_untimestamped_marks_never_invent_equity(price):
     assert result["valuation_verified"] is False and result["limitations"]
 
 
+def test_partial_valuation_reports_nonzero_blocking_assets_and_exact_subtotal():
+    crypto = {**synthetic_positions()[0], "exchange": "synthetic-venue"}
+    missing_eur = {
+        **crypto,
+        "asset": "EUR",
+        "canonical_key": "fiat:EUR",
+        "asset_id": uuid4(),
+        "quantity": D("5"),
+        "reserved_quantity": D(0),
+    }
+    zero_usdc = {**missing_eur, "asset": "USDC", "asset_id": uuid4(), "quantity": D(0)}
+    holdings = [crypto, missing_eur, zero_usdc]
+    rate = synthetic_mark("60")
+    eur_evidence = PriceEvidence(None, None, None, source="cad_conversion_unavailable")
+    result = values(
+        holdings,
+        {
+            (crypto["exchange_id"], crypto["asset_id"]): rate,
+            (missing_eur["exchange_id"], missing_eur["asset_id"]): eur_evidence,
+        },
+    )
+    assert result["valuation_status"] == "PARTIAL" and result["equity_cad"] is None
+    assert D(result["valued_subtotal_cad"]) == 120
+    assert result["unpriced_position_count"] == 1
+    blocker = result["unpriced_balances"][0]
+    assert blocker["asset"] == "EUR" and blocker["exchange"] == "synthetic-venue"
+    assert blocker["detail_reason"] == "cad_conversion_unavailable"
+    assert result["balances"][2]["valuation_status"] == "ZERO_POSITION"
+    assert result["balances"][2]["valuation_reason"] is None
+    stale = values(
+        [crypto],
+        {
+            (crypto["exchange_id"], crypto["asset_id"]): synthetic_mark(
+                "60", observed=NOW - timedelta(seconds=61)
+            )
+        },
+    )
+    assert stale["valuation_status"] == "STALE" and stale["valued_subtotal_cad"] is None
 
 
 
