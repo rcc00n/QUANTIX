@@ -505,6 +505,51 @@ async def test_owned_reservations_release_and_restart_idempotency(database_url):
         await engine.dispose()
 
 
+async def test_base_fees_and_unknown_cad_never_invent_basis(database_url):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            session, a, _b, btc, cad = await seed(db, D(1000))
+            await fund(
+                db,
+                session.id,
+                a.id,
+                cad.id,
+                D(1000),
+                D(1000),
+                NOW,
+                "syn:fund:" + str(session.id),
+                {},
+            )
+            r = f"syn:reserve:{session.id}"
+            await reserve(db, session.id, [Reservation(a.id, cad.id, D(100))], NOW, r, {})
+            result = await execute_leg(
+                db,
+                session.id,
+                a.id,
+                btc.id,
+                cad.id,
+                "buy",
+                D(1),
+                D(100),
+                D(".01"),
+                "base",
+                None,
+                None,
+                NOW,
+                "syn:buy:" + str(session.id),
+                None,
+                {},
+                reservation_key=r,
+            )
+            assert result.fees_cad is None
+            assert (await position(db, session.id, a.id, btc.id)).quantity == D(".99")
+            assert (await position(db, session.id, a.id, btc.id)).cost_basis_cad is None
+            await db.commit()
+            assert await reconcile(db, session.id)
+    finally:
+        await engine.dispose()
 
 
 
