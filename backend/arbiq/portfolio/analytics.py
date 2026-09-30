@@ -455,3 +455,63 @@ def day_bounds(now):
     return local.date().isoformat(), start.astimezone(UTC), end.astimezone(UTC)
 
 
+async def daily_snapshot(
+    db, session_id, prices, now, *, research_only=False, benchmark_prices=None
+):
+    await lock_session(db, session_id)
+    research_only = await research_scope(db, session_id, research_only)
+    date, start, end = day_bounds(now)
+    current = await snapshot(
+        db, session_id, prices, now, research_only=research_only, benchmark_prices=benchmark_prices
+    )
+    daily = await performance(
+        db, session_id, research_only=research_only, period_start=start, period_end=min(now, end)
+    )
+    cumulative = await performance(db, session_id, research_only=research_only)
+    previous = await db.scalar(
+        select(DailyAccountingSnapshot)
+        .where(
+            DailyAccountingSnapshot.session_id == session_id,
+            DailyAccountingSnapshot.local_date == date,
+        )
+        .order_by(DailyAccountingSnapshot.revision.desc())
+        .limit(1)
+    )
+    quality = await db.scalar(
+        select(func.count())
+        .select_from(MarketQualityEvent)
+        .where(
+            MarketQualityEvent.created_at >= start, MarketQualityEvent.created_at < min(now, end)
+        )
+    )
+    row = DailyAccountingSnapshot(
+        session_id=session_id,
+        local_date=date,
+        timezone=REPORT_TIMEZONE,
+        revision=previous.revision + 1 if previous else 1,
+        as_of=now,
+        calculation_version=ACCOUNTING_VERSION,
+        payload=safe_json(
+            {
+                "schema_version": "1.0",
+                "timezone": REPORT_TIMEZONE,
+                "local_date": date,
+                "period_start": start,
+                "period_end": min(now, end),
+                "as_of": now,
+                "classification": "RESEARCH" if research_only else "VALIDATED",
+                "daily": daily,
+                "cumulative": cumulative,
+                "portfolio": current,
+                "market_quality_events": quality,
+                "data_limitations": current["limitations"],
+                "reconciliation": (
+                    "Ledger journals and accounting movements are the numerical source; "
+                    "AI cannot modify this snapshot."
+                ),
+            }
+        ),
+    )
+    db.add(row)
+    await db.flush()
+    return row
