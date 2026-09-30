@@ -249,6 +249,111 @@ async def seed(db, capital=DEFAULT_CAPITAL, name="SYNTHETIC"):
     return session, a, b, btc, cad
 
 
+async def test_funding_basis_reservations_fees_realized_and_unrealized_reconcile(
+    database_url,
+):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            session, a, _b, btc, cad = await seed(db, D(1000))
+            await fund(
+                db,
+                session.id,
+                a.id,
+                cad.id,
+                D(1000),
+                D(1000),
+                NOW,
+                "syn:fund:" + str(session.id),
+                {"synthetic": True},
+            )
+            await db.commit()
+            reservation = "syn:reserve:" + str(session.id)
+            await reserve(
+                db,
+                session.id,
+                [Reservation(a.id, cad.id, D(202))],
+                NOW,
+                reservation,
+                {"synthetic": True},
+            )
+            await db.commit()
+            first = await execute_leg(
+                db,
+                session.id,
+                a.id,
+                btc.id,
+                cad.id,
+                "buy",
+                D(2),
+                D(200),
+                D(2),
+                "quote",
+                D(100),
+                D(1),
+                NOW,
+                "syn:buy:" + str(session.id),
+                None,
+                {"synthetic": True},
+                reservation_key=reservation,
+            )
+            await db.commit()
+            repeated = await execute_leg(
+                db,
+                session.id,
+                a.id,
+                btc.id,
+                cad.id,
+                "buy",
+                D(2),
+                D(200),
+                D(2),
+                "quote",
+                D(100),
+                D(1),
+                NOW,
+                "syn:buy:" + str(session.id),
+                None,
+                {"synthetic": True},
+                reservation_key=reservation,
+            )
+            assert repeated.duplicate and repeated.journal_id == first.journal_id
+            assert (await position(db, session.id, a.id, btc.id)).cost_basis_cad == 202
+            r2 = "syn:sell-reserve:" + str(session.id)
+            await reserve(db, session.id, [Reservation(a.id, btc.id, D(1))], NOW, r2, {})
+            sale = await execute_leg(
+                db,
+                session.id,
+                a.id,
+                btc.id,
+                cad.id,
+                "sell",
+                D(1),
+                D(120),
+                D("1.2"),
+                "quote",
+                D(120),
+                D(1),
+                NOW,
+                "syn:sell:" + str(session.id),
+                None,
+                {},
+                reservation_key=r2,
+            )
+            assert sale.realized_trading_cad == D("17.8")
+            await db.commit()
+            report = await snapshot(db, session.id, {(a.id, btc.id): synthetic_mark("120")}, NOW)
+            assert D(report["equity_cad"]) == D("1036.8")
+            assert D(report["realized_simulated_pnl_cad"]) == D("17.8")
+            assert D(report["unrealized_pnl_cad"]) == D("19")
+            assert D(report["fees_cad"]) == D("3.2")
+            assert D(report["net_simulated_pnl_cad"]) == D("36.8")
+            assert D(report["reconciliation_delta_cad"]) == 0
+            assert await reconcile(db, session.id)
+            await db.commit()
+    finally:
+        await engine.dispose()
 
 
 
