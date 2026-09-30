@@ -49,6 +49,21 @@ def test_config_can_load_protected_credentials_without_environment_values(tmp_pa
     assert HASH not in repr(config)
 
 
+def test_production_requires_exact_https_origin_and_secure_cookie():
+    secure = {
+        "deployment_environment": "production", "cookie_secure": True,
+        "public_app_url": "https://quantix.raccncode.com",
+        "allowed_origins": ["https://quantix.raccncode.com"],
+    }
+    assert settings(**secure).cookie_secure
+    for overrides in (
+        {"cookie_secure": False},
+        {"public_app_url": "http://quantix.raccncode.com"},
+        {"allowed_origins": ["https://evil.example"]},
+        {"public_app_url": "https://quantix.raccncode.com@evil.example"},
+    ):
+        with pytest.raises(ValidationError):
+            settings(**(secure | overrides))
 
 
 
