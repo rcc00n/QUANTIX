@@ -447,6 +447,62 @@ async def test_concurrent_reservations_never_double_spend(database_url):
         await engine.dispose()
 
 
+async def test_owned_reservations_release_and_restart_idempotency(database_url):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            session, a, _b, btc, cad = await seed(db, D(100))
+            await fund(
+                db,
+                session.id,
+                a.id,
+                cad.id,
+                D(100),
+                D(100),
+                NOW,
+                "syn:fund:" + str(session.id),
+                {},
+            )
+            r1, r2 = f"syn:r1:{session.id}", f"syn:r2:{session.id}"
+            await reserve(db, session.id, [Reservation(a.id, cad.id, D(10))], NOW, r1, {})
+            await reserve(db, session.id, [Reservation(a.id, cad.id, D(80))], NOW, r2, {})
+            await db.commit()
+            with pytest.raises(InsufficientBalance, match="another"):
+                await execute_leg(
+                    db,
+                    session.id,
+                    a.id,
+                    btc.id,
+                    cad.id,
+                    "buy",
+                    D(1),
+                    D(20),
+                    D(0),
+                    "quote",
+                    D(20),
+                    D(1),
+                    NOW,
+                    "syn:steal:" + str(session.id),
+                    None,
+                    {},
+                    reservation_key=r1,
+                )
+            await db.rollback()
+            for obj in (session, a, btc, cad):
+                await db.refresh(obj)
+            first = await release_remaining(
+                db, session.id, r1, NOW, "syn:release:" + str(session.id), {}
+            )
+            await db.commit()
+            second = await release_remaining(
+                db, session.id, r1, NOW, "syn:release:" + str(session.id), {}
+            )
+            assert first == second
+            assert (await owned_reservation(db, session.id, r2))[(a.id, cad.id)] == 80
+            assert (await position(db, session.id, a.id, cad.id)).reserved_quantity == 80
+    finally:
+        await engine.dispose()
 
 
 
