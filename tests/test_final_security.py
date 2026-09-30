@@ -78,3 +78,20 @@ def test_ai_cannot_enable_without_explicit_current_free_authorization():
         )
 
 
+def test_tokens_and_nested_credentials_are_redacted():
+    token = "123456789:" + "x" * 35
+    assert token not in redact_text("https://api.telegram.org/bot" + token + "/getMe")
+    event = redact_sensitive(None, "info", {
+        "event": "provider failed", "nested": {"api_key": "synthetic-key"},
+        "error": token, "chat_id": "synthetic-chat", "amount_cad": "50",
+    })
+    assert "synthetic-key" not in str(event)
+    assert token not in str(event)
+    assert "synthetic-chat" not in str(event)
+    assert event["amount_cad"] == "50"
+    protected = redact_sensitive(None, "info", {
+        "internal_token": "synthetic-internal", "database_url": "synthetic-db",
+        "credentials": "synthetic-credentials", "dsn": "synthetic-dsn",
+    })
+    assert set(protected.values()) == {"[REDACTED]"}
+    assert "synthetic-pass" not in redact_text("postgresql+asyncpg://u:synthetic-pass@db/q")
