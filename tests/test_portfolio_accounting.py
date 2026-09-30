@@ -356,6 +356,50 @@ async def test_funding_basis_reservations_fees_realized_and_unrealized_reconcile
         await engine.dispose()
 
 
+async def test_zero_balance_and_initial_crypto_are_not_free(database_url):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            session, a, _b, btc, _cad = await seed(db, D(100))
+            with pytest.raises(InsufficientBalance):
+                await reserve(
+                    db,
+                    session.id,
+                    [Reservation(a.id, btc.id, D(1))],
+                    NOW,
+                    "syn:unfunded:" + str(session.id),
+                    {},
+                )
+            await db.rollback()
+        async with sessions() as db:
+            session, a, _b, btc, cad = await seed(db, D(100))
+            await fund(
+                db,
+                session.id,
+                a.id,
+                btc.id,
+                D(1),
+                D(100),
+                NOW,
+                "syn:crypto:" + str(session.id),
+                {"synthetic": True},
+            )
+            with pytest.raises(AccountingError, match="exceed"):
+                await fund(
+                    db,
+                    session.id,
+                    a.id,
+                    cad.id,
+                    D(1),
+                    D(1),
+                    NOW,
+                    "syn:free:" + str(session.id),
+                    {},
+                )
+            await db.rollback()
+    finally:
+        await engine.dispose()
 
 
 
