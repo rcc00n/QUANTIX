@@ -202,6 +202,11 @@ def test_empty_statistics_and_research_isolation():
     assert D(result["net_completed_trade_pnl_cad"]) == 900
 
 
+def test_edmonton_daily_boundaries_follow_dst():
+    date, start, end = day_bounds(datetime(2025, 3, 9, 18, tzinfo=UTC))
+    assert date == "2025-03-09" and (end - start) == timedelta(hours=23)
+    date, start, end = day_bounds(datetime(2025, 11, 2, 18, tzinfo=UTC))
+    assert date == "2025-11-02" and (end - start) == timedelta(hours=25)
 
 
 async def seed(db, capital=DEFAULT_CAPITAL, name="SYNTHETIC"):
