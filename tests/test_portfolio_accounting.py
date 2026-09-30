@@ -402,6 +402,49 @@ async def test_zero_balance_and_initial_crypto_are_not_free(database_url):
         await engine.dispose()
 
 
+async def test_concurrent_reservations_never_double_spend(database_url):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            session, a, _b, _btc, cad = await seed(db, D(100))
+            await fund(
+                db,
+                session.id,
+                a.id,
+                cad.id,
+                D(100),
+                D(100),
+                NOW,
+                "syn:fund:" + str(session.id),
+                {},
+            )
+            await db.commit()
+            ids = (session.id, a.id, cad.id)
+
+        async def reserve_one(index):
+            async with sessions() as db:
+                try:
+                    await reserve(
+                        db,
+                        ids[0],
+                        [Reservation(ids[1], ids[2], D(80))],
+                        NOW,
+                        f"syn:concurrent:{ids[0]}:{index}",
+                        {},
+                    )
+                    await db.commit()
+                    return "reserved"
+                except InsufficientBalance:
+                    await db.rollback()
+                    return "insufficient"
+
+        assert sorted(await asyncio.gather(reserve_one(1), reserve_one(2))) == [
+            "insufficient",
+            "reserved",
+        ]
+    finally:
+        await engine.dispose()
 
 
 
