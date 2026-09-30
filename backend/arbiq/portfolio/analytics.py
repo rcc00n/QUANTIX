@@ -446,3 +446,12 @@ async def performance(
         )
 
 
+def day_bounds(now):
+    local = now.astimezone(ZoneInfo(REPORT_TIMEZONE))
+    start = datetime.combine(local.date(), time.min, tzinfo=ZoneInfo(REPORT_TIMEZONE))
+    end = datetime.combine(
+        local.date() + timedelta(days=1), time.min, tzinfo=ZoneInfo(REPORT_TIMEZONE)
+    )
+    return local.date().isoformat(), start.astimezone(UTC), end.astimezone(UTC)
+
+
