@@ -800,3 +800,29 @@ def test_inventory_imbalance_restores_original_venue_shares():
     assert result["quantity_to_rebalance"] == 1 and result["imbalance_pct"] == 25
 
 
+async def test_numeric_38_18_reservations_keep_private_precision(database_url):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            session, a, _b, btc, _cad = await seed(db, D(100))
+            quantity = D("12345678901234567890.123456789123456789")
+            await fund(
+                db,
+                session.id,
+                a.id,
+                btc.id,
+                quantity,
+                D(100),
+                NOW,
+                "syn:large-fund:" + str(session.id),
+                {},
+            )
+            r = "syn:large-reserve:" + str(session.id)
+            amount = D("6172839450617283945.061728394561728394")
+            await reserve(db, session.id, [Reservation(a.id, btc.id, amount)], NOW, r, {})
+            await db.commit()
+            assert (await position(db, session.id, a.id, btc.id)).reserved_quantity == amount
+            assert await reconcile(db, session.id)
+    finally:
+        await engine.dispose()
