@@ -174,3 +174,17 @@ class PaperMarkets:
             provenance={"valuation_blockers": reasons},
         )
 
+    def prices(self, positions, now, research):
+        positions = [p for p in positions if p.quantity > 0]
+        clock = self.collector.utc_clock
+        needs_fx = any(
+            (asset := self.assets.get(p.asset_id)) and asset.canonical_key != "fiat:CAD"
+            for p in positions
+        )
+        fx = self.collector.scanner.fx_routes(now) if needs_fx and clock and clock.trusted else {}
+        return {
+            (p.exchange_id, p.asset_id): self.mark(
+                p.exchange_id, p.asset_id, p.quantity, now, research, fx=fx
+            )
+            for p in positions
+        }
