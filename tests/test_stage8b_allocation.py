@@ -257,5 +257,17 @@ def test_rejects_invalid_decimal_cad_identity_and_duplicate_options():
         )
 
 
+def test_fixed_portfolio_assessment_reconciles_two_leg_deficits_without_reallocation():
+    rules = AllocationConstraints(D(10000), target_trade_cad=D(500))
+    fixed = {Cell("buy", CAD): D(450), Cell("sell", BTC): D(1)}
+    demand = route(sell=marked("sell", BTC, "2", "250"))
+    result = describe_inventory(rules, [demand], fixed, as_of=NOW)
+    assert result["funded_route_count"] == 0
+    assert result["median_funded_acquisition_cad"] is None
+    pinned = result["route_capacity"][0]["target_pinned"]
+    assert D(pinned["buy"]["deficit_quantity"]) == 50
+    assert D(pinned["sell"]["deficit_quantity"]) == 1
+    assert result["route_capacity"][0]["fundable_with_reallocation"]
+    assert fixed == {Cell("buy", CAD): D(450), Cell("sell", BTC): D(1)}
 
 
