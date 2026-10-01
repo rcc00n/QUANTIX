@@ -678,6 +678,46 @@ async def test_daily_snapshot_sql_totals_and_immutable_history(database_url):
         await engine.dispose()
 
 
+async def test_research_scope_cannot_be_relabelled_validated(database_url):
+    from arbiq.paper_trading.models import PaperControl
+    from arbiq.portfolio.analytics import daily_snapshot, performance
+
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            session, a, _b, _btc, cad = await seed(db, D(100), name="SYNTHETIC RESEARCH")
+            db.add(
+                PaperControl(
+                    session_id=session.id,
+                    strategy_version_id=session.strategy_version_id,
+                    classification="RESEARCH",
+                    mode="RESEARCH_SHADOW",
+                    status="ACTIVE",
+                    settings={"synthetic": True},
+                    updated_at=NOW,
+                )
+            )
+            await fund(
+                db,
+                session.id,
+                a.id,
+                cad.id,
+                D(100),
+                D(100),
+                NOW,
+                "syn:research:" + str(session.id),
+                {"synthetic": True},
+            )
+            report = await snapshot(db, session.id, {}, NOW, research_only=False)
+            assert report["research_only"] is True and report["valuation_verified"] is False
+            metrics = await performance(db, session.id, research_only=False)
+            assert metrics["classification"] == "RESEARCH"
+            day = await daily_snapshot(db, session.id, {}, NOW, research_only=False)
+            assert day.payload["classification"] == "RESEARCH"
+            await db.commit()
+    finally:
+        await engine.dispose()
 
 
 
