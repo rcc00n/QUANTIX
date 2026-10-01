@@ -628,6 +628,54 @@ async def test_transfer_costs_preserve_basis_and_cannot_settle_early(database_ur
         await engine.dispose()
 
 
+async def test_daily_snapshot_sql_totals_and_immutable_history(database_url):
+    from arbiq.portfolio.analytics import daily_snapshot, performance
+    from sqlalchemy.exc import DBAPIError
+
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            session, a, _b, _btc, cad = await seed(db, D(100))
+            await fund(
+                db,
+                session.id,
+                a.id,
+                cad.id,
+                D(100),
+                D(100),
+                NOW,
+                "syn:daily-fund:" + str(session.id),
+                {"synthetic": True},
+            )
+            daily = await daily_snapshot(db, session.id, {}, NOW)
+            assert daily.timezone == "America/Edmonton"
+            assert daily.local_date == "2026-01-02" and daily.revision == 1
+            assert D(daily.payload["portfolio"]["equity_cad"]) == 100
+            assert D(daily.payload["cumulative"]["accounting"]["external_flows_cad"]) == 100
+            await db.commit()
+            session_id = session.id
+            second = await daily_snapshot(db, session_id, {}, NOW + timedelta(seconds=1))
+            assert second.revision == 2
+            await db.commit()
+            result = await performance(db, session_id)
+            assert result["completed_simulations"] == 0 and result["win_rate_pct"] is None
+            assert D(result["accounting"]["realized_trading_pnl_cad"]) == 0
+            for table in (
+                "accounting_movements",
+                "portfolio_checkpoints",
+                "daily_accounting_snapshots",
+            ):
+                for operation in (
+                    f"UPDATE {table} SET session_id=session_id WHERE session_id=:id",
+                    f"DELETE FROM {table} WHERE session_id=:id",
+                    f"TRUNCATE {table}",
+                ):
+                    with pytest.raises(DBAPIError, match="append-only"):
+                        await db.execute(text(operation), {"id": session_id})
+                    await db.rollback()
+    finally:
+        await engine.dispose()
 
 
 
