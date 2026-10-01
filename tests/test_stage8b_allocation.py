@@ -94,6 +94,19 @@ def test_nominal_budget_does_not_count_a_seven_dollar_result_or_round_up():
     assert "TARGET_TRADE_SIZE_NOT_FUNDED" in plan.reasons
 
 
+def test_larger_exact_priced_allocation_can_support_several_tiers():
+    rules = AllocationConstraints(D(50000), target_trade_cad=D(500))
+    plan = optimize_allocation(
+        "ROUTE_OPTIMIZED",
+        rules,
+        [route(budget="5000", amount="5000", net="100"), route()],
+        ["buy", "sell"],
+    )
+    assert band(plan, 5000)["funded_alternative_routes"] == 1
+    assert band(plan, 2500)["funded_alternative_routes"] == 1
+    assert plan.median_funded_acquisition_cad == 5000
+    active = [item for item in plan.allocations if not item.evidence.get("reserve")]
+    assert len(active) == 2 and all(item.quantity == 5000 for item in active)
 
 
 
