@@ -178,6 +178,28 @@ def test_liquidity_mode_can_fund_an_unprofitable_route_without_claiming_profit()
     assert "NO_POSITIVE_SIZED_ROUTE" in liquid.reasons
 
 
+def test_cutoff_rejects_future_evaluations_late_marks_and_venue_alias_self_comparison():
+    late = NOW + timedelta(seconds=1)
+    future_decision = replace(route("future"), evaluated_at=late)
+    future_mark = replace(route("late-mark").sell, evidence={"received_at": late.isoformat()})
+    late_input = route("late-mark", sell=future_mark)
+    aliases = route(
+        "aliases",
+        buy=marked("buy", CAD, "500", "1"),
+        sell=marked("buy-alias", BTC, "1", "500"),
+    )
+    evidence = [future_decision, late_input, aliases, route()]
+    plan = optimize_allocation(
+        "DIVERSIFIED_HYBRID",
+        AllocationConstraints(D(10000)),
+        evidence,
+        ["buy", "sell"],
+        venue_groups={"buy-alias": "buy"},
+        as_of=NOW,
+    )
+    assert [row["route_id"] for row in plan.route_capacity] == ["r1"]
+    assert "CAUSAL_FUNDING_EVIDENCE_UNAVAILABLE" in plan.reasons
+    assert "SAME_LIQUIDITY_VENUE" in plan.reasons
 
 
 
