@@ -720,6 +720,68 @@ async def test_research_scope_cannot_be_relabelled_validated(database_url):
         await engine.dispose()
 
 
+async def test_foreign_quote_disposal_realizes_currency_basis_once(database_url):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            session, a, _b, btc, _cad = await seed(db, D(100))
+            usd = Asset(
+                canonical_key="synthetic:USD:" + uuid4().hex,
+                symbol="USD",
+                kind="fiat",
+                identifiers={"synthetic": True},
+            )
+            db.add(usd)
+            await db.flush()
+            await fund(
+                db,
+                session.id,
+                a.id,
+                usd.id,
+                D(100),
+                D(100),
+                NOW,
+                "syn:usd:" + str(session.id),
+                {},
+            )
+            r = "syn:fx-reserve:" + str(session.id)
+            await reserve(db, session.id, [Reservation(a.id, usd.id, D(50))], NOW, r, {})
+            buy = await execute_leg(
+                db,
+                session.id,
+                a.id,
+                btc.id,
+                usd.id,
+                "buy",
+                D(1),
+                D(50),
+                D(0),
+                "quote",
+                D(60),
+                D("1.2"),
+                NOW,
+                "syn:fx-buy:" + str(session.id),
+                None,
+                {},
+                reservation_key=r,
+            )
+            assert buy.realized_fx_cad == 10 and buy.realized_trading_cad == 0
+            report = await snapshot(
+                db,
+                session.id,
+                {
+                    (a.id, usd.id): synthetic_mark("1.2"),
+                    (a.id, btc.id): synthetic_mark("60"),
+                },
+                NOW,
+            )
+            assert D(report["equity_cad"]) == 120
+            assert D(report["realized_fx_pnl_cad"]) == 10 and D(report["unrealized_pnl_cad"]) == 10
+            assert D(report["reconciliation_delta_cad"]) == 0
+            await db.commit()
+    finally:
+        await engine.dispose()
 
 
 
