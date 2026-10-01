@@ -78,6 +78,20 @@ def test_fixed_capital_and_two_legs_in_original_currency(policy, capital):
     assert all(D(item["deficit_quantity"]) == 0 for item in paired["deficits"])
 
 
+def test_nominal_budget_does_not_count_a_seven_dollar_result_or_round_up():
+    rules = AllocationConstraints(D(10000), target_trade_cad=D(500))
+    small = route("tiny", amount="7")
+    rounded = route("rounded", amount="499.99", sell=marked("sell", BTC, "5", "110"))
+    plan = optimize_allocation("DIVERSIFIED_HYBRID", rules, [small, rounded], ["buy", "sell"])
+    assert band(plan, 500)["funded_alternative_routes"] == 0
+    assert band(plan, 100)["funded_alternative_routes"] == 1
+    assert band(plan, 50)["funded_alternative_routes"] == 1
+    projected = {row["route_id"]: row for row in plan.route_capacity}
+    assert projected["tiny"]["maximum_funded_acquisition_cad"] is None
+    assert "BELOW_MINIMUM_BUY_CAPITAL" in projected["tiny"]["limiting_constraints"]
+    assert projected["rounded"]["maximum_funded_acquisition_cad"] == "499.99"
+    assert projected["rounded"]["target_pinned"]["target_met"] is False
+    assert "TARGET_TRADE_SIZE_NOT_FUNDED" in plan.reasons
 
 
 
