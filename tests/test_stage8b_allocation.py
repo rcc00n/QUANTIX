@@ -226,6 +226,24 @@ def test_modes_prioritize_liquidity_and_historical_net_differently():
     )
 
 
+def test_optimizer_is_deterministic_in_ambient_decimal_context_and_session_order():
+    rules = AllocationConstraints(D("10000.000000000000000001"), target_trade_cad=D("500"))
+    demands = [route(), route("r2", sell=marked("other-sell", ETH, "0.5", "1000"))]
+    first = optimize_allocation("DIVERSIFIED_HYBRID", rules, demands, ["buy", "sell", "other-sell"])
+    with localcontext() as ctx:
+        ctx.prec = 6
+        changed = optimize_allocation(
+            "DIVERSIFIED_HYBRID",
+            replace(rules, capital_cad=D(100)),
+            demands,
+            ["buy"],
+        )
+        second = optimize_allocation(
+            "DIVERSIFIED_HYBRID", rules, list(reversed(demands)), ["other-sell", "sell", "buy"]
+        )
+        assert first.as_payload() == second.as_payload()
+        assert D(changed.as_payload()["capital_cad"]) == 100
+    assert first.feasible
 
 
 
