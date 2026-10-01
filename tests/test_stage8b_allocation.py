@@ -202,6 +202,28 @@ def test_cutoff_rejects_future_evaluations_late_marks_and_venue_alias_self_compa
     assert "SAME_LIQUIDITY_VENUE" in plan.reasons
 
 
+def test_modes_prioritize_liquidity_and_historical_net_differently():
+    a = replace(route("a", amount="500", net="1"), liquidity_cad=D(1800))
+    b = replace(
+        route("b", amount="500", net="8", sell=marked("other-sell", BTC, "500", "1")),
+        liquidity_cad=D(1200),
+        frequency=4,
+    )
+    rules = AllocationConstraints(D(1450), target_trade_cad=D(500))
+    liquid = optimize_allocation("LIQUIDITY_WEIGHTED", rules, [a, b], ["buy", "sell"])
+    projected = optimize_allocation("ROUTE_OPTIMIZED", rules, [a, b], ["buy", "sell"])
+    assert (
+        next(row for row in liquid.route_capacity if row["route_id"] == "a")[
+            "maximum_funded_acquisition_cad"
+        ]
+        == "500"
+    )
+    assert (
+        next(row for row in projected.route_capacity if row["route_id"] == "b")[
+            "maximum_funded_acquisition_cad"
+        ]
+        == "500"
+    )
 
 
 
