@@ -109,6 +109,19 @@ def test_larger_exact_priced_allocation_can_support_several_tiers():
     assert len(active) == 2 and all(item.quantity == 5000 for item in active)
 
 
+def test_overlapping_alternatives_cannot_reserve_the_same_quote_twice():
+    d1 = route()
+    d2 = route("r2", sell=marked("other-sell", ETH, "1", "500"))
+    plan = optimize_allocation(
+        "LIQUIDITY_WEIGHTED",
+        AllocationConstraints(D(10000)),
+        [d1, d2],
+        ["buy", "sell", "other-sell"],
+    )
+    tier = band(plan, 500)
+    assert tier["funded_alternative_routes"] == 2
+    assert tier["simultaneous_funded_routes"] == 1
+    assert D(plan.allocation_summary["invested_cad"]) == 1500
 
 
 
