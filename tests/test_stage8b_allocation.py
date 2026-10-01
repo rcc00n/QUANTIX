@@ -271,3 +271,12 @@ def test_fixed_portfolio_assessment_reconciles_two_leg_deficits_without_realloca
     assert fixed == {Cell("buy", CAD): D(450), Cell("sell", BTC): D(1)}
 
 
+def test_held_inventory_cannot_use_future_price_or_depth_for_early_assessment():
+    rules = AllocationConstraints(D(10000), target_trade_cad=D(500))
+    held = {Cell("buy", CAD): D(10000), Cell("sell", BTC): D(500)}
+    future = replace(route(), evaluated_at=NOW + timedelta(seconds=1))
+    initial = describe_inventory(rules, [future], held, as_of=NOW)
+    assert initial["funded_route_count"] == 0
+    assert initial["inventory_evidence_exclusions"] == ["CAUSAL_FUNDING_EVIDENCE_UNAVAILABLE"]
+    final = describe_inventory(rules, [future], held, as_of=NOW + timedelta(seconds=1))
+    assert final["funded_route_count"] == 1
