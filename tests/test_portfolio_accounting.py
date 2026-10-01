@@ -552,6 +552,80 @@ async def test_base_fees_and_unknown_cad_never_invent_basis(database_url):
         await engine.dispose()
 
 
+async def test_transfer_costs_preserve_basis_and_cannot_settle_early(database_url):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            session, a, b, btc, _cad = await seed(db, D(100))
+            await fund(
+                db,
+                session.id,
+                a.id,
+                btc.id,
+                D(10),
+                D(100),
+                NOW,
+                "syn:fund:" + str(session.id),
+                {},
+            )
+            await db.commit()
+            evidence = {
+                "synthetic": True,
+                "settlement_delay_seconds": 30,
+                "network_compatible_verified": True,
+            }
+            with pytest.raises(AccountingError, match="delay"):
+                await transfer(
+                    db,
+                    session.id,
+                    a.id,
+                    b.id,
+                    btc.id,
+                    D(4),
+                    D(1),
+                    D(10),
+                    NOW,
+                    NOW,
+                    "syn:early:" + str(session.id),
+                    evidence,
+                )
+            await db.rollback()
+            await transfer(
+                db,
+                session.id,
+                a.id,
+                b.id,
+                btc.id,
+                D(4),
+                D(1),
+                D(10),
+                NOW,
+                NOW + timedelta(seconds=30),
+                "syn:transfer:" + str(session.id),
+                evidence,
+            )
+            await db.commit()
+            assert (await position(db, session.id, a.id, btc.id)).quantity == 5
+            target = await position(db, session.id, b.id, btc.id)
+            assert target.quantity == 4 and target.cost_basis_cad == 40
+            report = await snapshot(
+                db,
+                session.id,
+                {
+                    (a.id, btc.id): synthetic_mark(10, observed=NOW + timedelta(seconds=30)),
+                    (b.id, btc.id): synthetic_mark(10, observed=NOW + timedelta(seconds=30)),
+                },
+                NOW + timedelta(seconds=30),
+            )
+            assert D(report["equity_cad"]) == 90 and D(report["expenses_cad"]) == 10
+            assert (
+                D(report["realized_simulated_pnl_cad"]) == -10
+                and D(report["reconciliation_delta_cad"]) == 0
+            )
+            await db.commit()
+    finally:
+        await engine.dispose()
 
 
 
