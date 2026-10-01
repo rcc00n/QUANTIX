@@ -146,6 +146,20 @@ def test_tight_reserve_venue_cap_keeps_unplaced_cash_and_exact_reconciliation():
     )
 
 
+def test_stablecoin_cap_and_minimum_cell_reject_complete_pair_without_half_funding():
+    rules = AllocationConstraints(D(10000), max_stablecoin_pct=D(1), min_cell_cad=D(250))
+    usdc = route("stable", buy=marked("buy", USDC, "500", "1.02"))
+    too_small = route("dust", sell=marked("sell", BTC, "2", "100"))
+    plan = optimize_allocation(
+        "LIQUIDITY_WEIGHTED", rules, [usdc, too_small], ["buy", "sell"], [USDC]
+    )
+    assert all(item.cell.asset == CAD for item in plan.allocations)
+    assert plan.allocation_summary["funded_venues"] == 0
+    assert not plan.feasible
+    assert "MINIMUM_FUNDED_VENUES_UNAVAILABLE" in plan.reasons
+    by_route = {row["route_id"]: row["limiting_constraints"] for row in plan.route_capacity}
+    assert "STABLECOIN_EXPOSURE_LIMIT" in by_route["stable"]
+    assert "BELOW_MINIMUM_USEFUL_CELL" in by_route["dust"]
 
 
 
