@@ -162,6 +162,20 @@ def test_stablecoin_cap_and_minimum_cell_reject_complete_pair_without_half_fundi
     assert "BELOW_MINIMUM_USEFUL_CELL" in by_route["dust"]
 
 
+def test_liquidity_mode_can_fund_an_unprofitable_route_without_claiming_profit():
+    demand = route(net="-3")
+    rules = AllocationConstraints(D(10000), target_trade_cad=D(500))
+    liquid = optimize_allocation("LIQUIDITY_WEIGHTED", rules, [demand], ["buy", "sell"])
+    profit = optimize_allocation("ROUTE_OPTIMIZED", rules, [demand], ["buy", "sell"])
+    assert band(liquid, 500)["funded_alternative_routes"] == 1
+    assert band(liquid, 500)["profitable_funded_routes"] == 0
+    assert band(profit, 500)["funded_alternative_routes"] == 0
+    assert D(liquid.route_capacity[0]["projected_net_profit_cad"]) == -3
+    assert "NON_POSITIVE_NET_PROJECTION" in liquid.route_capacity[0]["limiting_constraints"]
+    assert (
+        "INSUFFICIENT_PRE_FUNDED_INVENTORY" not in liquid.route_capacity[0]["limiting_constraints"]
+    )
+    assert "NO_POSITIVE_SIZED_ROUTE" in liquid.reasons
 
 
 
