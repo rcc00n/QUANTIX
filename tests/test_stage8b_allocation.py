@@ -246,6 +246,15 @@ def test_optimizer_is_deterministic_in_ambient_decimal_context_and_session_order
     assert first.feasible
 
 
+def test_rejects_invalid_decimal_cad_identity_and_duplicate_options():
+    with pytest.raises(ValueError, match="CAD identity"):
+        marked("buy", CAD, "100", "1.02")
+    with pytest.raises(ValueError, match="Decimal"):
+        AllocationConstraints(1000.0)
+    with pytest.raises(ValueError, match="one exact observation"):
+        optimize_allocation(
+            "ROUTE_OPTIMIZED", AllocationConstraints(D(10000)), [route(), route()], []
+        )
 
 
 
