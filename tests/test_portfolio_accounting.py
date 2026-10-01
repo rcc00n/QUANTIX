@@ -784,5 +784,19 @@ async def test_foreign_quote_disposal_realizes_currency_basis_once(database_url)
         await engine.dispose()
 
 
+def test_inventory_imbalance_restores_original_venue_shares():
+    from arbiq.portfolio.valuation import inventory_imbalance
+
+    a, b, asset = uuid4(), uuid4(), uuid4()
+    positions = [
+        {"exchange_id": a, "asset_id": asset, "quantity": D(1)},
+        {"exchange_id": b, "asset_id": asset, "quantity": D(3)},
+    ]
+    initial = [
+        {"exchange_id": str(a), "asset_id": str(asset), "quantity": "2"},
+        {"exchange_id": str(b), "asset_id": str(asset), "quantity": "2"},
+    ]
+    result = inventory_imbalance(positions, initial)[0]
+    assert result["quantity_to_rebalance"] == 1 and result["imbalance_pct"] == 25
 
 
