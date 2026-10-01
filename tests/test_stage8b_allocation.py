@@ -124,6 +124,26 @@ def test_overlapping_alternatives_cannot_reserve_the_same_quote_twice():
     assert D(plan.allocation_summary["invested_cad"]) == 1500
 
 
+def test_tight_reserve_venue_cap_keeps_unplaced_cash_and_exact_reconciliation():
+    rules = AllocationConstraints(
+        D(10000),
+        max_venue_pct=D(35),
+        max_asset_pct=D(60),
+        max_reserve_pct=D(40),
+    )
+    plan = optimize_allocation("DIVERSIFIED_HYBRID", rules, [route()], ["buy", "sell"])
+    payload = plan.as_payload()
+    assert not plan.feasible
+    assert "UNPLACED_CAD_WITHIN_RESERVE_AND_CONCENTRATION_LIMITS" in plan.reasons
+    assert D(payload["allocation_summary"]["reserve_cad"]) == 4000
+    assert sum((a.cad_value for a in plan.allocations), D(0)) + plan.unallocated_cad == 10000
+    assert D(payload["total_cad"]) + D(payload["unallocated_cad"]) == 10000
+    assert all(
+        D(row["share_pct"]) <= 35 for row in payload["allocation_summary"]["by_exchange"].values()
+    )
+    assert all(
+        D(row["share_pct"]) <= 60 for row in payload["allocation_summary"]["by_asset"].values()
+    )
 
 
 
