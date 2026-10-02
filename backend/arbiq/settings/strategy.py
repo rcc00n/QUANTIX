@@ -84,3 +84,31 @@ def minimum_buy_satisfied(strategy: PaperStrategy, acquisition_cost_cad) -> bool
     return acquisition_cost_cad is not None and acquisition_cost_cad >= strategy.min_buy_capital_cad
 
 
+def presets():
+    return {
+        "Conservative": PaperStrategy(
+            preset="Conservative",
+            trade_amount_cad="500",
+            minimum_profit_cad="10",
+            minimum_profit_pct="1",
+            minimum_liquidity_cad="500",
+            maximum_concurrent=1,
+            maximum_loss_cad="20",
+        ),
+        "Balanced": PaperStrategy(),
+        "Aggressive Research": PaperStrategy(
+            preset="Aggressive Research",
+            mode="RESEARCH_SHADOW",
+            trade_amount_cad="250",
+            minimum_profit_cad="0",
+            minimum_profit_pct="0",
+            minimum_liquidity_cad="1",
+            threshold_logic="OR",
+            minimum_confidence="ANOMALY_RESEARCH",
+            allow_missing_source_timestamp=True,
+            maximum_concurrent=3,
+            maximum_loss_cad="25",
+        ),
+    }
+
+
