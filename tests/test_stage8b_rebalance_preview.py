@@ -36,5 +36,30 @@ def test_unknown_network_availability_fees_and_settlement_block_transfer():
     assert data["no_rebalance_benchmark"]["destination_deficit"] == "6"
 
 
+def test_rebalance_conserves_asset_after_explicit_network_fees_and_buffer():
+    data = scenario(
+        minimum_source_available="4",
+        network="SYNTHETIC-ROLLUP",
+        withdrawal_available=True,
+        deposit_available=True,
+        withdrawal_fee_quantity="0.5",
+        network_fee_quantity="1.5",
+        settlement_seconds=120,
+    )
+    assert data["status"] == "RESEARCH_TRANSFER_ESTIMATE" and data["execution_performed"] is False
+    result = data["hypothetical_transfer"]
+    assert D(result["source_debit_quantity"]) == 6
+    assert D(result["delivered_quantity_after_settlement"]) == 4
+    assert D(result["fee_quantity"]) == 2
+    assert D(result["destination_quantity_before_settlement"]) == 1
+    assert (
+        D(result["source_remaining_quantity"])
+        + D(result["destination_quantity_after_settlement"])
+        + D(result["fee_quantity"])
+        == 11
+    )
+    assert D(result["remaining_destination_deficit"]) == 2
+    assert datetime.fromisoformat(result["estimated_available_at"]) == NOW + timedelta(minutes=2)
+    assert result["transfer_fee_cad"] is None and result["expected_pnl_cad"] is None
 
 
