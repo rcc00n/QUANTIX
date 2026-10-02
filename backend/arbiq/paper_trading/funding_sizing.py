@@ -44,3 +44,14 @@ class PinnedPair:
     provenance: dict
 
 
+@dataclass(frozen=True, slots=True)
+class SizedPair:
+    evaluation: Evaluation
+    acquisition_cad: Decimal
+    reserved_acquisition_cad: Decimal
+    buy_quote: Decimal
+    sell_base: Decimal
+    buy_mark_rate: Decimal
+    sell_mark_rate: Decimal
+
+
