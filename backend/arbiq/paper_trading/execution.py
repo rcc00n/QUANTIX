@@ -273,3 +273,11 @@ def recheck_projection(
         return result
 
 
+def floor_derived(quantity: Decimal, step: Decimal) -> Decimal:
+    """Round an internal78-digit intermediate before NUMERIC input validation."""
+    exact_decimal(step)
+    if not isinstance(quantity, Decimal) or not quantity.is_finite() or quantity < 0 or step <= 0:
+        raise ValueError("Invalid derived quantity")
+    with localcontext() as ctx:
+        ctx.prec = 78
+        return exact_decimal((quantity / step).to_integral_value(rounding=ROUND_FLOOR) * step)
