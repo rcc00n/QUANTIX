@@ -63,3 +63,19 @@ def test_rebalance_conserves_asset_after_explicit_network_fees_and_buffer():
     assert result["transfer_fee_cad"] is None and result["expected_pnl_cad"] is None
 
 
+def test_required_conversion_is_not_assumed_to_be_free_or_executable():
+    data = scenario(
+        network="SYNTHETIC",
+        withdrawal_available=True,
+        deposit_available=True,
+        withdrawal_fee_quantity="0.01",
+        network_fee_quantity="0.01",
+        settlement_seconds=100,
+        conversion_required=True,
+        conversion_cost_cad="2",
+    )
+    assert data["status"] == "BLOCKED"
+    assert data["blockers"] == [
+        "CROSS_ASSET_CONVERSION_REQUIRES_SEPARATE_EXECUTION_AND_FX_EVIDENCE"
+    ]
+    assert data["request"]["conversion_cost_cad"] == "2"
