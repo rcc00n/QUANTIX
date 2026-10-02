@@ -67,3 +67,21 @@ def projected_costs(evaluation: Evaluation) -> dict[str, str | None]:
     }
 
 
+def checked_book(book: dict, at: datetime, age: timedelta, allow_receipt_only: bool) -> bool:
+    receipt = time_value(book["received_at"])
+    source = time_value(book["exchange_timestamp"]) if book.get("exchange_timestamp") else None
+    verification = book.get("verification", {})
+    if book.get("state") not in {"HEALTHY", "DEGRADED"}:
+        raise ValueError("BOOK_QUALITY_BLOCKS_ALLOCATION")
+    if (
+        not timedelta(0) <= at - receipt <= age
+        or (source is not None and (source > receipt or not timedelta(0) <= at - source <= age))
+        or verification.get("clock", {}).get("trusted") is False
+        or verification.get("last_error_code")
+    ):
+        raise ValueError("STALE_UNTRUSTED_OR_FUTURE_BOOK")
+    if source is None and not allow_receipt_only:
+        raise ValueError("SOURCE_TIMESTAMP_MISSING")
+    return source is not None and book["state"] == "HEALTHY"
+
+
