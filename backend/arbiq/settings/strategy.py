@@ -79,3 +79,8 @@ def read_pinned_strategy(settings: dict) -> PaperStrategy:
     return PaperStrategy.model_validate({"min_buy_capital_cad": "0", **settings})
 
 
+def minimum_buy_satisfied(strategy: PaperStrategy, acquisition_cost_cad) -> bool:
+    """Actual fee-inclusive acquisition capital, independently of profit OR/AND."""
+    return acquisition_cost_cad is not None and acquisition_cost_cad >= strategy.min_buy_capital_cad
+
+
