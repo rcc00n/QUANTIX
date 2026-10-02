@@ -55,3 +55,15 @@ class SizedPair:
     sell_mark_rate: Decimal
 
 
+def projected_costs(evaluation: Evaluation) -> dict[str, str | None]:
+    return {
+        key: format(value, "f") if value is not None else None
+        for key, value in {
+            "fees_cad": evaluation.fees_cad,
+            "fx_drag_cad": evaluation.fx_cost_cad,
+            "slippage_reserve_cad": evaluation.slippage_reserve_cad,
+            "rebalancing_cad": evaluation.rebalancing_cost_cad,
+        }.items()
+    }
+
+
