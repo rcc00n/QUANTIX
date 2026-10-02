@@ -200,3 +200,76 @@ def simulate_leg(
         )
 
 
+def recheck_projection(
+    *,
+    buy_book,
+    sell_book,
+    buy_input,
+    sell_input,
+    planned_quantity,
+    decision_at,
+    strategy,
+    captured_fx=None,
+):
+    """Approval before the first leg uses only information available at that time."""
+    from arbiq.opportunities.analysis import dump_input, load_input
+    from arbiq.opportunities.contracts import Costs
+    from arbiq.opportunities.math import evaluate_route, maximum_quantity
+    from arbiq.settings.strategy import minimum_buy_satisfied
+
+    with localcontext() as ctx:
+        ctx.prec = 78
+        if buy_book is None or sell_book is None:
+            raise ValueError("NO_CAUSAL_OPPOSITE_BOOK")
+        for book in (buy_book, sell_book):
+            good, reason = evidence_eligibility(
+                book,
+                now=decision_at,
+                eligible_at=book.received_at,
+                maximum_age=strategy.maximum_book_age_seconds,
+                research=strategy.mode == "RESEARCH_SHADOW",
+                allow_missing=strategy.allow_missing_source_timestamp,
+                minimum_confidence=strategy.minimum_confidence,
+            )
+            if not good:
+                raise ValueError(reason)
+        if buy_book.market_id != __import__("uuid").UUID(
+            buy_input.market_id
+        ) or sell_book.market_id != __import__("uuid").UUID(sell_input.market_id):
+            raise ValueError("MARKET_IDENTITY_MISMATCH")
+
+        def update(m, b):
+            raw = dump_input(m)
+            raw.update(
+                asks=[x.model_dump(mode="json") for x in b.normalized.asks],
+                bids=[x.model_dump(mode="json") for x in b.normalized.bids],
+            )
+            if captured_fx and m.quote_currency in captured_fx:
+                raw["fx"] = captured_fx[m.quote_currency]
+            return load_input(raw)
+
+        buy, sell = update(buy_input, buy_book), update(sell_input, sell_book)
+        q = min(planned_quantity, maximum_quantity(buy, sell))
+        result = evaluate_route(
+            buy,
+            sell,
+            q,
+            now=decision_at,
+            costs=Costs(slippage_bps=strategy.slippage_bps, rebalancing_bps=strategy.rebalance_bps),
+        )
+        if result.net_profit_cad is None:
+            raise ValueError("CAD_RECHECK_VALUATION_UNAVAILABLE")
+        if not minimum_buy_satisfied(strategy, result.acquisition_cost_cad):
+            raise ValueError("MINIMUM_BUY_CAPITAL")
+        allowed = [
+            result.net_profit_cad >= strategy.minimum_profit_cad,
+            result.net_return_pct >= strategy.minimum_profit_pct,
+        ]
+        if (
+            not (all(allowed) if strategy.threshold_logic == "AND" else any(allowed))
+            or result.net_profit_cad < -strategy.maximum_loss_cad
+        ):
+            raise ValueError("SPREAD_DISAPPEARED")
+        return result
+
+
