@@ -54,3 +54,50 @@ def planned_reserves(
         )
 
 
+def evidence_eligibility(
+    book: CapturedBook,
+    *,
+    now: datetime,
+    eligible_at: datetime,
+    maximum_age: int,
+    research: bool,
+    allow_missing: bool = False,
+    clock_trusted: bool = True,
+    minimum_confidence: str | None = None,
+) -> tuple[bool, str]:
+    if not clock_trusted:
+        return False, "UTC_UNTRUSTED"
+    if book.received_at < eligible_at:
+        return False, "OBSERVATION_BEFORE_REACTION_DELAY"
+    if not 0 <= (now - book.received_at).total_seconds() <= maximum_age:
+        return False, "INGESTION_STALE_OR_FUTURE"
+    if book.exchange_timestamp is None:
+        if not research or not allow_missing:
+            return False, "SOURCE_TIMESTAMP_UNAVAILABLE"
+    elif not 0 <= (now - book.exchange_timestamp).total_seconds() <= maximum_age:
+        return False, "SOURCE_STALE_OR_FUTURE"
+    unsafe = {"collector_clock_jump", "symbol_mismatch", "last_request_failed"}
+    if any(
+        r in unsafe or r.startswith(("invalid_", "unordered_")) or "crossed" in r
+        for r in book.reasons
+    ):
+        return False, "UNSAFE_BOOK_EVIDENCE"
+    if book.state in {DataState.STALE, DataState.UNAVAILABLE}:
+        return False, "BOOK_" + book.state.value
+    minimum_confidence = minimum_confidence or ("ANOMALY_RESEARCH" if research else "HEALTHY")
+    if minimum_confidence == "HEALTHY" and book.state != DataState.HEALTHY:
+        return False, "CONFIDENCE_BELOW_STRATEGY_MINIMUM"
+    if minimum_confidence == "DEGRADED" and book.state not in {
+        DataState.HEALTHY,
+        DataState.DEGRADED,
+    }:
+        return False, "CONFIDENCE_BELOW_STRATEGY_MINIMUM"
+    if not research and book.state != DataState.HEALTHY:
+        return False, "UNVERIFIED_BOOK"
+    if not book.normalized.asks or not book.normalized.bids:
+        return False, "MISSING_DEPTH"
+    if book.normalized.bids[0].price >= book.normalized.asks[0].price:
+        return False, "CROSSED_BOOK"
+    return True, "RESEARCH_OBSERVED" if research else "VALIDATED_OBSERVED"
+
+
