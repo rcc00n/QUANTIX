@@ -112,3 +112,32 @@ def presets():
     }
 
 
+async def save_strategy(db, user_id, settings, now, reason="Owner updated paper strategy"):
+    await db.scalar(select(User).where(User.id == user_id).with_for_update())
+    version = (
+        await db.scalar(
+            select(func.max(StrategyVersion.version)).where(StrategyVersion.user_id == user_id)
+        )
+        or 0
+    ) + 1
+    row = StrategyVersion(
+        user_id=user_id, version=version, settings=settings.model_dump(mode="json"), reason=reason
+    )
+    db.add(row)
+    await db.flush()
+    head = await db.get(StrategyHead, user_id)
+    if head:
+        head.strategy_version_id = row.id
+        head.updated_at = now
+    else:
+        db.add(StrategyHead(user_id=user_id, strategy_version_id=row.id, updated_at=now))
+    db.add(
+        SystemEvent(
+            actor_user_id=user_id,
+            event_type="strategy.version_created",
+            severity="info",
+            message="Paper strategy version created",
+            details={"version": version, "strategy_version_id": str(row.id)},
+        )
+    )
+    return row
