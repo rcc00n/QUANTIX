@@ -177,3 +177,11 @@ def read_pair(evaluation, cutoff: datetime, strategy: PaperStrategy) -> PinnedPa
     )
 
 
+def floor_step(value: Decimal, step: Decimal) -> Decimal:
+    return (value / step).to_integral_value(rounding=ROUND_DOWN) * step
+
+
+def ceil_step(value: Decimal, step: Decimal) -> Decimal:
+    return (value / step).to_integral_value(rounding=ROUND_CEILING) * step
+
+
