@@ -69,3 +69,13 @@ class PaperStrategy(Contract):
         return self
 
 
+def read_pinned_strategy(settings: dict) -> PaperStrategy:
+    """Read immutable legacy settings without changing their historical behavior.
+
+    New strategy requests default to C$50. Versions written before this independent
+    constraint existed had no minimum-buy rule; an absent field means zero only
+    when reading an already persisted version or scheduled trade.
+    """
+    return PaperStrategy.model_validate({"min_buy_capital_cad": "0", **settings})
+
+
