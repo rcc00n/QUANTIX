@@ -33,3 +33,14 @@ def time_value(value: object) -> datetime:
     return result
 
 
+@dataclass(frozen=True, slots=True)
+class PinnedPair:
+    buy: MarketInput
+    sell: MarketInput
+    at: datetime
+    costs: Costs
+    maximum_age_seconds: int
+    reliability: Decimal
+    provenance: dict
+
+
