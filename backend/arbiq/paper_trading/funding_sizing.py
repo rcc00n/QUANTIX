@@ -185,3 +185,26 @@ def ceil_step(value: Decimal, step: Decimal) -> Decimal:
     return (value / step).to_integral_value(rounding=ROUND_CEILING) * step
 
 
+@decimal_context
+def price_size(pair: PinnedPair, quantity: Decimal, *, contribution_marks=True) -> SizedPair:
+    evaluation = evaluate_route(pair.buy, pair.sell, quantity, now=pair.at, costs=pair.costs)
+    cash, base = planned_reserves(evaluation, pair.buy.fee, pair.sell.fee, pair.costs.slippage_bps)
+    buy_fx, sell_fx = pair.buy.fx, pair.sell.fx
+    if buy_fx is None or sell_fx is None or evaluation.net_profit_cad is None:
+        raise ValueError("CAD_CONVERSION_UNAVAILABLE")
+    acquisition = evaluation.acquisition_cost_cad
+    if acquisition is None:
+        raise ValueError("CAD_CONVERSION_UNAVAILABLE")
+    reserved = required_input(buy_fx.from_cad, cash)
+    if not contribution_marks:
+        return SizedPair(evaluation, acquisition, reserved, cash, base, ZERO, ZERO)
+    # Assets enter at full-size liquidation value, independent from trade proceeds.
+    buy_rate = (convert(buy_fx.to_cad, cash) / cash).quantize(SCALE, rounding=ROUND_DOWN)
+    sell_rate = (convert(sell_fx.to_cad, fill_depth(pair.sell.bids, base)) / base).quantize(
+        SCALE, rounding=ROUND_DOWN
+    )
+    if min(buy_rate, sell_rate) <= 0:
+        raise ValueError("NON_STORABLE_MARK")
+    return SizedPair(evaluation, acquisition, reserved, cash, base, buy_rate, sell_rate)
+
+
