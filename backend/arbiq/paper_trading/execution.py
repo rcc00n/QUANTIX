@@ -101,3 +101,102 @@ def evidence_eligibility(
     return True, "RESEARCH_OBSERVED" if research else "VALIDATED_OBSERVED"
 
 
+def simulate_leg(
+    book: CapturedBook,
+    side: str,
+    requested: Decimal,
+    available: Decimal,
+    fee: Fee,
+    rules: MarketRules,
+    slippage_bps: Decimal = Decimal(0),
+    maximum_slippage_bps: Decimal | None = None,
+) -> LegFill:
+    with localcontext() as ctx:
+        ctx.prec = 78
+        requested, available, slippage_bps = map(
+            exact_decimal, (requested, available, slippage_bps)
+        )
+        if (
+            side not in {"buy", "sell"}
+            or requested <= 0
+            or available < 0
+            or not 0 <= slippage_bps <= 10000
+        ):
+            raise ValueError("Invalid leg inputs")
+        levels = book.normalized.asks if side == "buy" else book.normalized.bids
+        quantity = min(requested, sum((x.quantity for x in levels), Decimal(0)))
+        if rules.max_quantity:
+            quantity = min(quantity, rules.max_quantity)
+        if rules.max_notional:
+            quantity = min(quantity, quantity_for_notional(levels, rules.max_notional))
+        slip = slippage_bps / Decimal(10000)
+        factor = Decimal(1) + slip if side == "buy" else Decimal(1) - slip
+        if factor <= 0:
+            raise ValueError("No sale proceeds after reserve")
+        if rules.max_notional:
+            quantity = min(quantity, quantity_for_notional(levels, rules.max_notional / factor))
+        if side == "buy":
+            # The paper ledger rounds the modeled principal upward before charging
+            # fees. Both the budget and the principal are integer accounting units.
+            # principal + ceil(principal*rate) <= budget is therefore equivalent
+            # to principal <= floor(budget/(1+rate)) on that same grid.
+            modeled_budget = (
+                floor_derived(available / (1 + fee.rate), UNIT)
+                if fee.currency == "quote"
+                else available
+            )
+            quote_budget = modeled_budget / factor
+            quantity = min(quantity, quantity_for_notional(levels, quote_budget))
+        else:
+            quantity = min(quantity, available / (1 + fee.rate if fee.currency == "base" else 1))
+        quantity = floor_derived(quantity, rules.amount_step or UNIT)
+        if quantity <= 0:
+            raise ValueError("INSUFFICIENT_INVENTORY_OR_DEPTH")
+        observed = fill_depth(levels, quantity)
+        if rules.min_quantity and quantity < rules.min_quantity:
+            raise ValueError("MINIMUM_QUANTITY")
+        if rules.min_notional and observed < rules.min_notional:
+            raise ValueError("MINIMUM_NOTIONAL")
+        modeled = (observed * factor).quantize(
+            UNIT, rounding=ROUND_CEILING if side == "buy" else ROUND_FLOOR
+        )
+        if maximum_slippage_bps is not None:
+            limit = exact_decimal(maximum_slippage_bps)
+            impact = (
+                (modeled / quantity / levels[0].price - 1)
+                if side == "buy"
+                else (1 - modeled / quantity / levels[0].price)
+            ) * 10000
+            if not 0 <= limit <= 10000 or impact > limit:
+                raise ValueError("MAXIMUM_SLIPPAGE_EXCEEDED")
+        if rules.min_notional and modeled < rules.min_notional:
+            raise ValueError("MINIMUM_NOTIONAL_AFTER_SLIPPAGE")
+        charge = ((quantity if fee.currency == "base" else modeled) * fee.rate).quantize(
+            UNIT, rounding=ROUND_CEILING
+        )
+        if modeled <= 0:
+            raise ValueError("QUOTE_NOTIONAL_BELOW_ACCOUNTING_PRECISION")
+        if side == "buy":
+            spend = modeled + (charge if fee.currency == "quote" else 0)
+            credit = quantity - (charge if fee.currency == "base" else 0)
+        else:
+            spend = quantity + (charge if fee.currency == "base" else 0)
+            credit = modeled - (charge if fee.currency == "quote" else 0)
+        if spend > available:
+            raise ValueError("INSUFFICIENT_ROUNDED_RESERVATION")
+        if credit <= 0:
+            raise ValueError("FEE_CONSUMES_MODELED_PROCEEDS")
+        return LegFill(
+            requested,
+            quantity,
+            observed,
+            modeled,
+            observed / quantity,
+            modeled / quantity,
+            charge,
+            fee.currency,
+            abs(modeled - observed),
+            quantity < requested,
+        )
+
+
