@@ -85,3 +85,95 @@ def checked_book(book: dict, at: datetime, age: timedelta, allow_receipt_only: b
     return source is not None and book["state"] == "HEALTHY"
 
 
+def read_pair(evaluation, cutoff: datetime, strategy: PaperStrategy) -> PinnedPair:
+    """Value depth at its own decision time and admit only records retained by cutoff."""
+    evidence = evaluation.evidence
+    inputs = evidence["calculation_inputs"]
+    at = time_value(inputs["evaluated_at"])
+    completed = evidence.get("timing", {}).get("evaluated_at")
+    if (
+        at > evaluation.evaluated_at
+        or evaluation.evaluated_at > cutoff
+        or evaluation.created_at > cutoff
+        or (completed and time_value(completed) > cutoff)
+        or not evidence.get("clock", {}).get("trusted")
+    ):
+        raise ValueError("EVALUATION_NOT_AVAILABLE_AT_CUTOFF")
+    buy = load_input(inputs["buy"])
+    sell = load_input(inputs["sell"])
+    age = timedelta(seconds=strategy.maximum_book_age_seconds)
+    books = (evidence["buy_book"], evidence["sell_book"])
+    confidence = [
+        checked_book(book, at, age, strategy.allow_missing_source_timestamp) for book in books
+    ]
+    if abs(time_value(books[0]["received_at"]) - time_value(books[1]["received_at"])) > timedelta(
+        seconds=10
+    ):
+        raise ValueError("CROSS_BOOK_RECEIPT_SKEW")
+    fx_evidence = evidence.get("fx_books", {})
+    used_fx = set()
+    for item in (buy, sell):
+        fx = item.fx
+        if fx is None or fx.fresh_until < at:
+            raise ValueError("CAD_CONVERSION_UNAVAILABLE")
+        if item.quote_currency == "CAD":
+            continue
+        if (
+            fx.observed_at is None
+            or fx.available_at is None
+            or not (
+                timedelta(0) <= at - fx.available_at <= age
+                and timedelta(0) <= at - fx.observed_at <= age
+            )
+        ):
+            raise ValueError("FX_NOT_CAUSALLY_AVAILABLE")
+        for leg in (*fx.to_cad.legs, *fx.from_cad.legs):
+            identifier, separator, content = leg.evidence.partition(":")
+            book = fx_evidence.get(identifier)
+            if not separator or not book or content != book.get("content_sha256"):
+                raise ValueError("FX_BOOK_PROVENANCE_MISSING")
+            checked_book(book, at, age, False)
+            used_fx.add(leg.evidence)
+    buy = replace(
+        buy, fee=Fee(max(buy.fee.rate, strategy.taker_fee_rate), strategy.buy_fee_currency)
+    )
+    sell = replace(
+        sell, fee=Fee(max(sell.fee.rate, strategy.taker_fee_rate), strategy.sell_fee_currency)
+    )
+    mark_books = (*books, *(fx_evidence[key.partition(":")[0]] for key in sorted(used_fx)))
+    mark_sources = [
+        time_value(b["exchange_timestamp"]) for b in mark_books if b.get("exchange_timestamp")
+    ]
+    provenance = {
+        "source": "PINNED_DEPTH_LIQUIDATION_CAD_MARK",
+        "hypothetical_initial_inventory": True,
+        "historical_projection": True,
+        "evaluation_id": str(evaluation.id),
+        "evaluated_at": at.isoformat(),
+        "recorded_at": evaluation.created_at.isoformat(),
+        "received_at": min(time_value(book["received_at"]) for book in mark_books).isoformat(),
+        "observed_at": min(mark_sources).isoformat()
+        if len(mark_sources) == len(mark_books)
+        else None,
+        "buy_book_sha256": books[0]["content_sha256"],
+        "sell_book_sha256": books[1]["content_sha256"],
+        "buy_snapshot_id": str(evaluation.buy_snapshot_id),
+        "sell_snapshot_id": str(evaluation.sell_snapshot_id),
+        "buy_fee_version_id": str(evaluation.buy_fee_version_id),
+        "sell_fee_version_id": str(evaluation.sell_fee_version_id),
+        "fx_book_references": sorted(used_fx),
+        "source_timestamps_complete": all(bool(book.get("exchange_timestamp")) for book in books),
+        "account_eligibility_verified": False,
+        "fees_verified": False,
+    }
+    return PinnedPair(
+        buy,
+        sell,
+        at,
+        Costs(slippage_bps=strategy.slippage_bps, rebalancing_bps=strategy.rebalance_bps),
+        strategy.maximum_book_age_seconds,
+        ONE if all(confidence) else Decimal("0.5"),
+        provenance,
+    )
+
+
