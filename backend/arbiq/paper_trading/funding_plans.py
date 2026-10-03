@@ -183,3 +183,44 @@ def funding_demands(
     return cohort
 
 
+def _legacy_point(cohort, pair: PinnedPair, history, base, strategy, details):
+    """Replicate the old max-net point under a cap using the matched cohort."""
+    try:
+        budget = (strategy.trade_amount_cad / (1 + strategy.slippage_bps / 10000)).quantize(
+            SCALE, rounding=ROUND_DOWN
+        )
+        best = optimize_route(
+            pair.buy,
+            pair.sell,
+            budget_cad=budget,
+            now=pair.at,
+            costs=pair.costs,
+            budgets=(),
+            max_search_evaluations=128,
+        ).best
+        if best is None:
+            return
+        point = price_size(pair, best.buy_quantity)
+        items = details(point)
+        cohort.legacy_requirements.append(
+            {
+                **base,
+                "required": items,
+                "funded": False,
+                "reasons": [],
+                "actual_projected_acquisition_cad": str(point.acquisition_cad),
+                "projected_net_profit_cad": str(point.evaluation.net_profit_cad),
+            }
+        )
+        for row, rate in zip(items, (point.buy_mark_rate, point.sell_mark_rate), strict=True):
+            key = (row["exchange_id"], row["asset_id"], Decimal(row["required_quantity"]))
+            # Keep the latest causally sourced full-size mark for a shared cell/quantity.
+            last = cohort.legacy_marks.get(key, {})
+            if last.get("evaluated_at", "") <= pair.provenance["evaluated_at"]:
+                cohort.legacy_marks[key] = {
+                    **pair.provenance,
+                    "cad_per_unit": str(rate),
+                    "quantity": row["required_quantity"],
+                }
+    except (ValueError, ArithmeticError):
+        cohort.exclusions["LEGACY_POINT_UNAVAILABLE"] += 1
