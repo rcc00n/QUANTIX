@@ -208,3 +208,71 @@ def price_size(pair: PinnedPair, quantity: Decimal, *, contribution_marks=True) 
     return SizedPair(evaluation, acquisition, reserved, cash, base, buy_rate, sell_rate)
 
 
+@decimal_context
+def size_at_budget(
+    pair: PinnedPair,
+    budget: Decimal,
+    *,
+    at_least=False,
+    buy_available=None,
+    sell_available=None,
+    contribution_marks=True,
+) -> SizedPair | None:
+    """Exact executable point at a budget boundary, bounded by both venue and FX depth.
+
+    Proposed inventory can hold the first discrete point at or above a target, while
+    a session executing under a hard budget uses the point at or below that cap.
+    A smaller depth-limited point is returned with its true acquisition amount.
+    """
+    buy, sell = pair.buy, pair.sell
+    if buy.fx is None or sell.fx is None or budget <= 0:
+        return None
+    step = buy.rules.amount_step or SCALE
+    slippage = ONE + pair.costs.slippage_bps / 10000
+    buy_factor = ONE + (buy.fee.rate if buy.fee.currency == "quote" else ZERO)
+    acquired = ONE - (buy.fee.rate if buy.fee.currency == "base" else ZERO)
+    sell_factor = ONE + (sell.fee.rate if sell.fee.currency == "base" else ZERO)
+    buy_capacity = conversion_capacity(buy.fx.from_cad)
+    budget_input = min(budget, buy_capacity) if buy_capacity is not None else budget
+    quote = convert(buy.fx.from_cad, budget_input)
+    if buy_available is not None:
+        quote = min(quote, buy_available)
+    if contribution_marks and (buy_liquidation := conversion_capacity(buy.fx.to_cad)) is not None:
+        quote = min(quote, buy_liquidation)
+    maximum = maximum_quantity(buy, sell)
+    if sell_available is not None:
+        sell_step = sell.rules.amount_step or SCALE
+        sell_cap = floor_step(sell_available / sell_factor, sell_step)
+        maximum = min(maximum, sell_cap * sell_factor / acquired)
+    if (sell_conversion := conversion_capacity(sell.fx.to_cad)) is not None:
+        proceeds_factor = ONE - (sell.fee.rate if sell.fee.currency == "quote" else ZERO)
+        notional = sell_conversion if contribution_marks else sell_conversion / proceeds_factor
+        size_limit = quantity_for_notional(sell.bids, notional)
+        maximum = min(maximum, size_limit * (ONE if contribution_marks else sell_factor) / acquired)
+    exact = quantity_for_notional(buy.asks, quote / (buy_factor * (ONE if at_least else slippage)))
+    quantity = min(floor_step(maximum, step), (ceil_step if at_least else floor_step)(exact, step))
+    upper = floor_step(maximum, step)
+    candidates = (
+        (quantity, min(upper, quantity + step)) if at_least else (quantity, quantity - step)
+    )
+    for point in dict.fromkeys(candidates):
+        if point <= 0:
+            continue
+        try:
+            result = price_size(pair, point, contribution_marks=contribution_marks)
+        except (ValueError, ArithmeticError):
+            continue
+        if (buy_available is not None and result.buy_quote > buy_available) or (
+            sell_available is not None and result.sell_base > sell_available
+        ):
+            continue
+        if (
+            at_least
+            and result.acquisition_cad < budget
+            and point < upper
+            and point != candidates[-1]
+        ):
+            continue
+        if at_least or result.reserved_acquisition_cad <= budget:
+            return result
+    return None
