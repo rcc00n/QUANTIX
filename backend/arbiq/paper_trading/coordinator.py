@@ -1109,3 +1109,95 @@ class PaperCoordinator:
         event(db, trade, status, now, reason)
         self.metrics[status.lower()] += 1
 
+    @decimal_context
+    async def advance(self, db, trade, now, *, execute_observations=True):
+        await accounting.lock_session(db, trade.session_id)
+        if trade.status == "SCHEDULED" and now >= trade.eligible_at:
+            first = await db.scalar(
+                select(func.min(ExecutionObservation.received_at)).where(
+                    ExecutionObservation.trade_id == trade.id
+                )
+            )
+            event(
+                db,
+                trade,
+                "RECHECKING",
+                min(now, first) if first else now,
+                "POST_DELAY_OBSERVATIONS_REQUESTED",
+                {"explicit_rest_recheck_requested_at": now.isoformat()},
+            )
+            for model in (trade.state.get("buy_input"), trade.state.get("sell_input")):
+                if model:
+                    self.collector.request_confirmation(UUID(model["market_id"]))
+        if trade.status not in ACTIVE:
+            return
+        if trade.state.get("transfer") and trade.state.get("legs", {}).get("buy"):
+            await self.transfer_after_buy(db, trade, now)
+            if trade.status in TERMINAL:
+                return
+        observations = (
+            await db.execute(
+                select(ExecutionObservation, PaperOrder)
+                .join(PaperOrder)
+                .where(ExecutionObservation.trade_id == trade.id, PaperOrder.status == "pending")
+                .order_by(ExecutionObservation.received_at, ExecutionObservation.id)
+            )
+        ).all()
+        # Each order has one pinned firstvalidobservation. Fill decisions are made
+        # independently without using a later opposite-legbook as earlier evidence.
+        for observation, order in observations[:1] if execute_observations else []:
+            event(db, trade, "EXECUTING", observation.received_at, "INDEPENDENT_LEG")
+            await self.execute_order(db, trade, order, observation, now)
+            await db.flush()
+        if not execute_observations and observations:
+            return
+        orders = list(await db.scalars(select(PaperOrder).where(PaperOrder.trade_id == trade.id)))
+        pending = [o for o in orders if o.status == "pending"]
+        filled = [o for o in orders if o.status in {"filled", "partial"}]
+        if trade.state.get("transfer") and len(orders) == 1 and filled:
+            return
+        if not pending:
+            base_residual = sum(
+                (Decimal(v["base_change"]) for v in trade.state.get("legs", {}).values()),
+                Decimal(0),
+            )
+            if trade.state.get("transfer_settled"):
+                policy = read_pinned_strategy(trade.assumptions["strategy"]).transfer
+                base_residual -= policy.withdrawal_fee_base + policy.network_fee_base
+            if (
+                len(filled) == 2
+                and all(o.status == "filled" for o in orders)
+                and base_residual == 0
+            ):
+                status = "COMPLETED"
+                reason = "BOTH_INDEPENDENT_LEGS_FILLED"
+            elif filled:
+                status = "PARTIAL"
+                reason = "UNMATCHED_OR_PARTIAL_EXPOSURE"
+            else:
+                status = (
+                    "MISSED"
+                    if any(
+                        o.reason in {"SPREAD_DISAPPEARED", "NO_CAUSAL_OPPOSITE_BOOK"}
+                        for o in orders
+                    )
+                    else "FAILED"
+                )
+                reason = "NO_LEG_EXECUTED"
+            await self.finish(db, trade, status, now, reason)
+        else:
+            from datetime import datetime
+
+            due = (
+                datetime.fromisoformat(trade.state["sell_eligible_at"])
+                if trade.state.get("transfer_settled")
+                else trade.eligible_at
+            )
+            if (now - due).total_seconds() > self.config.maximum_observation_wait_seconds:
+                for o in pending:
+                    o.status = "failed"
+                    o.reason = "FRESH_OBSERVATION_TIMEOUT"
+                await self.finish(
+                    db, trade, "PARTIAL" if filled else "EXPIRED", now, "FRESH_OBSERVATION_TIMEOUT"
+                )
+
