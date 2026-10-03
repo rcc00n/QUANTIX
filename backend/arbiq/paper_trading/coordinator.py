@@ -1032,3 +1032,80 @@ class PaperCoordinator:
             )
         )
 
+    @decimal_context
+    async def finish(self, db, trade, status, now, reason):
+        if trade.state.get("reservation_key"):
+            await accounting.release_remaining(
+                db,
+                trade.session_id,
+                trade.state["reservation_key"],
+                now,
+                f"release:{trade.id}",
+                {"status": status},
+            )
+        if trade.state.get("sell_reservation_key"):
+            await accounting.release_remaining(
+                db,
+                trade.session_id,
+                trade.state["sell_reservation_key"],
+                now,
+                f"sell-release:{trade.id}",
+                {"status": status},
+            )
+        if trade.state.get("transfer_reserved") and not trade.state.get("transfer_settled"):
+            await accounting.release_remaining(
+                db,
+                trade.session_id,
+                trade.state["transfer_reserved"],
+                now,
+                f"transfer-release:{trade.id}",
+                {"status": status},
+            )
+        legs = trade.state.get("legs", {})
+        result = None
+        if status == "COMPLETED" and all(k in legs for k in ("buy", "sell")):
+            if all(legs[k].get("quote_rate_cad") is not None for k in legs):
+                net = sum(
+                    (
+                        Decimal(legs[k]["quote_change"]) * Decimal(legs[k]["quote_rate_cad"])
+                        for k in ("buy", "sell")
+                    ),
+                    Decimal(0),
+                )
+                fees = (
+                    sum((Decimal(legs[k]["fees_cad"]) for k in ("buy", "sell")), Decimal(0))
+                    if all(legs[k]["fees_cad"] is not None for k in legs)
+                    else None
+                )
+                slip = sum(
+                    (
+                        Decimal(legs[k]["slippage_quote"]) * Decimal(legs[k]["quote_rate_cad"])
+                        for k in ("buy", "sell")
+                    ),
+                    Decimal(0),
+                )
+                result = {
+                    "net_pnl_cad": str(net),
+                    "gross_pnl_cad": str(net + (fees or 0) + slip),
+                    "fees_cad": str(fees) if fees is not None else None,
+                    "fx_expenses_cad": "0"
+                    if all(
+                        trade.state[k]["quote_currency"] == "CAD"
+                        for k in ("buy_input", "sell_input")
+                    )
+                    else None,
+                    "slippage_cad": str(slip),
+                    "rebalancing_cad": "0",
+                    "execution_cashflow_basis": (
+                        "observed independent legs; fees and modeled slippage included once"
+                    ),
+                }
+        exposure = {
+            "base_change": str(sum((Decimal(v["base_change"]) for v in legs.values()), Decimal(0))),
+            "unmatched": status == "PARTIAL",
+            "valued_in_portfolio": True,
+        }
+        trade.state = {**trade.state, "result": result or {}, "exposure": exposure}
+        event(db, trade, status, now, reason)
+        self.metrics[status.lower()] += 1
+
