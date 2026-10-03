@@ -1201,3 +1201,43 @@ class PaperCoordinator:
                     db, trade, "PARTIAL" if filled else "EXPIRED", now, "FRESH_OBSERVATION_TIMEOUT"
                 )
 
+    async def rebalances(self, db, now):
+        rows = list(
+            await db.scalars(
+                select(RebalanceRequest)
+                .where(RebalanceRequest.status == "PENDING", RebalanceRequest.eligible_at <= now)
+                .limit(20)
+            )
+        )
+        for row in rows:
+            await accounting.lock_session(db, row.session_id)
+            request = row.request
+            key = f"rebalance:{row.id}"
+            rate = self.market.mark(
+                row.from_exchange_id, row.asset_id, Decimal(request["quantity"]), now, True
+            ).cad_per_unit
+            try:
+                journal = await accounting.transfer(
+                    db,
+                    row.session_id,
+                    row.from_exchange_id,
+                    row.to_exchange_id,
+                    row.asset_id,
+                    Decimal(request["quantity"]),
+                    Decimal(request["fee_quantity"]),
+                    rate,
+                    row.requested_at,
+                    now,
+                    key,
+                    request,
+                    reservation_key=key + ":reserve",
+                )
+                row.status = "COMPLETED"
+                row.result = {"journal_id": str(journal), "settled_at": now.isoformat()}
+            except AccountingError as exc:
+                row.status = "FAILED"
+                row.result = {"reason": str(exc)}
+                await accounting.release_remaining(
+                    db, row.session_id, key + ":reserve", now, key + ":release", row.result
+                )
+
