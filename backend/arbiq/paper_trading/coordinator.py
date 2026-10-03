@@ -1241,3 +1241,122 @@ class PaperCoordinator:
                     db, row.session_id, key + ":reserve", now, key + ":release", row.result
                 )
 
+    async def tick(self):
+        now = self.collector.utcnow()
+        clock = self.clock()
+        if not clock["trusted"]:
+            self.metrics["clock_gated_ticks"] += 1
+            return
+        async with self.sessions() as db:
+            await self.market.refresh(db)
+            await self.bootstrap(db, now)
+            await db.commit()
+        async with self.sessions() as db:
+            # One leg per commit, globally ordered by captured availability.
+            # A late arrival older than alreadyposted inventorymovement is rejected,
+            # never retroactively costed using future acquisitionbasis.
+            for _ in range(self.config.maximum_candidates_per_tick * 2):
+                observation = await db.scalar(
+                    select(ExecutionObservation)
+                    .join(PaperOrder)
+                    .join(PaperTrade, PaperTrade.id == ExecutionObservation.trade_id)
+                    .where(PaperOrder.status == "pending", PaperTrade.status.in_(ACTIVE))
+                    .order_by(ExecutionObservation.received_at, ExecutionObservation.id)
+                    .limit(1)
+                )
+                if observation is None:
+                    break
+                trade = await db.get(PaperTrade, observation.trade_id)
+                await self.advance(db, trade, now)
+                await db.commit()
+            active = list(
+                await db.scalars(
+                    select(PaperTrade)
+                    .where(PaperTrade.status.in_(ACTIVE))
+                    .order_by(PaperTrade.eligible_at)
+                    .limit(self.config.maximum_pending)
+                )
+            )
+            for trade in active:
+                await self.advance(db, trade, now, execute_observations=False)
+                await db.commit()
+            await self.rebalances(db, now)
+            await db.commit()
+            controls = (
+                await db.execute(
+                    select(PaperControl, PaperSession)
+                    .join(PaperSession)
+                    .where(PaperControl.status == "ACTIVE")
+                    .limit(20)
+                )
+            ).all()
+            routes = (
+                await db.execute(
+                    select(ArbitrageRoute, ArbitrageEvaluation)
+                    .join(
+                        ArbitrageEvaluation,
+                        (ArbitrageEvaluation.route_id == ArbitrageRoute.id)
+                        & (ArbitrageEvaluation.revision == ArbitrageRoute.revision),
+                    )
+                    .where(ArbitrageRoute.status.in_(["RESEARCH_ONLY", "VERIFIED_MARKET"]))
+                    .order_by(ArbitrageRoute.updated_at.desc())
+                    .limit(self.config.maximum_candidates_per_tick)
+                )
+            ).all()
+            for control, session in controls:
+                for route, evaluation in routes:
+                    if route.expires_at < now:
+                        continue
+                    await self.schedule(db, control, session, route, evaluation, now)
+                    await db.commit()
+            await self.refresh_targets(db)
+            await db.commit()
+        if elapsed_seconds() - self.last_valuation >= self.config.valuation_interval_seconds:
+            async with self.sessions() as db:
+                rows = (
+                    await db.execute(
+                        select(PaperControl, PaperSession).join(PaperSession).limit(20)
+                    )
+                ).all()
+                for control, session in rows:
+                    positions = list(
+                        await db.scalars(
+                            select(PortfolioPosition).where(
+                                PortfolioPosition.session_id == session.id
+                            )
+                        )
+                    )
+                    prices = self.market.prices(
+                        positions, now, control.classification == "RESEARCH"
+                    )
+                    benchmark = {}
+                    for h in session.benchmark_snapshot.get("holdings", []):
+                        key = (UUID(h["exchange_id"]), UUID(h["asset_id"]))
+                        benchmark[key] = self.market.mark(
+                            *key, Decimal(h["quantity"]), now, control.classification == "RESEARCH"
+                        )
+                    await valuation.snapshot(
+                        db,
+                        session.id,
+                        prices,
+                        now,
+                        research_only=control.classification == "RESEARCH",
+                        benchmark_prices=benchmark,
+                    )
+                    hour = now.astimezone(
+                        __import__("zoneinfo").ZoneInfo("America/Edmonton")
+                    ).strftime("%Y-%m-%dT%H%z")
+                    if self.daily_hours.get(session.id) != hour:
+                        await analytics.daily_snapshot(
+                            db,
+                            session.id,
+                            prices,
+                            now,
+                            research_only=control.classification == "RESEARCH",
+                            benchmark_prices=benchmark,
+                        )
+                        self.daily_hours[session.id] = hour
+                    await db.commit()
+            self.last_valuation = elapsed_seconds()
+        self.last_tick = elapsed_seconds()
+
