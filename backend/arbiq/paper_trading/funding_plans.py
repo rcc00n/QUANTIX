@@ -36,3 +36,13 @@ class HistoricalRoute:
     positive_frequency: int | None = None
 
 
+@dataclass(slots=True)
+class Cohort:
+    demands: list[RouteDemand]
+    legacy_requirements: list[dict]
+    legacy_marks: dict
+    requirements: list[dict]
+    exclusions: Counter
+    records: list[dict]
+
+
