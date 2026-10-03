@@ -917,3 +917,118 @@ class PaperCoordinator:
             )
         )
 
+    @decimal_context
+    async def transfer_after_buy(self, db, trade, now):
+        strategy = read_pinned_strategy(trade.assumptions["strategy"])
+        legs = trade.state.get("legs", {})
+        buy = legs.get("buy")
+        if not buy:
+            return
+        amount = Decimal(buy["base_change"])
+        fee = strategy.transfer.withdrawal_fee_base + strategy.transfer.network_fee_base
+        if amount <= fee:
+            await self.finish(db, trade, "PARTIAL", now, "TRANSFER_FEES_EXCEED_INVENTORY")
+            return
+        bm = await db.get(Market, UUID(trade.state["buy_input"]["market_id"]))
+        sm = await db.get(Market, UUID(trade.state["sell_input"]["market_id"]))
+        if not trade.state.get("transfer_reserved"):
+            key = f"transfer-reserve:{trade.id}"
+            await accounting.reserve(
+                db,
+                trade.session_id,
+                [Reservation(bm.exchange_id, bm.base_asset_id, amount)],
+                now,
+                key,
+                {"trade_id": str(trade.id)},
+            )
+            from datetime import datetime
+
+            arrived = datetime.fromisoformat(buy["executed_at"]) + timedelta(
+                seconds=strategy.transfer.settlement_seconds
+            )
+            trade.state = {
+                **trade.state,
+                "transfer_reserved": key,
+                "sell_eligible_at": arrived.isoformat(),
+            }
+            db.add(
+                SimulationEvent(
+                    trade_id=trade.id,
+                    order_id=None,
+                    event_type="TRANSFER_SCHEDULED",
+                    reason="SETTLEMENT_DELAY",
+                    occurred_at=now,
+                    provenance={
+                        "arrives_at": arrived.isoformat(),
+                        "policy": strategy.transfer.model_dump(mode="json"),
+                    },
+                )
+            )
+        from datetime import datetime
+
+        arrived = datetime.fromisoformat(trade.state["sell_eligible_at"])
+        if now < arrived or trade.state.get("transfer_settled"):
+            return
+        rate = self.market.mark(bm.exchange_id, bm.base_asset_id, amount, now, True).cad_per_unit
+        await accounting.transfer(
+            db,
+            trade.session_id,
+            bm.exchange_id,
+            sm.exchange_id,
+            bm.base_asset_id,
+            amount - fee,
+            fee,
+            rate,
+            datetime.fromisoformat(buy["executed_at"]),
+            now,
+            f"transfer:{trade.id}",
+            {
+                "network": strategy.transfer.network,
+                "network_compatible_verified": strategy.transfer.network_verified,
+                "network_compatible_assumed": trade.classification == "RESEARCH",
+                "research_only": trade.classification == "RESEARCH",
+                "settlement_delay_seconds": strategy.transfer.settlement_seconds,
+                "policy": strategy.transfer.model_dump(mode="json"),
+            },
+            reservation_key=trade.state["transfer_reserved"],
+        )
+        sell_input = load_input(trade.state["sell_input"])
+        available = amount - fee
+        quantity = available / (1 + sell_input.fee.rate if sell_input.fee.currency == "base" else 1)
+
+        quantity = floor_derived(quantity, sell_input.rules.amount_step or Decimal("1e-18"))
+        sell_reserve = f"transfer-sell-reserve:{trade.id}"
+        await accounting.reserve(
+            db,
+            trade.session_id,
+            [Reservation(sm.exchange_id, sm.base_asset_id, available)],
+            now,
+            sell_reserve,
+            {"trade_id": str(trade.id)},
+        )
+        trade.state = {
+            **trade.state,
+            "transfer_settled": True,
+            "sell_reservation_key": sell_reserve,
+            "sell_eligible_at": now.isoformat(),
+        }
+        db.add(
+            PaperOrder(
+                trade_id=trade.id,
+                market_id=sm.id,
+                side="sell",
+                quantity=stored(quantity),
+                status="pending",
+            )
+        )
+        db.add(
+            SimulationEvent(
+                trade_id=trade.id,
+                order_id=None,
+                event_type="TRANSFER_SETTLED",
+                reason="FRESH_SELL_BOOK_REQUIRED",
+                occurred_at=now,
+                provenance={},
+            )
+        )
+
