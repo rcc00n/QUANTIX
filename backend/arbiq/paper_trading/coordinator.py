@@ -66,3 +66,20 @@ def allowed_paper_asset(allowed, ticker, canonical):
     return not allowed or any((canonical if ":" in asset else ticker) == asset for asset in allowed)
 
 
+def event(db, trade, status, now, reason="", details=None):
+    trade.status = status
+    trade.reason = reason or None
+    if status in TERMINAL:
+        trade.completed_at = now
+    db.add(
+        SimulationEvent(
+            trade_id=trade.id,
+            order_id=None,
+            event_type=status,
+            reason=reason or status,
+            occurred_at=now,
+            provenance=safe_json(details or {}),
+        )
+    )
+
+
