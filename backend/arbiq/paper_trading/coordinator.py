@@ -664,3 +664,31 @@ class PaperCoordinator:
             if mid not in targets:
                 del self.recent[mid]
 
+    def _fx(self, payload, currency, amount):
+        if currency == "CAD":
+            return Decimal(1)
+        value = payload.get("fx", {}).get(currency)
+        if not value:
+            return None
+        from arbiq.opportunities.contracts import ConversionLeg, ConversionLevel, ConversionRoute
+
+        try:
+            route = ConversionRoute(
+                tuple(
+                    ConversionLeg(
+                        x["source_currency"],
+                        x["target_currency"],
+                        tuple(
+                            ConversionLevel(Decimal(z["price"]), Decimal(z["quantity"]))
+                            for z in x["levels"]
+                        ),
+                        Decimal(x["fee_rate"]),
+                        x["evidence"],
+                    )
+                    for x in value["to_cad"]["legs"]
+                )
+            )
+            return convert(route, amount) / amount
+        except (ValueError, ArithmeticError, KeyError):
+            return None
+
