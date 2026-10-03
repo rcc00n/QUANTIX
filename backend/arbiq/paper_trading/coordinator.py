@@ -623,3 +623,44 @@ class PaperCoordinator:
         event(db, trade, "SCHEDULED", now, "FUNDS_RESERVED", {"due_at": due.isoformat()})
         self.metrics["scheduled"] += 1
 
+    async def refresh_targets(self, db):
+        rows = (
+            await db.execute(
+                select(PaperOrder, PaperTrade)
+                .join(PaperTrade)
+                .where(PaperTrade.status.in_(ACTIVE), PaperOrder.status == "pending")
+                .limit(self.config.maximum_pending * 2)
+            )
+        ).all()
+        targets = defaultdict(list)
+        for order, trade in rows:
+            strategy = trade.assumptions["strategy"]
+            due = trade.eligible_at
+            if order.side == "sell" and trade.state.get("transfer"):
+                raw = trade.state.get("sell_eligible_at")
+                if not raw:
+                    continue
+                from datetime import datetime
+
+                due = datetime.fromisoformat(raw)
+            targets[order.market_id].append(
+                {
+                    "trade_id": trade.id,
+                    "order_id": order.id,
+                    "opposite_id": UUID(
+                        trade.state["sell_input" if order.side == "buy" else "buy_input"][
+                            "market_id"
+                        ]
+                    ),
+                    "eligible_at": due,
+                    "settings": strategy,
+                    "research": trade.classification == "RESEARCH",
+                    "raw_due": trade.state.get("raw_due"),
+                    "run_id": trade.state.get("collector_run_id"),
+                }
+            )
+        self.targets = dict(targets)
+        for mid in list(self.recent):
+            if mid not in targets:
+                del self.recent[mid]
+
