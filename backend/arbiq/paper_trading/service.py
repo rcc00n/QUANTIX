@@ -120,3 +120,15 @@ async def create_portfolio(
     return session, control
 
 
+def session_dto(session, control):
+    return {
+        "id": str(session.id),
+        "name": session.name,
+        "classification": control.classification,
+        "mode": control.mode,
+        "status": control.status,
+        "initial_equity_cad": str(session.initial_equity_cad),
+        "started_at": session.started_at,
+        "strategy_version_id": str(control.strategy_version_id),
+        "settings": control.settings,
+    }
