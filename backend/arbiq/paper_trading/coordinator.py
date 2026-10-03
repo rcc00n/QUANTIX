@@ -692,3 +692,228 @@ class PaperCoordinator:
         except (ValueError, ArithmeticError, KeyError):
             return None
 
+    @decimal_context
+    async def execute_order(self, db, trade, order, observation, now):
+        strategy = read_pinned_strategy(trade.assumptions["strategy"])
+        book = CapturedBook.model_validate(observation.payload["book"])
+        # Stale processing never invents a fill at a past decision. The retained
+        # observation is consumed at its own causally valid event time.
+        clock = observation.payload["clock"]
+        allowed, reason = evidence_eligibility(
+            book,
+            now=observation.received_at,
+            eligible_at=(
+                trade.eligible_at
+                if order.side == "buy" or not trade.state.get("transfer")
+                else __import__("datetime").datetime.fromisoformat(trade.state["sell_eligible_at"])
+            ),
+            maximum_age=strategy.maximum_book_age_seconds,
+            research=trade.classification == "RESEARCH",
+            allow_missing=strategy.allow_missing_source_timestamp,
+            minimum_confidence=strategy.minimum_confidence,
+            clock_trusted=clock["trusted"],
+        )
+        if not allowed:
+            order.status = "failed"
+            order.reason = reason
+            return
+        latest_movement = await db.scalar(
+            select(func.max(AccountingMovement.effective_at)).where(
+                AccountingMovement.session_id == trade.session_id,
+                AccountingMovement.event_type.in_(["PAPER_LEG", "INVENTORY_TRANSFER"]),
+            )
+        )
+        if latest_movement is not None and latest_movement > observation.received_at:
+            order.status = "failed"
+            order.reason = "LATE_OUT_OF_ORDER_EVIDENCE"
+            return
+        model = await db.get(Market, order.market_id)
+        raw = trade.state["buy_input" if order.side == "buy" else "sell_input"]
+        market = load_input(raw)
+        reservation_key = (
+            trade.state.get("sell_reservation_key", trade.state["reservation_key"])
+            if order.side == "sell"
+            else trade.state["reservation_key"]
+        )
+        if not trade.state.get("legs") and not trade.state.get("transfer"):
+            other_raw = observation.payload.get("opposite_book_asof")
+            other = CapturedBook.model_validate(other_raw) if other_raw else None
+            try:
+                recheck_projection(
+                    buy_book=book if order.side == "buy" else other,
+                    sell_book=book if order.side == "sell" else other,
+                    buy_input=load_input(trade.state["buy_input"]),
+                    sell_input=load_input(trade.state["sell_input"]),
+                    planned_quantity=trade.requested_quantity,
+                    decision_at=observation.received_at,
+                    strategy=strategy,
+                    captured_fx=observation.payload.get("fx"),
+                )
+            except ValueError as exc:
+                order.status = "failed"
+                order.reason = str(exc)
+                others = list(
+                    await db.scalars(
+                        select(PaperOrder).where(
+                            PaperOrder.trade_id == trade.id,
+                            PaperOrder.id != order.id,
+                            PaperOrder.status == "pending",
+                        )
+                    )
+                )
+                for other_order in others:
+                    other_order.status = "cancelled"
+                    other_order.reason = "PREFLIGHT_REJECTED"
+                return
+        owned = await accounting.owned_reservation(db, trade.session_id, reservation_key)
+        asset = model.quote_asset_id if order.side == "buy" else model.base_asset_id
+        available = owned.get((model.exchange_id, asset), Decimal(0))
+        try:
+            fill = simulate_leg(
+                book,
+                order.side,
+                order.quantity,
+                available,
+                market.fee,
+                market.rules,
+                strategy.slippage_bps,
+                strategy.maximum_slippage_bps,
+            )
+        except ValueError as exc:
+            order.status = "failed"
+            order.reason = str(exc)
+            return
+        quote_asset = await db.get(Asset, model.quote_asset_id)
+        quote_rate = self._fx(observation.payload, quote_asset.symbol, fill.quote_notional)
+        base_rate = fill.observed_vwap * quote_rate if quote_rate is not None else None
+        if trade.state.get("legs"):
+            changes = []
+            for old in trade.state["legs"].values():
+                if old.get("quote_rate_cad") is None:
+                    changes = []
+                    break
+                changes.append(Decimal(old["quote_change"]) * Decimal(old["quote_rate_cad"]))
+            proposed = -fill.quote_notional if order.side == "buy" else fill.quote_notional
+            if fill.fee_currency == "quote":
+                proposed -= fill.fee_quantity
+            if (
+                quote_rate is not None
+                and changes
+                and sum(changes) + proposed * quote_rate < -strategy.maximum_loss_cad
+            ):
+                order.status = "failed"
+                order.reason = "MAXIMUM_TOLERATED_LOSS"
+                return
+        result = await accounting.execute_leg(
+            db,
+            trade.session_id,
+            model.exchange_id,
+            model.base_asset_id,
+            model.quote_asset_id,
+            order.side,
+            fill.quantity,
+            fill.quote_notional,
+            fill.fee_quantity,
+            fill.fee_currency,
+            base_rate,
+            quote_rate,
+            observation.received_at,
+            f"fill:{order.id}",
+            trade.id,
+            {
+                "book": book.model_dump(mode="json"),
+                "fill_model": safe_json(asdict(fill)),
+                "clock": clock,
+                "fx": observation.payload.get("fx", {}),
+                "classification": trade.classification,
+            },
+            from_reserved=True,
+            reservation_key=reservation_key,
+        )
+        fee_version = FeeVersion(
+            exchange_id=model.exchange_id,
+            market_id=model.id,
+            effective_at=observation.received_at,
+            maker_rate=market.fee.rate,
+            taker_rate=market.fee.rate,
+            source="versioned paper strategy taker",
+            assumptions={
+                "verified": market.fee.verified,
+                "currency": market.fee.currency,
+                "strategy_version_id": str(trade.strategy_version_id),
+            },
+        )
+        db.add(fee_version)
+        await db.flush()
+        fx_id = None
+        if quote_rate is not None:
+            cad = await db.scalar(select(Asset).where(Asset.canonical_key == "fiat:CAD"))
+            fx = FXQuote(
+                base_asset_id=model.quote_asset_id,
+                quote_asset_id=cad.id,
+                rate=stored(quote_rate),
+                observed_at=observation.received_at,
+                source="Pinned execution observation conversion",
+                provenance={
+                    "fx": observation.payload.get("fx", {}),
+                    "currency": quote_asset.symbol,
+                },
+            )
+            db.add(fx)
+            await db.flush()
+            fx_id = fx.id
+        db.add(
+            PaperFill(
+                order_id=order.id,
+                snapshot_id=observation.snapshot_id,
+                journal_id=result.journal_id,
+                fee_version_id=fee_version.id,
+                fx_quote_id=fx_id,
+                quantity=fill.quantity,
+                price=stored(fill.modeled_price),
+                quote_notional=fill.quote_notional,
+                fee_quantity=fill.fee_quantity,
+                fee_asset_id=model.base_asset_id
+                if fill.fee_currency == "base"
+                else model.quote_asset_id,
+                fee_cad=result.fees_cad,
+                cost_basis_cad=result.cost_basis_removed_cad,
+                realized_simulated_pnl_cad=result.realized_trading_cad,
+                executed_at=observation.received_at,
+                provenance={
+                    "model": VERSION,
+                    "observed_vwap": str(fill.observed_vwap),
+                    "slippage_quote": str(fill.slippage_quote),
+                    "classification": trade.classification,
+                    "observation_id": str(observation.id),
+                    "clock": clock,
+                },
+            )
+        )
+        order.status = "partial" if fill.partial else "filled"
+        legs = dict(trade.state.get("legs", {}))
+        legs[order.side] = {
+            **safe_json(asdict(fill)),
+            "base_change": str(result.base_change),
+            "quote_change": str(result.quote_change),
+            "quote_rate_cad": str(quote_rate) if quote_rate is not None else None,
+            "fees_cad": str(result.fees_cad) if result.fees_cad is not None else None,
+            "executed_at": observation.received_at.isoformat(),
+            "journal_id": str(result.journal_id),
+        }
+        trade.state = {**trade.state, "legs": legs}
+        self.metrics["filled_legs"] += 1
+        db.add(
+            SimulationEvent(
+                trade_id=trade.id,
+                order_id=order.id,
+                event_type="LEG_FILLED",
+                reason=order.status,
+                occurred_at=observation.received_at,
+                provenance={
+                    "journal_id": str(result.journal_id),
+                    "observation_id": str(observation.id),
+                },
+            )
+        )
+
