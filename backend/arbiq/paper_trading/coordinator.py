@@ -286,3 +286,340 @@ class PaperCoordinator:
                 )
         await db.flush()
 
+    @decimal_context
+    async def schedule(self, db, control, session, route, evaluation, now):
+        strategy = read_pinned_strategy(control.settings)
+        key = f"paper:{session.id}:{evaluation.id}:{control.strategy_version_id}"
+        await accounting.lock_session(db, session.id)
+        if await db.scalar(select(PaperTrade.id).where(PaperTrade.idempotency_key == key)):
+            return
+        hour_count = await db.scalar(
+            select(func.count())
+            .select_from(PaperTrade)
+            .where(
+                PaperTrade.session_id == session.id,
+                PaperTrade.requested_at >= now - timedelta(hours=1),
+            )
+        )
+        if hour_count >= strategy.maximum_simulations_per_hour:
+            self.metrics["hourly_deferred_candidates"] += 1
+            return
+        total_pending = await db.scalar(
+            select(func.count()).select_from(PaperTrade).where(PaperTrade.status.in_(ACTIVE))
+        )
+        if total_pending >= self.config.maximum_pending:
+            self.metrics["global_pending_deferred"] += 1
+            return
+        body = evaluation.result
+        clock = self.clock()
+        delay = strategy.reaction_delay_seconds
+        uncertainty = (clock.get("uncertainty_ms") or 0) / 1000
+        due = now + timedelta(seconds=delay + 2 * uncertainty)
+        trade = PaperTrade(
+            session_id=session.id,
+            opportunity_id=None,
+            route_id=route.id,
+            evaluation_id=evaluation.id,
+            strategy_version_id=control.strategy_version_id,
+            idempotency_key=key,
+            classification=control.classification,
+            mode=strategy.mode,
+            status="CANDIDATE",
+            requested_at=now,
+            reaction_delay_ms=delay * 1000,
+            eligible_at=due,
+            calculation_version=VERSION,
+            assumptions={
+                "strategy": strategy.model_dump(mode="json"),
+                "classification": control.classification,
+                "buy_exchange": body.get("buy_exchange"),
+                "sell_exchange": body.get("sell_exchange"),
+                "asset": body.get("base_asset"),
+                "detection_evidence_id": str(evaluation.id),
+                "modeled_profile_not_real_latency": True,
+            },
+            state={
+                "clock": clock,
+                "collector_run_id": str(self.collector.store.run_id),
+                "raw_due": elapsed_seconds() + delay,
+                "clock_uncertainty_buffer_seconds": str(2 * uncertainty),
+            },
+        )
+        db.add(trade)
+        await db.flush()
+        event(db, trade, "CANDIDATE", now)
+        event(db, trade, "ELIGIBILITY_CHECK", now)
+        self.metrics["candidates"] += 1
+
+        def reject(reason, details=None):
+            event(db, trade, "MISSED", now, reason, details)
+            self.metrics["ineligible"] += 1
+
+        if control.classification == "VALIDATED" and (
+            not route.actionable or not clock["host_healthy"]
+        ):
+            reject("VALIDATED_REQUIREMENTS_UNVERIFIED")
+            return
+        if not clock["trusted"]:
+            reject("UTC_UNTRUSTED")
+            return
+        if evaluation.evaluated_at > now:
+            reject("EVALUATION_NOT_AVAILABLE_AT_SCHEDULING_TIME")
+            return
+        if strategy.allowed_exchanges and any(
+            body.get(k) not in strategy.allowed_exchanges for k in ("buy_exchange", "sell_exchange")
+        ):
+            reject("EXCHANGE_FILTER")
+            return
+        inputs = evaluation.evidence.get("calculation_inputs")
+        inputs = inputs if isinstance(inputs, dict) else {}
+        buy_input = inputs.get("buy")
+        canonical_base = buy_input.get("base_currency") if isinstance(buy_input, dict) else None
+        if not allowed_paper_asset(strategy.allowed_assets, body.get("base_asset"), canonical_base):
+            reject("ASSET_FILTER")
+            return
+        active = await db.scalar(
+            select(func.count())
+            .select_from(PaperTrade)
+            .where(PaperTrade.session_id == session.id, PaperTrade.status.in_(ACTIVE))
+        )
+        if active >= strategy.maximum_concurrent:
+            reject("CONCURRENCY_LIMIT")
+            return
+        transfer = strategy.mode == "TRANSFER" or (
+            strategy.mode == "RESEARCH_SHADOW" and strategy.research_execution_model == "TRANSFER"
+        )
+        if transfer and (
+            not strategy.transfer.network
+            or not strategy.transfer.withdrawal_enabled
+            or not strategy.transfer.deposit_enabled
+        ):
+            reject("TRANSFER_NETWORK_OR_FUNDING_UNVERIFIED")
+            return
+        if (
+            transfer
+            and control.classification != "RESEARCH"
+            and not (strategy.transfer.network_verified and strategy.transfer.costs_verified)
+        ):
+            reject("TRANSFER_COSTS_UNVERIFIED")
+            return
+        try:
+            buy = load_input(inputs["buy"])
+            sell = load_input(inputs["sell"])
+            buy = replace(
+                buy,
+                fee=Fee(
+                    max(buy.fee.rate, strategy.taker_fee_rate),
+                    strategy.buy_fee_currency,
+                    strategy.fee_verified,
+                    "versioned paper strategy taker assumption",
+                ),
+            )
+            sell = replace(
+                sell,
+                fee=Fee(
+                    max(sell.fee.rate, strategy.taker_fee_rate),
+                    strategy.sell_fee_currency,
+                    strategy.fee_verified,
+                    "versioned paper strategy taker assumption",
+                ),
+            )
+            result = await asyncio.to_thread(
+                optimize_route,
+                buy,
+                sell,
+                budget_cad=floor_derived(
+                    strategy.trade_amount_cad / (1 + strategy.slippage_bps / 10000),
+                    Decimal("1e-18"),
+                ),
+                now=evaluation.evaluated_at,
+                costs=Costs(
+                    slippage_bps=strategy.slippage_bps, rebalancing_bps=strategy.rebalance_bps
+                ),
+                budgets=(),
+                max_search_evaluations=128,
+            )
+            best = result.best
+        except (ValueError, TypeError, KeyError, ArithmeticError):
+            reject("CALCULATION_EVIDENCE_INCOMPLETE")
+            return
+        if best is None:
+            reject("NO_FEASIBLE_FUNDED_CAD_SIZE")
+            return
+        if not minimum_buy_satisfied(strategy, best.acquisition_cost_cad):
+            reject("MINIMUM_BUY_CAPITAL")
+            return
+        try:
+            buy_reserve, sell_reserve = planned_reserves(
+                best, buy.fee, sell.fee, strategy.slippage_bps
+            )
+        except (ValueError, ArithmeticError):
+            reject("UNREPRESENTABLE_RESERVATION")
+            return
+        if (
+            best.acquisition_cost_cad is None
+            or best.acquisition_cost_cad < strategy.minimum_liquidity_cad
+        ):
+            reject("MINIMUM_LIQUIDITY")
+            return
+        risk_net = best.net_profit_cad
+        if transfer and risk_net is not None and best.sale_proceeds_cad is not None:
+            risk_net -= best.sale_proceeds_cad * strategy.transfer.haircut_pct / 100
+            mark = self.market.mark(
+                (await db.get(Market, UUID(buy.market_id))).exchange_id,
+                (await db.get(Market, UUID(buy.market_id))).base_asset_id,
+                strategy.transfer.withdrawal_fee_base + strategy.transfer.network_fee_base
+                or Decimal("1e-18"),
+                now,
+                True,
+            )
+            if mark.cad_per_unit is not None:
+                risk_net -= (
+                    strategy.transfer.withdrawal_fee_base + strategy.transfer.network_fee_base
+                ) * mark.cad_per_unit
+        passes = [
+            risk_net is not None and risk_net >= strategy.minimum_profit_cad,
+            risk_net is not None
+            and risk_net / best.acquisition_cost_cad * 100 >= strategy.minimum_profit_pct,
+        ]
+        if not (all(passes) if strategy.threshold_logic == "AND" else any(passes)):
+            reject("PROFIT_THRESHOLD")
+            return
+        if (
+            best.acquisition_cost_cad
+            > session.initial_equity_cad * strategy.maximum_capital_per_exchange_pct / 100
+        ):
+            reject("VENUE_CAPITAL_LIMIT")
+            return
+        bm = await db.get(Market, UUID(buy.market_id))
+        sm = await db.get(Market, UUID(sell.market_id))
+        if not bm or not sm:
+            reject("MARKET_UNAVAILABLE")
+            return
+        checkpoint = await db.scalar(
+            select(PortfolioCheckpoint)
+            .where(PortfolioCheckpoint.session_id == session.id)
+            .order_by(PortfolioCheckpoint.as_of.desc())
+            .limit(1)
+        )
+        if (
+            checkpoint
+            and checkpoint.payload.get("net_simulated_pnl_cad") is not None
+            and (Decimal(checkpoint.payload["net_simulated_pnl_cad"]) < -strategy.maximum_loss_cad)
+        ):
+            reject("MAXIMUM_PORTFOLIO_LOSS")
+            return
+        positions = list(
+            await db.scalars(
+                select(PortfolioPosition).where(PortfolioPosition.session_id == session.id)
+            )
+        )
+        exposure = Decimal(0)
+        venue_reserved = Decimal(0)
+        for p in positions:
+            if not p.quantity:
+                continue
+            asset = await db.get(Asset, p.asset_id)
+            mark = self.market.mark(
+                p.exchange_id, p.asset_id, p.quantity, now, control.classification == "RESEARCH"
+            )
+            if mark.cad_per_unit is None:
+                reject(
+                    "INVENTORY_RISK_VALUATION_UNAVAILABLE",
+                    {
+                        "exchange_id": str(p.exchange_id),
+                        "asset": asset.canonical_key,
+                        "quantity": str(p.quantity),
+                        "valuation_reason": mark.source,
+                    },
+                )
+                return
+            if asset.kind == "crypto":
+                exposure += p.quantity * mark.cad_per_unit
+            if p.exchange_id == bm.exchange_id:
+                venue_reserved += p.reserved_quantity * mark.cad_per_unit
+        if (
+            venue_reserved + best.acquisition_cost_cad
+            > session.initial_equity_cad * strategy.maximum_capital_per_exchange_pct / 100
+        ):
+            reject("VENUE_CAPITAL_LIMIT")
+            return
+        if (
+            exposure + best.acquisition_cost_cad
+            > session.initial_equity_cad * strategy.maximum_inventory_exposure_pct / 100
+        ):
+            reject("MAXIMUM_INVENTORY_EXPOSURE")
+            return
+        reserve_key = f"reserve:{trade.id}"
+        requirements = [
+            Reservation(
+                bm.exchange_id,
+                bm.quote_asset_id,
+                buy_reserve,
+            )
+        ]
+        if not transfer:
+            requirements.append(Reservation(sm.exchange_id, sm.base_asset_id, sell_reserve))
+        try:
+            await accounting.reserve(
+                db, session.id, requirements, now, reserve_key, {"trade_id": str(trade.id)}
+            )
+        except InsufficientBalance:
+            available = {
+                (p.exchange_id, p.asset_id): p.quantity - p.reserved_quantity for p in positions
+            }
+            reject(
+                "INSUFFICIENT_PRE_FUNDED_INVENTORY",
+                {
+                    "requirements": [
+                        {
+                            "side": side,
+                            "exchange_id": str(item.exchange_id),
+                            "asset_id": str(item.asset_id),
+                            "required": str(item.quantity),
+                            "available": str(available.get((item.exchange_id, item.asset_id), 0)),
+                            "deficit": str(
+                                max(
+                                    Decimal(0),
+                                    item.quantity
+                                    - available.get((item.exchange_id, item.asset_id), 0),
+                                )
+                            ),
+                        }
+                        for side, item in zip(("buy", "sell"), requirements, strict=not transfer)
+                    ]
+                },
+            )
+            return
+        trade.requested_quantity = stored(best.buy_quantity)
+        trade.state = {
+            **trade.state,
+            "reservation_key": reserve_key,
+            "transfer": transfer,
+            "buy_input": dump_input(buy),
+            "sell_input": dump_input(sell),
+            "projection": safe_json(asdict(best)),
+            "legs": {},
+        }
+        db.add(
+            PaperOrder(
+                trade_id=trade.id,
+                market_id=bm.id,
+                side="buy",
+                quantity=stored(best.buy_quantity),
+                status="pending",
+            )
+        )
+        if not transfer:
+            db.add(
+                PaperOrder(
+                    trade_id=trade.id,
+                    market_id=sm.id,
+                    side="sell",
+                    quantity=stored(best.sell_quantity),
+                    status="pending",
+                )
+            )
+        event(db, trade, "SCHEDULED", now, "FUNDS_RESERVED", {"due_at": due.isoformat()})
+        self.metrics["scheduled"] += 1
+
