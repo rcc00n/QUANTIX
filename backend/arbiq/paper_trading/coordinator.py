@@ -208,3 +208,81 @@ class PaperCoordinator:
                 await db.commit()
                 self.metrics["causal_observations"] += 1
 
+    @decimal_context
+    async def bootstrap(self, db, now):
+        if not self.config.bootstrap_portfolios:
+            return
+        user = await db.scalar(
+            select(User).where(
+                User.username == self.collector.settings.admin_username, User.active.is_(True)
+            )
+        )
+        if not user:
+            return
+        existing = list(
+            await db.scalars(
+                select(PaperControl).join(PaperSession).where(PaperSession.user_id == user.id)
+            )
+        )
+        if not any(x.classification == "VALIDATED" for x in existing):
+            await create_portfolio(
+                db,
+                user.id,
+                "Validated paper portfolio",
+                presets()["Conservative"],
+                Decimal(10000),
+                None,
+                now,
+            )
+        if not any(x.classification == "RESEARCH" for x in existing):
+            # Independent counterfactual portfolio. Crypto consumes the same10k
+            # budget at observed initialization marks; there are no free assets.
+            allocations = []
+            for slug in ("kraken", "ndax"):
+                rt = self.collector.runtimes.get(slug)
+                if not rt:
+                    continue
+                m = next(
+                    (m for m in rt.markets if m.base.symbol == "BTC" and m.quote.symbol == "CAD"),
+                    None,
+                )
+                if not m:
+                    return
+                model = self.market.markets.get(m.id)
+                book = self.collector.cache.get(m.id, now=now)
+                if not model or not book or book.state.value != "HEALTHY":
+                    return
+                quantity = Decimal(2500) / book.normalized.bids[0].price
+
+                quantity = floor_derived(quantity, m.amount_step or Decimal("1e-18"))
+                mark = self.market.mark(rt.exchange_id, model.base_asset_id, quantity, now, True)
+                if mark.cad_per_unit is None:
+                    return
+                allocations.extend(
+                    [
+                        Allocation(
+                            exchange=slug,
+                            asset="asset:BTC",
+                            quantity=quantity,
+                            cad_rate=stored(mark.cad_per_unit),
+                            evidence=mark.provenance,
+                        ),
+                        Allocation(
+                            exchange=slug,
+                            quantity=Decimal(5000) - stored(quantity * stored(mark.cad_per_unit)),
+                        ),
+                    ]
+                )
+            if len(allocations) == 4:
+                await create_portfolio(
+                    db,
+                    user.id,
+                    "Research shadow — independent capital",
+                    presets()["Aggressive Research"],
+                    Decimal(10000),
+                    allocations,
+                    now,
+                    observed_funding=True,
+                )
+        await db.flush()
+
