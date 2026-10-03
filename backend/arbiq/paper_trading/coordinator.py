@@ -1360,3 +1360,28 @@ class PaperCoordinator:
             self.last_valuation = elapsed_seconds()
         self.last_tick = elapsed_seconds()
 
+    def diagnostics(self):
+        return {
+            "enabled": self.config.enabled,
+            "healthy": self.last_tick > 0 and elapsed_seconds() - self.last_tick < 60,
+            "mode": "paper",
+            "metrics": dict(self.metrics),
+            "pending_markets": len(self.targets),
+            "clock": self.clock(),
+            "calculation_version": VERSION,
+        }
+
+    async def run(self):
+        while not self.collector.stop.is_set():
+            if self.config.enabled:
+                try:
+                    await self.tick()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    log.error("paper_tick_failed", error_type=type(exc).__name__)
+                    self.metrics["failed_ticks"] += 1
+            try:
+                await asyncio.wait_for(self.collector.stop.wait(), self.config.interval_seconds)
+            except TimeoutError:
+                pass
