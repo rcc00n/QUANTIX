@@ -83,3 +83,26 @@ def event(db, trade, status, now, reason="", details=None):
     )
 
 
+def trade_dto(t):
+    return {
+        "id": str(t.id),
+        "session_id": str(t.session_id),
+        "route_id": str(t.route_id) if t.route_id else None,
+        "evaluation_id": str(t.evaluation_id) if t.evaluation_id else None,
+        "status": t.status,
+        "classification": t.classification,
+        "mode": t.mode,
+        "requested_at": t.requested_at,
+        "eligible_at": t.eligible_at,
+        "completed_at": t.completed_at,
+        "reason": t.reason,
+        "requested_quantity": str(t.requested_quantity)
+        if t.requested_quantity is not None
+        else None,
+        "reaction_delay_ms": t.reaction_delay_ms,
+        "state": t.state,
+        "assumptions": t.assumptions,
+        "strategy_version_id": str(t.strategy_version_id) if t.strategy_version_id else None,
+    }
+
+
