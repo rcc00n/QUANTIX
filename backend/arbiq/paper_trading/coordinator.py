@@ -106,3 +106,105 @@ def trade_dto(t):
     }
 
 
+class PaperCoordinator:
+    def __init__(self, collector):
+        self.collector = collector
+        self.config = collector.settings.paper
+        self.sessions = collector.store.sessions
+        self.market = PaperMarkets(collector)
+        self.targets = {}
+        self.recent = defaultdict(lambda: deque(maxlen=16))
+        self.store = OpportunityStore(self.sessions, collector.store.run_id)
+        self.last_tick = 0.0
+        self.last_valuation = 0.0
+        self.metrics = defaultdict(int)
+        self.daily_hours = {}
+
+    def clock(self):
+        return (
+            self.collector.utc_clock.snapshot()
+            if self.collector.utc_clock
+            else {"trusted": False, "host_healthy": False}
+        )
+
+    async def observe(self, book):
+        if book.market_id not in self.targets:
+            return
+        self.recent[book.market_id].append(book)
+        clock = self.clock()
+        for target in list(self.targets.get(book.market_id, ())):
+            if book.received_at < target["eligible_at"]:
+                continue
+            if (
+                target.get("raw_due")
+                and target["run_id"] == str(self.collector.store.run_id)
+                and elapsed_seconds() < target["raw_due"]
+            ):
+                continue
+            strategy = read_pinned_strategy(target["settings"])
+            allowed, reason = evidence_eligibility(
+                book,
+                now=self.collector.utcnow(),
+                eligible_at=target["eligible_at"],
+                maximum_age=strategy.maximum_book_age_seconds,
+                research=target["research"],
+                allow_missing=strategy.allow_missing_source_timestamp,
+                minimum_confidence=strategy.minimum_confidence,
+                clock_trusted=clock["trusted"],
+            )
+            if not allowed:
+                self.metrics["rejected_observations"] += 1
+                continue
+            references = [
+                b
+                for b in self.recent.get(target.get("opposite_id"), ())
+                if b.received_at <= book.received_at and b.ingestion_index <= book.ingestion_index
+            ]
+            opposite = references[-1].model_dump(mode="json") if references else None
+            fx = self.collector.scanner.fx_routes(book.received_at)
+            fx = {
+                k: dump_input(v)
+                for k, v in fx.items()
+                if v.available_at is None or v.available_at <= book.received_at
+            }
+            async with self.sessions() as db:
+                trade = await db.get(PaperTrade, target["trade_id"])
+                order = await db.scalar(
+                    select(PaperOrder).where(PaperOrder.id == target["order_id"]).with_for_update()
+                )
+                if (
+                    not trade
+                    or trade.status not in ACTIVE
+                    or not order
+                    or order.status != "pending"
+                ):
+                    continue
+                if await db.scalar(
+                    select(ExecutionObservation.id)
+                    .where(ExecutionObservation.order_id == order.id)
+                    .limit(1)
+                ):
+                    continue
+                sid = await self.store.snapshot(db, book)
+                # Captured here before awaiting future observations. No later FX
+                # update is used to price an earlier execution.
+                db.add(
+                    ExecutionObservation(
+                        trade_id=trade.id,
+                        order_id=order.id,
+                        snapshot_id=sid,
+                        received_at=book.received_at,
+                        source_at=book.exchange_timestamp,
+                        payload={
+                            "book": book.model_dump(mode="json"),
+                            "clock": clock,
+                            "fx": fx,
+                            "first_valid_after_delay": True,
+                            "opposite_book_asof": opposite,
+                            "eligibility": reason,
+                        },
+                    )
+                )
+                await db.commit()
+                self.metrics["causal_observations"] += 1
+
