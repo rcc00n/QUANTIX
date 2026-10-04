@@ -109,6 +109,20 @@ def test_unsupported_target_never_extrapolates_profit():
         assert row["projection"] is None
 
 
+def test_minimum_buy_is_independent_of_maximum_profit_and_and_or():
+    policy = PaperStrategy(
+        min_buy_capital_cad="50",
+        minimum_profit_cad="0",
+        minimum_profit_pct="0",
+        threshold_logic="OR",
+        trade_amount_cad="1000",
+        minimum_liquidity_cad="1",
+    )
+    assert not minimum_buy_satisfied(policy, D("6.71"))
+    assert not minimum_buy_satisfied(policy, D("49.999999999999999999"))
+    assert minimum_buy_satisfied(policy, D(50))
+    assert not minimum_buy_satisfied(policy, None)
+    assert policy.trade_amount_cad == D(1000) and policy.minimum_profit_cad == 0
 
 
 
