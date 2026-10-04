@@ -147,6 +147,25 @@ def test_planned_inventory_matches_execution_rounding_for_long_precise_units():
     assert buy.as_tuple().exponent >= -18 and base.as_tuple().exponent >= -18
 
 
+def test_buy_sizes_on_the_grid_of_rounded_principal_and_fee_together():
+    # SYNTHETIC accounting boundary. The old unrounded affordability inverse
+    # sized 0.4, then charged 3 units against a reserve of 2 units.
+    b = book(uuid4(), "synthetic-double-rounding", NOW)
+    b = b.model_copy(
+        update={
+            "normalized": b.normalized.model_copy(
+                update={
+                    "asks": (BookLevel(price="0.000000000000000003", quantity="1"),),
+                    "bids": (BookLevel(price="0.000000000000000001", quantity="1"),),
+                }
+            )
+        }
+    )
+    fill = simulate_leg(
+        b, "buy", D("0.4"), D("2e-18"), Fee(D("0.5")), MarketRules(amount_step=D("0.1"))
+    )
+    assert fill.partial and fill.quantity == D("0.3")
+    assert fill.quote_notional == fill.fee_quantity == D("1e-18")
 
 
 
