@@ -253,5 +253,16 @@ def test_reciprocal_fx_roundoff_does_not_falsely_remove_supported_target():
     assert all(row["supported"] for row in result["comparisons"])
 
 
+def test_fx_depth_limits_target_without_claiming_stablecoin_parity():
+    buy, sell = synthetic_small_route()
+    buy = replace(
+        buy, quote_currency="USDT", fx=synthetic_fx("USDT", "1.2", "1.4", depth="40")
+    )
+    value = size_diagnostics(pinned(buy, sell))
+    assert value["comparisons"][0]["supported"]
+    assert all(not row["supported"] for row in value["comparisons"][1:])
+    assert all(
+        row["estimated_net_profit_cad"] is None for row in value["comparisons"][1:]
+    )
 
 
