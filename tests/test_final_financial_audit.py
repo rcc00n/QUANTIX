@@ -199,6 +199,48 @@ def synthetic_fx(currency, bid, ask, fee=".002", depth="100000"):
     )
 
 
+@pytest.mark.parametrize("buy_fee_currency", ["base", "quote"])
+@pytest.mark.parametrize("sell_fee_currency", ["base", "quote"])
+def test_cross_quote_cashflow_uses_acquisition_ask_liquidation_bid_and_fees_once(
+    buy_fee_currency,
+    sell_fee_currency,
+):
+    buy, sell = synthetic_small_route()
+    buy = replace(
+        buy,
+        quote_currency="USDT",
+        fx=synthetic_fx("USDT", "1.30", "1.40"),
+        fee=Fee(D(".001"), buy_fee_currency, True),
+    )
+    sell = replace(
+        sell,
+        quote_currency="EUR",
+        fx=synthetic_fx("EUR", "1.45", "1.55"),
+        bids=levels((110, 20)),
+        fee=Fee(D(".003"), sell_fee_currency, True),
+    )
+    result = evaluate_route(buy, sell, D(1), now=NOW, costs=NO_COST)
+    with localcontext() as ctx:
+        ctx.prec = 78
+        assert abs(
+            result.acquisition_cost_cad
+            - result.buy_quote_required * D("1.40") / D(".998")
+        ) < D("1e-70")
+        assert result.sale_proceeds_cad == result.sell_quote_received * D("1.45") * D(
+            ".998"
+        )
+        assert (
+            result.net_profit_cad
+            == result.sale_proceeds_cad - result.acquisition_cost_cad
+        )
+        assert result.gross_profit_cad - result.fees_cad == result.net_profit_cad
+        assert (
+            result.capital_requirements[buy.venue]["USDT"] == result.buy_quote_required
+        )
+        assert (
+            result.capital_requirements[sell.venue]["SYNTHETIC-BTC"]
+            == result.sell_base_required
+        )
 
 
 
