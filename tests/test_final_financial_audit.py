@@ -167,6 +167,10 @@ def test_first_leg_recheck_does_not_allow_small_size_through_profit_logic(logic)
     assert value.acquisition_cost_cad < 50
 
 
+@pytest.mark.parametrize("value", [-1, "-1", 1.25, "NaN", "Infinity"])
+def test_minimum_buy_rejects_invalid_financial_values(value):
+    with pytest.raises(ValidationError):
+        PaperStrategy(min_buy_capital_cad=value)
 
 
 def synthetic_fx(currency, bid, ask, fee=".002", depth="100000"):
