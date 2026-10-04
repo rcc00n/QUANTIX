@@ -136,6 +136,35 @@ def test_old_pinned_strategy_maintains_original_behavior_without_rewrite():
     )
 
 
+@pytest.mark.parametrize("logic", ["AND", "OR"])
+def test_first_leg_recheck_does_not_allow_small_size_through_profit_logic(logic):
+    from uuid import uuid4
+
+    from arbiq.paper_trading.execution import recheck_projection
+    from test_paper_execution import book, inputs, strategy
+
+    buy = book(uuid4(), "SYNTHETIC-buy", NOW, qty="0.1")
+    sell = book(uuid4(), "SYNTHETIC-sell", NOW, bid="110", ask="111", qty="0.1")
+    with pytest.raises(ValueError, match="MINIMUM_BUY_CAPITAL"):
+        recheck_projection(
+            buy_book=buy,
+            sell_book=sell,
+            buy_input=inputs(buy, "a"),
+            sell_input=inputs(sell, "b"),
+            planned_quantity=D(".1"),
+            decision_at=NOW,
+            strategy=strategy(min_buy_capital_cad="50", threshold_logic=logic),
+        )
+    value = recheck_projection(
+        buy_book=buy,
+        sell_book=sell,
+        buy_input=inputs(buy, "a"),
+        sell_input=inputs(sell, "b"),
+        planned_quantity=D(".1"),
+        decision_at=NOW,
+        strategy=strategy(min_buy_capital_cad="0", threshold_logic=logic),
+    )
+    assert value.acquisition_cost_cad < 50
 
 
 
