@@ -266,3 +266,11 @@ def test_fx_depth_limits_target_without_claiming_stablecoin_parity():
     )
 
 
+def test_multihop_reverse_costs_round_trip_fee_spread_cannot_create_money():
+    fx = synthetic_fx("USDT", "1.30", "1.40", fee=".006")
+    with localcontext() as ctx:
+        ctx.prec = 78
+        acquisition = required_input(fx.from_cad, D(10))
+        assert acquisition > D(14)
+        assert convert(fx.to_cad, D(10)) < D(13)
+        assert convert(fx.to_cad, convert(fx.from_cad, D(100))) < D(100)
