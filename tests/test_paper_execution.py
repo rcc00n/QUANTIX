@@ -125,6 +125,26 @@ def test_owner_slippage_cap_rejects_deep_buy_and_sell_but_preserves_exact_bounda
         PaperStrategy(slippage_bps="11", maximum_slippage_bps="10")
 
 
+def test_planned_inventory_matches_execution_rounding_for_long_precise_units():
+    # SYNTHETIC18-place inventory, eight-place prices and nonzero taker/slippage.
+    q = D("0.123456789012345678")
+    b = book(uuid4(), "synthetic-precise", NOW, bid="99.12345678", ask="100.12345678")
+    rules = MarketRules(amount_step=D("1e-18"), verified=True)
+    buy_fee, sell_fee = Fee(D(".006"), "quote"), Fee(D(".006"), "base")
+    fill = simulate_leg(b, "buy", q, D(10000), buy_fee, rules, D(10))
+    buy, base = planned_reserves(
+        SimpleNamespace(buy_notional=fill.observed_notional, sell_quantity=q),
+        buy_fee,
+        sell_fee,
+        D(10),
+    )
+    assert buy == fill.quote_notional + fill.fee_quantity
+    exact_buy = simulate_leg(b, "buy", q, buy, buy_fee, rules, D(10))
+    assert exact_buy.quantity == q
+    sell = simulate_leg(b, "sell", q, base, sell_fee, rules, D(10))
+    assert sell.quantity == q
+    assert base == sell.quantity + sell.fee_quantity
+    assert buy.as_tuple().exponent >= -18 and base.as_tuple().exponent >= -18
 
 
 
