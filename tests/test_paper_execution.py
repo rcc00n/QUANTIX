@@ -207,6 +207,61 @@ def test_single_leg_depth_precision_fees_and_insufficient_inventory():
     assert base.quantity + base.fee_quantity <= 1
 
 
+def test_causal_timing_clock_and_changed_spread():
+    buy = book(uuid4(), "synthetic-buy", NOW)
+    sell = book(uuid4(), "synthetic-sell", NOW, bid="110", ask="111")
+    assert (
+        evidence_eligibility(
+            buy,
+            now=NOW - timedelta(seconds=1),
+            eligible_at=NOW - timedelta(seconds=2),
+            maximum_age=30,
+            research=True,
+        )[0]
+        is False
+    )
+    assert (
+        evidence_eligibility(
+            buy,
+            now=NOW,
+            eligible_at=NOW,
+            maximum_age=30,
+            research=True,
+            clock_trusted=False,
+        )[0]
+        is False
+    )
+    result = recheck_projection(
+        buy_book=buy,
+        sell_book=sell,
+        buy_input=inputs(buy, "a"),
+        sell_input=inputs(sell, "b"),
+        planned_quantity=D(1),
+        decision_at=NOW,
+        strategy=strategy(),
+    )
+    assert result.net_profit_cad > 0
+    gone = book(buy.market_id, "synthetic-buy", NOW, bid="119", ask="120")
+    with pytest.raises(ValueError, match="SPREAD_DISAPPEARED"):
+        recheck_projection(
+            buy_book=gone,
+            sell_book=sell,
+            buy_input=inputs(buy, "a"),
+            sell_input=inputs(sell, "b"),
+            planned_quantity=D(1),
+            decision_at=NOW,
+            strategy=strategy(),
+        )
+    with pytest.raises(ValueError, match="NO_CAUSAL_OPPOSITE_BOOK"):
+        recheck_projection(
+            buy_book=buy,
+            sell_book=None,
+            buy_input=inputs(buy, "a"),
+            sell_input=inputs(sell, "b"),
+            planned_quantity=D(1),
+            decision_at=NOW,
+            strategy=strategy(),
+        )
 
 
 @pytest.fixture
