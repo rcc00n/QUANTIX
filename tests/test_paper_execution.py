@@ -194,6 +194,17 @@ def strategy(**updates):
     )
 
 
+def test_single_leg_depth_precision_fees_and_insufficient_inventory():
+    b = book(uuid4(), "synthetic", NOW, qty="1")
+    r = MarketRules(D(".1"), D(".1"), D("1"), max_notional=D("101"), verified=True)
+    f = simulate_leg(b, "buy", D("5"), D("1000"), Fee(D(".01")), r, D("100"))
+    assert f.quantity <= D("1") and f.quote_notional <= 101 and f.partial
+    with pytest.raises(ValueError):
+        simulate_leg(b, "sell", D(1), D(0), Fee(D(".01")), r)
+    with pytest.raises(ValueError):
+        simulate_leg(b, "buy", 1.1, D(10), Fee(D(".01")), r)
+    base = simulate_leg(b, "sell", D(1), D(1), Fee(D(".01"), "base"), r)
+    assert base.quantity + base.fee_quantity <= 1
 
 
 
