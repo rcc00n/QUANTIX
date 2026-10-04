@@ -168,6 +168,11 @@ def test_buy_sizes_on_the_grid_of_rounded_principal_and_fee_together():
     assert fill.quote_notional == fill.fee_quantity == D("1e-18")
 
 
+def test_stage8b_canonical_research_filter_does_not_accept_same_symbol_wrapped_assets():
+    assert allowed_paper_asset(("asset:BTC",), "BTC", "asset:BTC")
+    assert not allowed_paper_asset(("asset:BTC",), "BTC", "synthetic:wrapped-btc")
+    assert not allowed_paper_asset(("asset:BTC",), "BTC", None)
+    assert allowed_paper_asset(("BTC",), "BTC", None)  # Pinned legacy strategies.
 
 
 def strategy(**updates):
