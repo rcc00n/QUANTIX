@@ -125,6 +125,15 @@ def test_minimum_buy_is_independent_of_maximum_profit_and_and_or():
     assert policy.trade_amount_cad == D(1000) and policy.minimum_profit_cad == 0
 
 
+def test_old_pinned_strategy_maintains_original_behavior_without_rewrite():
+    raw = {"trade_amount_cad": "250", "preset": "Custom"}
+    assert read_pinned_strategy(raw).min_buy_capital_cad == 0
+    assert "min_buy_capital_cad" not in raw
+    assert PaperStrategy.model_validate(raw).min_buy_capital_cad == 50
+    assert (
+        read_pinned_strategy({**raw, "min_buy_capital_cad": "25"}).min_buy_capital_cad
+        == 25
+    )
 
 
 
