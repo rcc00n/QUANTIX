@@ -98,6 +98,15 @@ def test_comparisons_price_actual_target_sizes_not_repeated_budget_optima():
     assert result["actionable"] is False and result["actual_execution"] is False
 
 
+def test_unsupported_target_never_extrapolates_profit():
+    buy, sell = synthetic_small_route()
+    buy = replace(buy, asks=levels((100, 1)))
+    result = size_diagnostics(pinned(buy, sell))
+    assert result["comparisons"][1]["supported"]
+    for row in result["comparisons"][2:]:
+        assert not row["supported"]
+        assert row["estimated_net_profit_cad"] is None
+        assert row["projection"] is None
 
 
 
