@@ -243,6 +243,14 @@ def test_cross_quote_cashflow_uses_acquisition_ask_liquidation_bid_and_fees_once
         )
 
 
+def test_reciprocal_fx_roundoff_does_not_falsely_remove_supported_target():
+    buy, sell = synthetic_small_route()
+    buy = replace(
+        buy, quote_currency="EUR", fx=synthetic_fx("EUR", "1.53951", "1.5605")
+    )
+    sell = replace(sell, quote_currency="EUR", fx=buy.fx)
+    result = size_diagnostics(pinned(buy, sell))
+    assert all(row["supported"] for row in result["comparisons"])
 
 
 
