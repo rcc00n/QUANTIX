@@ -84,6 +84,18 @@ def test_tiny_size_is_correct_profit_optimum_not_entire_selected_budget():
     assert evaluate_route(buy, sell, D(".5"), now=NOW, costs=NO_COST).net_profit_cad < 0
 
 
+def test_comparisons_price_actual_target_sizes_not_repeated_budget_optima():
+    buy, sell = synthetic_small_route()
+    result = size_diagnostics(pinned(buy, sell))
+    assert D(result["best"]["acquisition_cost_cad"]) == D("6.71")
+    assert len(result["comparisons"]) == 5
+    for row in result["comparisons"]:
+        assert row["supported"]
+        assert D(row["buy_capital_cad"]) == D(row["requested_buy_capital_cad"])
+        assert D(row["estimated_net_profit_cad"]) < 0
+    assert "BEST_SIZE_AT_SELL_TOP_LEVEL_DEPTH_BOUNDARY" in result["explanations"]
+    assert "SUSPICIOUS_RETAINED_BOOK_NOT_VERIFIED" in result["explanations"]
+    assert result["actionable"] is False and result["actual_execution"] is False
 
 
 
