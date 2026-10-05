@@ -520,6 +520,15 @@ async def advance(env):
         await env.coordinator.refresh_targets(db)
 
 
+@pytest.mark.parametrize("environment", ["future_evaluation"], indirect=True)
+async def test_future_dated_evaluation_never_reserves_or_orders(environment):
+    e = environment
+    async with e.sessions() as db:
+        trade = await db.get(PaperTrade, e.ids["trade"])
+        assert trade.status == "MISSED"
+        assert trade.reason == "EVALUATION_NOT_AVAILABLE_AT_SCHEDULING_TIME"
+        assert await db.scalar(select(PaperOrder.id).where(PaperOrder.trade_id == trade.id)) is None
+        assert await reconcile(db, trade.session_id)
 
 
 
