@@ -870,3 +870,33 @@ async def test_late_older_observation_does_not_use_future_cost_basis(environment
         assert await reconcile(db, e.ids["session"])
 
 
+def test_research_profile_cannot_bypass_its_configured_confidence():
+    from arbiq.market_data.quality import DataState
+
+    b = book(uuid4(), "synthetic", NOW).classified(
+        DataState.SUSPICIOUS, reasons=("extreme_reference_discrepancy",)
+    )
+    assert not evidence_eligibility(
+        b,
+        now=NOW,
+        eligible_at=NOW,
+        maximum_age=30,
+        research=True,
+        minimum_confidence="HEALTHY",
+    )[0]
+    assert not evidence_eligibility(
+        b,
+        now=NOW,
+        eligible_at=NOW,
+        maximum_age=30,
+        research=True,
+        minimum_confidence="DEGRADED",
+    )[0]
+    assert evidence_eligibility(
+        b,
+        now=NOW,
+        eligible_at=NOW,
+        maximum_age=30,
+        research=True,
+        minimum_confidence="ANOMALY_RESEARCH",
+    )[0]
