@@ -18,3 +18,13 @@ def timestamp(value):
         return None
 
 
+def amount(value):
+    if isinstance(value, (bool, float)) or value is None:
+        return None
+    try:
+        value = Decimal(value)
+        return value if value.is_finite() else None
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
