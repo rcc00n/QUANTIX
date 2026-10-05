@@ -736,6 +736,63 @@ async def test_restart_reuses_pinned_first_observation_and_does_not_double_spend
         assert count == 2 and await reconcile(db, e.ids["session"])
 
 
+@pytest.mark.parametrize("environment", ["transfer"], indirect=True)
+async def test_transfer_waits_for_settlement_and_new_selling_book(environment):
+    e = environment
+    await at(e, 6)
+    await e.coordinator.observe(book(e.buy.market_id, e.buy.exchange, e.state["now"], index=3))
+    await advance(e)
+    await at(e, 7)
+    await advance(e)
+    async with e.sessions() as db:
+        t = await db.get(PaperTrade, e.ids["trade"])
+        assert "sell_eligible_at" in t.state and not t.state.get("transfer_settled")
+    await at(e, 15)
+    await advance(e)
+    async with e.sessions() as db:
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(PaperOrder)
+                .where(PaperOrder.trade_id == e.ids["trade"])
+            )
+            == 1
+        )
+    await at(e, 17)
+    await advance(e)
+    # A pre-settlement observation is not a fill source even if it had an attractive price.
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            NOW + timedelta(seconds=16),
+            bid="200",
+            ask="201",
+            index=4,
+        )
+    )
+    await at(e, 18)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="109",
+            ask="110",
+            index=5,
+        )
+    )
+    await advance(e)
+    async with e.sessions() as db:
+        t = await db.get(PaperTrade, e.ids["trade"])
+        assert t.status == "COMPLETED"
+        fill = await db.scalar(
+            select(PaperFill)
+            .join(PaperOrder)
+            .where(PaperOrder.trade_id == t.id, PaperOrder.side == "sell")
+        )
+        assert fill.executed_at == NOW + timedelta(seconds=18) and fill.price == 109
+        assert await reconcile(db, e.ids["session"])
 
 
 
