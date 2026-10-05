@@ -690,6 +690,50 @@ async def test_partial_independent_legs_never_count_as_closed_profit(environment
         assert await reconcile(db, e.ids["session"])
 
 
+async def test_restart_reuses_pinned_first_observation_and_does_not_double_spend(
+    environment,
+):
+    e = environment
+    await at(e, 4)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=3,
+        )
+    )
+    await at(e, 6)
+    await e.coordinator.observe(book(e.buy.market_id, e.buy.exchange, e.state["now"], index=4))
+    await advance(e)
+    # Resume new coordinator against durable order/fill/reservation evidence.
+    e.coordinator = PaperCoordinator(e.collector)
+    async with e.sessions() as db:
+        await e.coordinator.market.refresh(db)
+        await e.coordinator.refresh_targets(db)
+    await at(e, 7)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=5,
+        )
+    )
+    await advance(e)
+    await advance(e)
+    async with e.sessions() as db:
+        count = await db.scalar(
+            select(func.count())
+            .select_from(PaperFill)
+            .join(PaperOrder)
+            .where(PaperOrder.trade_id == e.ids["trade"])
+        )
+        assert count == 2 and await reconcile(db, e.ids["session"])
 
 
 
