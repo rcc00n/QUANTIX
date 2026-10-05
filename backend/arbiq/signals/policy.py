@@ -28,3 +28,12 @@ def amount(value):
         return None
 
 
+def quiet_hours(now, policy):
+    if not policy.quiet_hours_enabled or policy.quiet_start == policy.quiet_end:
+        return False
+    local_time = now.astimezone(EDMONTON).strftime("%H:%M")
+    if policy.quiet_start < policy.quiet_end:
+        return policy.quiet_start <= local_time < policy.quiet_end
+    return local_time >= policy.quiet_start or local_time < policy.quiet_end
+
+
