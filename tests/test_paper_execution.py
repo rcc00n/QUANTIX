@@ -531,6 +531,58 @@ async def test_future_dated_evaluation_never_reserves_or_orders(environment):
         assert await reconcile(db, trade.session_id)
 
 
+@pytest.mark.parametrize("environment", [None, "default_slippage"], indirect=True)
+async def test_delayed_independent_execution_idempotency_and_ledger(environment):
+    e = environment
+    async with e.sessions() as db:
+        t = await db.get(PaperTrade, e.ids["trade"])
+        assert t.status == "SCHEDULED"
+    await at(e, 4)
+    await e.coordinator.observe(book(e.buy.market_id, e.buy.exchange, e.state["now"], index=3))
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=4,
+        )
+    )
+    await at(e, 6)
+    await e.coordinator.observe(book(e.buy.market_id, e.buy.exchange, e.state["now"], index=5))
+    await advance(e)
+    async with e.sessions() as db:
+        assert (
+            await db.scalar(
+                select(func.count())
+                .select_from(PaperFill)
+                .join(PaperOrder)
+                .where(PaperOrder.trade_id == e.ids["trade"])
+            )
+            == 1
+        )
+    await at(e, 7)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=6,
+        )
+    )
+    await advance(e)
+    async with e.sessions() as db:
+        t = await db.get(PaperTrade, e.ids["trade"])
+        assert t.status == "COMPLETED"
+        assert D(t.state["result"]["net_pnl_cad"]) > 0
+        assert await reconcile(db, e.ids["session"])
+        before = await db.scalar(select(func.count()).select_from(Journal))
+    await advance(e)
+    async with e.sessions() as db:
+        assert await db.scalar(select(func.count()).select_from(Journal)) == before
 
 
 
