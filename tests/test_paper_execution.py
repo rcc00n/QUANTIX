@@ -795,6 +795,42 @@ async def test_transfer_waits_for_settlement_and_new_selling_book(environment):
         assert await reconcile(db, e.ids["session"])
 
 
+async def test_coordinator_tick_automatically_consumes_first_causal_books(environment):
+    from unittest.mock import AsyncMock
+
+    e = environment
+    await at(e, 4)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=3,
+        )
+    )
+    await at(e, 6)
+    await e.coordinator.observe(book(e.buy.market_id, e.buy.exchange, e.state["now"], index=4))
+    await at(e, 7)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=5,
+        )
+    )
+    # Restrict this test to already-scheduled execution; discovery has its owntests.
+    e.coordinator.schedule = AsyncMock()
+    e.coordinator.last_valuation = 100
+    await e.coordinator.tick()
+    async with e.sessions() as db:
+        t = await db.get(PaperTrade, e.ids["trade"])
+        assert t.status == "COMPLETED"
+        assert await reconcile(db, e.ids["session"])
 
 
 
