@@ -652,6 +652,42 @@ async def test_spread_disappearance_never_fabricates_fills(environment):
         assert fills == 0
 
 
+@pytest.mark.parametrize("environment", ["small_size"], indirect=True)
+async def test_partial_independent_legs_never_count_as_closed_profit(environment):
+    e = environment
+    await at(e, 4)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=3,
+        )
+    )
+    await at(e, 6)
+    await e.coordinator.observe(
+        book(e.buy.market_id, e.buy.exchange, e.state["now"], qty=".1", index=4)
+    )
+    await advance(e)
+    await at(e, 7)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=5,
+        )
+    )
+    await advance(e)
+    async with e.sessions() as db:
+        trade = await db.get(PaperTrade, e.ids["trade"])
+        assert trade.status == "PARTIAL"
+        assert trade.state["result"] == {} and trade.state["exposure"]["unmatched"]
+        assert await reconcile(db, e.ids["session"])
 
 
 
