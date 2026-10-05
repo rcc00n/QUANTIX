@@ -37,3 +37,12 @@ def quiet_hours(now, policy):
     return local_time >= policy.quiet_start or local_time < policy.quiet_end
 
 
+@dataclass(frozen=True)
+class Gate:
+    eligible: bool
+    classification: str
+    emergency: bool
+    silent: bool
+    reasons: tuple[str, ...]
+
+
