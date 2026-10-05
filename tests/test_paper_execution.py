@@ -585,6 +585,36 @@ async def test_delayed_independent_execution_idempotency_and_ledger(environment)
         assert await db.scalar(select(func.count()).select_from(Journal)) == before
 
 
+async def test_one_sided_timeout_preserves_exposure(environment):
+    e = environment
+    await at(e, 4)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=3,
+        )
+    )
+    await at(e, 6)
+    await e.coordinator.observe(book(e.buy.market_id, e.buy.exchange, e.state["now"], index=4))
+    await advance(e)
+    await at(e, 100)
+    await advance(e)
+    async with e.sessions() as db:
+        t = await db.get(PaperTrade, e.ids["trade"])
+        assert t.status == "PARTIAL"
+        assert t.state["exposure"]["unmatched"] and t.state["result"] == {}
+        p = await db.scalar(
+            select(PortfolioPosition).where(
+                PortfolioPosition.session_id == e.ids["session"],
+                PortfolioPosition.exchange_id == e.ids["bx"],
+                PortfolioPosition.asset_id == e.ids["btc"],
+            )
+        )
+        assert p.quantity > 0 and await reconcile(db, e.ids["session"])
 
 
 
