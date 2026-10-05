@@ -833,5 +833,40 @@ async def test_coordinator_tick_automatically_consumes_first_causal_books(enviro
         assert await reconcile(db, e.ids["session"])
 
 
+async def test_late_older_observation_does_not_use_future_cost_basis(environment):
+    e = environment
+    await at(e, 4)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=3,
+        )
+    )
+    await at(e, 8)
+    await e.coordinator.observe(book(e.buy.market_id, e.buy.exchange, e.state["now"], index=4))
+    await advance(e)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            NOW + timedelta(seconds=7),
+            bid="110",
+            ask="111",
+            index=5,
+        )
+    )
+    await advance(e)
+    async with e.sessions() as db:
+        t = await db.get(PaperTrade, e.ids["trade"])
+        assert t.status == "PARTIAL"
+        order = await db.scalar(
+            select(PaperOrder).where(PaperOrder.trade_id == t.id, PaperOrder.side == "sell")
+        )
+        assert order.reason == "LATE_OUT_OF_ORDER_EVIDENCE"
+        assert await reconcile(db, e.ids["session"])
 
 
