@@ -405,3 +405,43 @@ def project(
     return payload
 
 
+def meets_filters(
+    row,
+    *,
+    search="",
+    min_profit_cad=None,
+    min_return_pct=None,
+    min_quantity=None,
+    min_liquidity_cad=None,
+    max_acquisition_cad=None,
+    confidence=None,
+):
+    if (
+        search
+        and search.casefold()
+        not in " ".join(
+            str(row.get(k, ""))
+            for k in ("base_asset", "buy_exchange", "sell_exchange", "buy_symbol", "sell_symbol")
+        ).casefold()
+    ):
+        return False
+    if confidence and row.get("data_confidence") != confidence:
+        return False
+    for field, target, minimum in (
+        ("net_profit_cad", min_profit_cad, True),
+        ("net_return_pct", min_return_pct, True),
+        ("quantity", min_quantity, True),
+        ("maximum_liquidity_cad", min_liquidity_cad, True),
+        ("acquisition_cost_cad", max_acquisition_cad, False),
+    ):
+        if target is None:
+            continue
+        try:
+            amount = Decimal(row[field])
+            if not amount.is_finite() or (amount < target if minimum else amount > target):
+                return False
+        except (KeyError, TypeError, InvalidOperation):
+            return False
+    return True
+
+
