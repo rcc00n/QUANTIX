@@ -118,3 +118,17 @@ def list_payload_expression(budget: Decimal, *, full: bool = False, payload_colu
     )
 
 
+def list_route_query(budget: Decimal, *, full: bool = False, include_payload: bool = True):
+    """Lightweight rows avoid hydrating unused ORM columns and identity-map state."""
+    columns = (
+        ArbitrageRoute.id,
+        ArbitrageRoute.status,
+        ArbitrageRoute.detected_at,
+        ArbitrageRoute.updated_at,
+        ArbitrageRoute.expires_at,
+    )
+    if include_payload:
+        columns += (list_payload_expression(budget, full=full).label("payload"),)
+    return select(*columns)
+
+
