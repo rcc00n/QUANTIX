@@ -151,3 +151,21 @@ def live_projection_times(value) -> tuple[datetime, datetime] | None:
     return None
 
 
+def live_diagnostics(value: dict) -> dict:
+    clock = value.get("clock", {})
+    if not isinstance(clock, dict):
+        clock = {"trusted": False, "host_healthy": False, "reason": "CLOCK_DIAGNOSTICS_INVALID"}
+    trustworthy = (
+        isinstance(clock, dict)
+        and clock.get("trusted") is True
+        and utc_timestamp(clock.get("utc_now")) is not None
+    )
+    return {
+        **value,
+        "healthy": value.get("healthy") is True,
+        "clock": clock,
+        "source": "live_collector_engine",
+        "clock_healthy": trustworthy and clock.get("host_healthy") is True,
+    }
+
+
