@@ -50,3 +50,20 @@ async def utc_reference(request):
     return datetime.now(UTC), {"trusted": False, "host_healthy": False}
 
 
+@router.get("/market-data/status")
+async def status(request: Request, db: DB, user: AuthenticatedUser):
+    now, clock = await utc_reference(request)
+    run, healthy = await collector_state(db, now)
+    return {
+        "status": "running" if healthy else "unavailable",
+        "collector_healthy": healthy,
+        "heartbeat_at": run.heartbeat_at if run else None,
+        "run_id": str(run.id) if run else None,
+        "metrics": run.metrics if run else {},
+        "mode": "paper",
+        "arbitrage_engine": "depth_scanner",
+        "source": "persisted_collector_heartbeat",
+        "stage": 3,
+    }
+
+
