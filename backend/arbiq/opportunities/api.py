@@ -445,3 +445,14 @@ def meets_filters(
     return True
 
 
+def financial_sort(value: dict, field: str) -> tuple:
+    raw = value.get(field)
+    try:
+        number = Decimal(raw) if isinstance(raw, str) else None
+        if number is not None and not number.is_finite():
+            number = None
+    except InvalidOperation:
+        number = None
+    return (number is None, number.copy_negate() if number is not None else Decimal(0), value["id"])
+
+
