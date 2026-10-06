@@ -132,3 +132,13 @@ def list_route_query(budget: Decimal, *, full: bool = False, include_payload: bo
     return select(*columns)
 
 
+def utc_timestamp(value) -> datetime | None:
+    try:
+        result = datetime.fromisoformat(value) if isinstance(value, str) else value
+        if not isinstance(result, datetime) or result.tzinfo is None:
+            return None
+        return result.astimezone(UTC)
+    except (ValueError, OverflowError):
+        return None
+
+
