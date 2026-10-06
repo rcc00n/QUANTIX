@@ -262,3 +262,31 @@ async def confirm(market_id: UUID, request: Request, db: DB, user: Authenticated
         raise HTTPException(503, "Collector unavailable") from None
 
 
+@router.get("/exchanges/{slug}/quality")
+async def quality_events(
+    slug: str, db: DB, user: AuthenticatedUser, limit: int = Query(default=20, ge=1, le=100)
+):
+    rows = (
+        await db.execute(
+            select(MarketQualityEvent, Market.native_symbol)
+            .join(Market, Market.id == MarketQualityEvent.market_id)
+            .join(Exchange)
+            .where(Exchange.slug == slug)
+            .order_by(MarketQualityEvent.created_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    return [
+        {
+            "id": str(row.id),
+            "market_id": str(row.market_id),
+            "symbol": symbol,
+            "created_at": row.created_at,
+            "state": row.state,
+            "reasons": row.reasons,
+            "evidence": row.evidence,
+            "confirmation": row.confirmation,
+            "snapshot_id": str(row.snapshot_id) if row.snapshot_id else None,
+        }
+        for row, symbol in rows
+    ]
