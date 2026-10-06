@@ -147,3 +147,49 @@ async def exchanges(request: Request, db: DB, user: AuthenticatedUser):
     return result
 
 
+@router.get("/exchanges/{slug}/markets")
+async def markets(
+    slug: str,
+    db: DB,
+    user: AuthenticatedUser,
+    search: str = Query(default="", max_length=80),
+    monitored_only: bool = False,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    exchange = await db.scalar(select(Exchange).where(Exchange.slug == slug))
+    if exchange is None:
+        raise HTTPException(404, "Exchange not found")
+    query = select(Market).where(Market.exchange_id == exchange.id)
+    if search:
+        query = query.where(Market.native_symbol.ilike(f"%{search}%"))
+    if monitored_only:
+        query = query.where(
+            Market.metadata_json["monitored"].as_boolean().is_(True), Market.active.is_(True)
+        )
+    total = await db.scalar(select(func.count()).select_from(query.subquery()))
+    rows = (
+        await db.scalars(query.order_by(Market.native_symbol).limit(limit).offset(offset))
+    ).all()
+    return {
+        "exchange": slug,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "markets": [
+            {
+                "id": str(row.id),
+                "symbol": row.native_symbol,
+                "active": row.active,
+                "base_asset_id": str(row.base_asset_id),
+                "quote_asset_id": str(row.quote_asset_id),
+                "amount_step": str(row.amount_step) if row.amount_step is not None else None,
+                "price_tick": str(row.price_tick) if row.price_tick is not None else None,
+                "min_notional": str(row.min_notional) if row.min_notional is not None else None,
+                **row.metadata_json,
+            }
+            for row in rows
+        ],
+    }
+
+
