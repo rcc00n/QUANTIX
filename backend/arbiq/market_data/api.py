@@ -193,3 +193,54 @@ async def markets(
     }
 
 
+@router.get("/markets/{market_id}/book")
+async def order_book(market_id: UUID, request: Request, db: DB, user: AuthenticatedUser):
+    if await db.get(Market, market_id) is None:
+        raise HTTPException(404, "Market not found")
+    client = request.app.state.collector_http
+    book = None
+    origin = "persisted_cache"
+    _, healthy = await collector_state(db)
+    if client is not None:
+        try:
+            async with client.get(f"/books/{market_id}") as response:
+                if response.status == 200:
+                    book = CapturedBook.model_validate(await response.json())
+                    origin = "live_memory"
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            pass
+    if book is None:
+        row = await db.get(LatestMarketBook, market_id)
+        if row is None:
+            raise HTTPException(
+                404, "No order book collected for this market; select a monitored market"
+            )
+        book = CapturedBook.model_validate(row.payload)
+        reasons = tuple(dict.fromkeys((*book.reasons, "collector_live_cache_unavailable")))
+        book = book.classified(
+            DataState.DEGRADED if book.state == DataState.HEALTHY else book.state, reasons=reasons
+        )
+    now, clock = await utc_reference(request)
+    if not clock["trusted"] and book.state == DataState.HEALTHY:
+        book = book.classified(
+            DataState.DEGRADED, reasons=(*book.reasons, "utc_reference_unavailable")
+        )
+    book = fresh_view(book, now, request.app.state.settings.collector.maximum_age_seconds)
+    return {
+        **book.model_dump(mode="json"),
+        "storage_origin": origin,
+        "collector_healthy": healthy,
+        "status_generated_at": now.isoformat(),
+        "freshness": freshness(book, now, request.app.state.settings.collector, clock),
+        "age_ms": round(age_seconds(now, book.received_at) * 1000)
+        if clock.get("trusted") and age_seconds(now, book.received_at) is not None
+        else None,
+        "clock": clock,
+        "exchange_age_ms": round(age_seconds(now, book.exchange_timestamp) * 1000)
+        if clock.get("trusted") and age_seconds(now, book.exchange_timestamp) is not None
+        else None,
+        "actionable": False,
+        "arbitrage_engine": "depth_scanner",
+    }
+
+
