@@ -169,3 +169,32 @@ def live_diagnostics(value: dict) -> dict:
     }
 
 
+async def collector_current(
+    request: Request, *, full=True, route_id=None, route_ids=None
+) -> tuple[dict, dict | None]:
+    client = request.app.state.collector_http
+    if client is not None:
+        try:
+            params = {"summary": "0" if full else "1"}
+            if route_id:
+                params["route_id"] = str(route_id)
+            elif route_ids and len(route_ids) <= CUSTOM_BUDGET_WINDOW:
+                params["route_ids"] = ",".join(map(str, route_ids))
+            async with client.get("/engine/current", params=params) as response:
+                if response.status == 200:
+                    value = await response.json()
+                    if isinstance(value, dict) and isinstance(value.get("items"), list):
+                        items = {
+                            item["id"]: item
+                            for item in value["items"][:5000]
+                            if isinstance(item, dict) and isinstance(item.get("id"), str)
+                        }
+                        diagnostics = value.get("diagnostics")
+                        return items, live_diagnostics(diagnostics) if isinstance(
+                            diagnostics, dict
+                        ) else None
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            pass
+    return {}, None
+
+
