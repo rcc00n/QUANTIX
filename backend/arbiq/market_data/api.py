@@ -244,3 +244,21 @@ async def order_book(market_id: UUID, request: Request, db: DB, user: Authentica
     }
 
 
+@router.post("/markets/{market_id}/confirm", status_code=202)
+async def confirm(market_id: UUID, request: Request, db: DB, user: AuthenticatedUser):
+    market = await db.get(Market, market_id)
+    if market is None:
+        raise HTTPException(404, "Market not found")
+    client = request.app.state.collector_http
+    if client is None:
+        raise HTTPException(503, "Collector unavailable")
+    try:
+        async with client.post(f"/books/{market_id}/confirm") as response:
+            value = await response.json()
+            if response.status != 202:
+                raise HTTPException(response.status, value.get("status", "Recheck unavailable"))
+            return {"status": "QUEUED", "actionable": False}
+    except (aiohttp.ClientError, TimeoutError):
+        raise HTTPException(503, "Collector unavailable") from None
+
+
