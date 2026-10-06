@@ -229,3 +229,179 @@ async def collector_diagnostics(request: Request, db) -> dict:
     }
 
 
+def project(
+    route,
+    budget: Decimal,
+    diagnostics: dict,
+    maximum_age: int,
+    evidence=None,
+    current=None,
+    max_resize_evaluations=4096,
+) -> dict:
+    """Apply current display eligibility without modifying historical audit records."""
+    live_times = live_projection_times(current)
+    active = current if live_times else None
+    updated_at, expires_at = live_times or (route.updated_at, route.expires_at)
+    status = active.get("status", route.status) if active else route.status
+    payload = {
+        **(active if active else route.payload),
+        "id": str(route.id),
+        "status": status,
+        "detected_at": route.detected_at.isoformat(),
+        "updated_at": updated_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "actionable": False,
+        "eligibility": "UNVERIFIED",
+    }
+    if evidence is not None and not active:
+        payload["evidence"] = evidence
+    elif evidence is not None and active:
+        retained = {
+            key: value
+            for key, value in evidence.items()
+            if key.endswith(("_snapshot_id", "_fee_version_id"))
+        }
+        for side in ("buy", "sell"):
+            book = evidence.get(f"{side}_book", {})
+            if isinstance(book, dict):
+                retained[f"{side}_received_at"] = book.get("received_at")
+        payload["evidence"] = {
+            **payload.get("evidence", {}),
+            "retained_snapshot_references": {
+                **retained,
+                "attribution": "last durable evaluation; may precede current market inputs",
+            },
+        }
+    try:
+        retained_budget = Decimal(str(payload.get("selected_budget_cad", "NaN")))
+        if retained_budget != budget:
+            payload = resize(payload, budget, max_search_evaluations=max_resize_evaluations)
+    except (ValueError, TypeError, ArithmeticError, KeyError):
+        payload = {
+            **payload,
+            "quantity": None,
+            "buy_price": None,
+            "sell_price": None,
+            "net_profit_cad": None,
+            "net_return_pct": None,
+            "acquisition_cost_cad": None,
+            "costs": {},
+            "reasons": [*payload.get("reasons", []), "CALCULATION_EVIDENCE_UNAVAILABLE"],
+        }
+    reasons = list(payload.get("reasons", []))
+    clock = diagnostics.get("clock", {})
+    if not isinstance(clock, dict):
+        clock = {}
+    now = utc_timestamp(clock.get("utc_now")) if clock.get("trusted") is True else None
+    supporting_received_at = utc_timestamp(payload.get("supporting_received_at"))
+    if supporting_received_at is None:
+        reasons.append("SUPPORTING_BOOK_TIMESTAMPS_UNAVAILABLE")
+    age_reference = supporting_received_at or updated_at
+    age = (now - age_reference).total_seconds() if now else None
+    payload["age_seconds"] = (
+        (now - route.detected_at).total_seconds() if now and now >= route.detected_at else None
+    )
+    payload["evidence_age_seconds"] = age if age is not None and age >= 0 else None
+    calculation_evidence = payload.get("evidence", {})
+    inputs = (
+        calculation_evidence.get("calculation_inputs", {})
+        if isinstance(calculation_evidence, dict)
+        else {}
+    )
+    inputs = inputs if isinstance(inputs, dict) else {}
+    input_time = utc_timestamp(inputs.get("evaluated_at")) or updated_at
+    payload["costs_evaluated_at"] = input_time.isoformat()
+    payload["costs_attribution"] = "historical projection from retained inputs at evaluation time"
+    cad_suppression = []
+    for side in ("buy", "sell"):
+        leg = inputs.get(side, {})
+        if not isinstance(leg, dict) or leg.get("quote_currency") in {None, "CAD"}:
+            continue
+        fx = leg.get("fx")
+        fresh_until = utc_timestamp(fx.get("fresh_until")) if isinstance(fx, dict) else None
+        if fresh_until is None:
+            cad_suppression.append("CAD_CONVERSION_EVIDENCE_UNAVAILABLE")
+        elif now is None:
+            cad_suppression.append("CAD_CONVERSION_FRESHNESS_UNVERIFIED")
+        elif now >= fresh_until:
+            cad_suppression.append("CAD_CONVERSION_EXPIRED")
+    supporting_source_at = utc_timestamp(payload.get("supporting_source_at"))
+    if supporting_source_at is None and isinstance(calculation_evidence, dict) and not active:
+        books = [calculation_evidence.get(f"{side}_book", {}) for side in ("buy", "sell")]
+        source_times = [
+            utc_timestamp(book.get("exchange_timestamp"))
+            for book in books
+            if isinstance(book, dict)
+        ]
+        if len(source_times) == 2 and all(source_times):
+            supporting_source_at = min(source_times)
+    source_age = (
+        (now - supporting_source_at).total_seconds() if now and supporting_source_at else None
+    )
+    source_expired = source_age is not None and (source_age > maximum_age or source_age < 0)
+    payload["source_evidence_age_seconds"] = source_age
+    if source_expired:
+        cad_suppression.append("SUPPORTING_SOURCE_TIMESTAMP_NOT_CURRENT")
+    if status not in TERMINAL:
+        if now and (now >= expires_at or (age is not None and age > maximum_age)):
+            payload["status"] = "EXPIRED"
+            reasons.append("RETAINED_CALCULATION_EXPIRED")
+        elif now and age is not None and age < 0:
+            payload["status"] = "RESEARCH_ONLY"
+            reasons.append("EVALUATION_TIMESTAMP_IN_FUTURE")
+        elif not diagnostics.get("healthy") or now is None:
+            payload["status"] = "RESEARCH_ONLY"
+            reasons.append("LIVE_FRESHNESS_UNVERIFIED")
+        elif not diagnostics.get("clock_healthy"):
+            payload["status"] = "RESEARCH_ONLY"
+            reasons.append("HOST_CLOCK_UNHEALTHY")
+        elif supporting_received_at is None:
+            payload["status"] = "RESEARCH_ONLY"
+        if source_expired:
+            payload["status"] = "EXPIRED"
+        elif cad_suppression and payload["status"] not in TERMINAL:
+            payload["status"] = "RESEARCH_ONLY"
+    if cad_suppression:
+        payload["net_profit_cad"] = None
+        payload["net_return_pct"] = None
+        payload["acquisition_cost_cad"] = None
+        reasons.extend(cad_suppression)
+    payload["cad_valuation_state"] = "SUPPRESSED" if cad_suppression else "RETAINED_PROJECTION"
+    if isinstance(payload.get("costs"), dict) and payload["costs"]:
+        payload["costs"] = {
+            **payload["costs"],
+            "evaluated_at_utc": input_time.isoformat(),
+            "attribution": "Historical projection at evaluation time; no execution",
+            "current_cad_valuation": ", ".join(dict.fromkeys(cad_suppression))
+            if cad_suppression
+            else "Retained projection; assess all confidence reasons",
+        }
+    payload["reasons"] = list(dict.fromkeys(reasons))
+    payload["selected_budget_cad"] = str(budget)
+    payload["calculation_attribution"] = "retained evaluation; projected values, no execution"
+    payload["storage_origin"] = "live_engine_projection" if active else "retained_evaluation"
+    payload["official_market_links"] = {
+        side: official_market_link(payload.get(f"{side}_exchange"), payload.get(f"{side}_symbol"))
+        for side in ("buy", "sell")
+    }
+    quality = [
+        calculation_evidence.get(f"{side}_quality", "UNAVAILABLE") for side in ("buy", "sell")
+    ]
+    severity = {"HEALTHY": 0, "DEGRADED": 1, "SUSPICIOUS": 2, "STALE": 3, "UNAVAILABLE": 4}
+    payload["data_confidence"] = max(quality, key=lambda x: severity.get(x, 4))
+    costs = payload.get("costs") or {}
+    maximum = payload.get("maximum_executable") or {}
+    payload["required_inventory"] = costs.get("capital_requirements", {})
+    payload["estimated_costs"] = {
+        k: costs.get(k)
+        for k in ("fees_cad", "fx_cost_cad", "slippage_reserve_cad", "rebalancing_cost_cad")
+    }
+    payload["maximum_liquidity_cad"] = (
+        maximum.get("acquisition_cost_cad") if not cad_suppression else None
+    )
+    payload["liquidity_definition"] = (
+        "Modeled depth-constrained acquisition cost; not available funds"
+    )
+    return payload
+
+
