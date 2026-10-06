@@ -142,3 +142,12 @@ def utc_timestamp(value) -> datetime | None:
         return None
 
 
+def live_projection_times(value) -> tuple[datetime, datetime] | None:
+    if isinstance(value, dict):
+        updated_at = utc_timestamp(value.get("updated_at"))
+        expires_at = utc_timestamp(value.get("expires_at"))
+        if updated_at is not None and expires_at is not None:
+            return updated_at, expires_at
+    return None
+
+
