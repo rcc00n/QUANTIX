@@ -36,3 +36,17 @@ async def collector_state(db, now=None):
     return run, healthy
 
 
+async def utc_reference(request):
+    client = request.app.state.collector_http
+    if client is not None:
+        try:
+            async with client.get("/clock") as response:
+                if response.status == 200:
+                    clock = await response.json()
+                    if clock.get("utc_now"):
+                        return datetime.fromisoformat(clock["utc_now"]), clock
+        except (aiohttp.ClientError, TimeoutError, ValueError, KeyError):
+            pass
+    return datetime.now(UTC), {"trusted": False, "host_healthy": False}
+
+
