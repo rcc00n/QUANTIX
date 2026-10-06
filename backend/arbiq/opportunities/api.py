@@ -198,3 +198,34 @@ async def collector_current(
     return {}, None
 
 
+async def collector_diagnostics(request: Request, db) -> dict:
+    """Live IPC proves process liveness; persisted heartbeats cannot prove UTC trust."""
+    client = request.app.state.collector_http
+    if client is not None and not getattr(
+        getattr(request, "state", None), "collector_unavailable", False
+    ):
+        try:
+            async with client.get("/engine/diagnostics") as response:
+                if response.status == 200:
+                    value = await response.json()
+                    if isinstance(value, dict):
+                        return live_diagnostics(value)
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            pass
+    run = await db.scalar(
+        select(CollectorRun)
+        .order_by((CollectorRun.status == "running").desc(), CollectorRun.created_at.desc())
+        .limit(1)
+    )
+    retained = (run.metrics or {}).get("engine", {}) if run else {}
+    return {
+        **(retained if isinstance(retained, dict) else {}),
+        "healthy": False,
+        "clock_healthy": False,
+        "clock": {"trusted": False, "host_healthy": False, "reason": "LIVE_CLOCK_UNAVAILABLE"},
+        "source": "persisted_engine_diagnostics" if run else "unavailable",
+        "heartbeat_at": run.heartbeat_at.isoformat() if run else None,
+        "reasons": ["LIVE_ENGINE_UNAVAILABLE", "PERSISTED_EVIDENCE_IS_NOT_A_FRESH_QUOTE"],
+    }
+
+
