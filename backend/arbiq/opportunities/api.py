@@ -717,3 +717,30 @@ async def detail(
     }
 
 
+@router.post("/{route_id}/recheck", status_code=202)
+async def recheck(route_id: UUID, request: Request, db: DB, user: AuthenticatedUser):
+    if await db.get(ArbitrageRoute, route_id) is None:
+        raise HTTPException(404, "Opportunity not found")
+    client = request.app.state.collector_http
+    if client is None:
+        raise HTTPException(503, "Collector unavailable")
+    try:
+        async with client.post(f"/engine/routes/{route_id}/recheck") as response:
+            if response.status != 202:
+                code = response.status if response.status in {404, 409, 429, 503} else 502
+                raise HTTPException(code, "Recheck unavailable or rate limited")
+            db.add(
+                SystemEvent(
+                    actor_user_id=user.id,
+                    event_type="opportunity.recheck_requested",
+                    severity="info",
+                    message="Owner requested fresh public market evidence",
+                    details={"route_id": str(route_id), "mode": "paper_research"},
+                )
+            )
+            await db.commit()
+            return {"status": "QUEUED", "actionable": False}
+    except (aiohttp.ClientError, TimeoutError):
+        raise HTTPException(503, "Collector unavailable") from None
+
+
