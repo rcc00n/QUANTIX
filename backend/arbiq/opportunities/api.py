@@ -468,3 +468,12 @@ async def budgets(request: Request, user: AuthenticatedUser):
     }
 
 
+@router.get("/diagnostics")
+async def diagnostics(request: Request, db: DB, user: AuthenticatedUser):
+    return {
+        **await collector_diagnostics(request, db),
+        "api_candidate_window": CANDIDATE_WINDOW,
+        "actionable": False,
+    }
+
+
