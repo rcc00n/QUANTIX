@@ -174,6 +174,19 @@ async def portfolio(session_id: UUID, request: Request, db: DB, user: Authentica
     }
 
 
+@router.get("/paper/sessions/{session_id}/metrics")
+async def metrics(session_id: UUID, db: DB, user: AuthenticatedUser):
+    _, control = await owned(db, user, session_id)
+    value = await analytics.performance(
+        db, session_id, research_only=control.classification == "RESEARCH"
+    )
+    value["counts"] = {
+        **value.get("counts", {}),
+        **{k.lower(): v for k, v in value.get("counts", {}).items()},
+    }
+    return value
+
+
 @router.get("/paper/trades/{trade_id}")
 async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
     trade = await db.scalar(
