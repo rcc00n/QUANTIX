@@ -203,6 +203,24 @@ async def daily(
     return {"items": [record(r) for r in rows], "timezone": "America/Edmonton", "limit": limit}
 
 
+@router.post("/paper/sessions/{session_id}/pause")
+async def pause(session_id: UUID, request: Request, db: DB, user: AuthenticatedUser):
+    _, control = await owned(db, user, session_id)
+    control.status = "PAUSED"
+    control.updated_at = await now_checked(request)
+    db.add(
+        SystemEvent(
+            actor_user_id=user.id,
+            event_type="paper.paused",
+            severity="info",
+            message="Paper scheduling paused",
+            details={"session_id": str(session_id)},
+        )
+    )
+    await db.commit()
+    return {"status": "PAUSED", "existing_reserved_legs": "continue_with_audit"}
+
+
 @router.get("/paper/trades/{trade_id}")
 async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
     trade = await db.scalar(
