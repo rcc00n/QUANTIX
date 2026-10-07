@@ -80,6 +80,24 @@ class CreatePortfolio(Contract):
     allocations: list[Allocation] | None = None
 
 
+@router.get("/paper/sessions")
+async def sessions(db: DB, user: AuthenticatedUser):
+    rows = (
+        await db.execute(
+            select(PaperSession, PaperControl)
+            .join(PaperControl)
+            .where(PaperSession.user_id == user.id)
+            .order_by(PaperSession.started_at)
+            .limit(100)
+        )
+    ).all()
+    return {
+        "items": [session_dto(*r) for r in rows],
+        "total": len(rows),
+        "scenarios_are_separate": True,
+    }
+
+
 @router.post("/paper/sessions", status_code=201)
 async def create(body: CreatePortfolio, request: Request, db: DB, user: AuthenticatedUser):
     now = await now_checked(request)
