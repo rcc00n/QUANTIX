@@ -61,3 +61,10 @@ async def owned(db, user, session_id):
     return row
 
 
+async def now_checked(request):
+    now, clock = await utc_reference(request)
+    if not clock["trusted"]:
+        raise HTTPException(503, "Trusted application UTC unavailable; paper writes paused")
+    return now
+
+
