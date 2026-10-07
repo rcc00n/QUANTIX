@@ -221,6 +221,24 @@ async def pause(session_id: UUID, request: Request, db: DB, user: AuthenticatedU
     return {"status": "PAUSED", "existing_reserved_legs": "continue_with_audit"}
 
 
+@router.post("/paper/sessions/{session_id}/resume")
+async def resume(session_id: UUID, request: Request, db: DB, user: AuthenticatedUser):
+    _, control = await owned(db, user, session_id)
+    control.status = "ACTIVE"
+    control.updated_at = await now_checked(request)
+    db.add(
+        SystemEvent(
+            actor_user_id=user.id,
+            event_type="paper.resumed",
+            severity="info",
+            message="Paper scheduling resumed",
+            details={"session_id": str(session_id)},
+        )
+    )
+    await db.commit()
+    return {"status": "ACTIVE"}
+
+
 @router.get("/paper/trades/{trade_id}")
 async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
     trade = await db.scalar(
