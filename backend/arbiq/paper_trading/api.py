@@ -239,6 +239,32 @@ async def resume(session_id: UUID, request: Request, db: DB, user: Authenticated
     return {"status": "ACTIVE"}
 
 
+@router.put("/paper/sessions/{session_id}/strategy")
+async def strategy_update(
+    session_id: UUID, body: PaperStrategy, request: Request, db: DB, user: AuthenticatedUser
+):
+    session, control = await owned(db, user, session_id)
+    if (body.mode == "RESEARCH_SHADOW") != (control.classification == "RESEARCH"):
+        raise HTTPException(409, "Create a separate portfolio to change research classification")
+    if body.starting_capital_cad != session.initial_equity_cad:
+        raise HTTPException(
+            409,
+            "Create a new funded portfolio to change starting capital; history cannot be rewritten",
+        )
+    now = await now_checked(request)
+    version = await save_strategy(db, user.id, body, now)
+    control.strategy_version_id = version.id
+    control.settings = body.model_dump(mode="json")
+    control.mode = body.mode
+    control.updated_at = now
+    await db.commit()
+    return {
+        "strategy_version_id": str(version.id),
+        "version": version.version,
+        "settings": version.settings,
+    }
+
+
 @router.get("/paper/trades/{trade_id}")
 async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
     trade = await db.scalar(
