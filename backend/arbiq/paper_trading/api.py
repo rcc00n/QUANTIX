@@ -121,6 +121,59 @@ async def create(body: CreatePortfolio, request: Request, db: DB, user: Authenti
         raise HTTPException(422, str(exc)) from None
 
 
+@router.get("/paper/sessions/{session_id}/portfolio")
+async def portfolio(session_id: UUID, request: Request, db: DB, user: AuthenticatedUser):
+    session, control = await owned(db, user, session_id)
+    await db.commit()  # Ownership is read-only; release the pool slot before live IPC.
+    client = request.app.state.collector_http
+    if client:
+        try:
+            async with client.get(f"/paper/portfolios/{session_id}") as response:
+                if response.status == 200:
+                    value = await response.json()
+                    value["storage_origin"] = "current_ledger_and_observed_marks"
+                    return value
+        except (aiohttp.ClientError, TimeoutError, ValueError):
+            pass
+    last = await db.scalar(
+        select(PortfolioCheckpoint)
+        .where(PortfolioCheckpoint.session_id == session_id)
+        .order_by(PortfolioCheckpoint.as_of.desc())
+        .limit(1)
+    )
+    if last:
+        return {
+            **last.payload,
+            "storage_origin": "retained_snapshot",
+            "stale": True,
+            "valuation_status": "STALE",
+            "valuation_status_at_checkpoint": last.payload.get("valuation_status"),
+            "limitations": [*last.payload.get("limitations", []), "LIVE_VALUATION_UNAVAILABLE"],
+        }
+    return {
+        "session_id": str(session.id),
+        "classification": control.classification,
+        "initial_equity_cad": str(session.initial_equity_cad),
+        "equity_cad": None,
+        "valuation_status": "UNKNOWN",
+        "valued_subtotal_cad": None,
+        "unpriced_balances": [],
+        "net_simulated_pnl_cad": None,
+        "realized_trading_pnl_cad": None,
+        "realized_fx_pnl_cad": None,
+        "unrealized_pnl_cad": None,
+        "fees_cad": None,
+        "expenses_cad": None,
+        "no_trading_benchmark_cad": None,
+        "drawdown_pct": None,
+        "capital_utilization_pct": None,
+        "portfolio_return_pct": None,
+        "balances": [],
+        "limitations": ["FIRST_VALUATION_PENDING"],
+        "storage_origin": "unavailable",
+    }
+
+
 @router.get("/paper/trades/{trade_id}")
 async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
     trade = await db.scalar(
