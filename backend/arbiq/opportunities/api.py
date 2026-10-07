@@ -744,3 +744,35 @@ async def recheck(route_id: UUID, request: Request, db: DB, user: AuthenticatedU
         raise HTTPException(503, "Collector unavailable") from None
 
 
+@router.get("/{route_id}/size-diagnostics")
+async def diagnostics_sizes(
+    route_id: UUID,
+    request: Request,
+    db: DB,
+    user: AuthenticatedUser,
+    budget_cad: Budget = None,
+):
+    if await db.get(ArbitrageRoute, route_id) is None:
+        raise HTTPException(404, "Opportunity not found")
+    evaluation = await db.scalar(
+        select(ArbitrageEvaluation)
+        .where(ArbitrageEvaluation.route_id == route_id)
+        .order_by(ArbitrageEvaluation.revision.desc())
+        .limit(1)
+    )
+    if evaluation is None:
+        raise HTTPException(409, "Retained sizing evidence unavailable")
+    if _projection_gate.locked():
+        raise HTTPException(
+            429, "Candidate sizing busy; retry shortly", headers={"Retry-After": "2"}
+        )
+    try:
+        async with _projection_gate:
+            value = await asyncio.to_thread(
+                size_diagnostics,
+                evaluation.evidence,
+                budget_cad or request.app.state.settings.arbitrage.default_budget_cad,
+            )
+    except (ValueError, KeyError, TypeError, ArithmeticError):
+        raise HTTPException(409, "Retained sizing evidence cannot be reconstructed") from None
+    return {**value, "route_id": str(route_id), "evaluation_id": str(evaluation.id)}
