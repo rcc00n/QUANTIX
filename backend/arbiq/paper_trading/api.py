@@ -72,6 +72,37 @@ def record(row):
     return safe_json({c.name: getattr(row, c.name) for c in row.__table__.columns})
 
 
+class CreatePortfolio(Contract):
+    name: str = Field(default="Paper portfolio", min_length=1, max_length=100)
+    starting_capital_cad: PositiveDecimal = "10000"
+    classification: Literal["VALIDATED", "RESEARCH"] | None = None
+    settings: PaperStrategy | None = None
+    allocations: list[Allocation] | None = None
+
+
+@router.post("/paper/sessions", status_code=201)
+async def create(body: CreatePortfolio, request: Request, db: DB, user: AuthenticatedUser):
+    now = await now_checked(request)
+    settings = (
+        body.settings
+        or presets()["Aggressive Research" if body.classification == "RESEARCH" else "Balanced"]
+    )
+    settings = settings.model_copy(update={"starting_capital_cad": body.starting_capital_cad})
+    if body.classification and (settings.mode == "RESEARCH_SHADOW") != (
+        body.classification == "RESEARCH"
+    ):
+        raise HTTPException(422, "Research and validated capital require separate portfolio modes")
+    try:
+        result = await create_portfolio(
+            db, user.id, body.name, settings, body.starting_capital_cad, body.allocations, now
+        )
+        await db.commit()
+        return session_dto(*result)
+    except (ValueError, AccountingError) as exc:
+        await db.rollback()
+        raise HTTPException(422, str(exc)) from None
+
+
 @router.get("/paper/trades/{trade_id}")
 async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
     trade = await db.scalar(
