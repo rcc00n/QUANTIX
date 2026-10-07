@@ -642,3 +642,78 @@ async def opportunities(
     }
 
 
+@router.get("/{route_id}")
+async def detail(
+    route_id: UUID,
+    request: Request,
+    db: DB,
+    user: AuthenticatedUser,
+    budget_cad: Budget = None,
+):
+    route = await db.get(ArbitrageRoute, route_id)
+    if route is None:
+        raise HTTPException(404, "Opportunity not found")
+    latest = await db.scalar(
+        select(ArbitrageEvaluation)
+        .where(ArbitrageEvaluation.route_id == route_id)
+        .order_by(ArbitrageEvaluation.revision.desc())
+        .limit(1)
+    )
+    lifecycle = (
+        await db.scalars(
+            select(ArbitrageLifecycleEvent)
+            .where(ArbitrageLifecycleEvent.route_id == route_id)
+            .order_by(
+                ArbitrageLifecycleEvent.event_at.desc(),
+                func.coalesce(ArbitrageLifecycleEvent.details["revision"].as_integer(), 0).desc(),
+                ArbitrageLifecycleEvent.id,
+            )
+            .limit(100)
+        )
+    ).all()
+    config = request.app.state.settings.arbitrage
+    current, health = await collector_current(request, route_id=route_id)
+    active = current.get(str(route_id))
+    selected = budget_cad if budget_cad is not None else config.default_budget_cad
+    try:
+        requires_sizing = (
+            Decimal(str((active or route.payload).get("selected_budget_cad"))) != selected
+        )
+    except (ValueError, TypeError, InvalidOperation):
+        requires_sizing = True
+    gate = _projection_gate if requires_sizing else _view_gate
+    if gate.locked():
+        raise HTTPException(
+            429, "Candidate sizing busy; retry shortly", headers={"Retry-After": "2"}
+        )
+    async with gate:
+        projected = await asyncio.to_thread(
+            project,
+            route,
+            budget_cad if budget_cad is not None else config.default_budget_cad,
+            health or await collector_diagnostics(request, db),
+            config.maximum_book_age_seconds,
+            evidence=latest.evidence if latest else None,
+            current=active,
+        )
+    return {
+        **projected,
+        "evaluation_id": str(latest.id) if latest and not active else None,
+        "retained_evaluation_id": str(latest.id) if latest else None,
+        "revision": route.revision,
+        "evaluated_at": latest.evaluated_at if latest else None,
+        "lifecycle": [
+            {
+                "id": str(event.id),
+                "status": event.status,
+                "event_at": event.event_at,
+                "reason": event.reason,
+                "details": event.details,
+            }
+            for event in reversed(lifecycle)
+        ],
+        "lifecycle_limit": 100,
+        "official_link_limitation": "Only individually verified official market pages are linked",
+    }
+
+
