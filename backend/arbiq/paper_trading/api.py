@@ -403,3 +403,15 @@ async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
     }
 
 
+class RebalanceBody(Contract):
+    from_exchange: str
+    to_exchange: str
+    asset: str
+    quantity: PositiveDecimal
+    fee_quantity: NonNegativeDecimal = "0"
+    settlement_seconds: int = Field(default=600, ge=1, le=604800)
+    network: str = Field(default="", max_length=80)
+    network_verified: bool = False
+    research_assumption: bool = False
+
+
