@@ -415,3 +415,46 @@ class RebalanceBody(Contract):
     research_assumption: bool = False
 
 
+@router.post("/paper/sessions/{session_id}/rebalance/preview")
+async def preview_rebalance(
+    session_id: UUID, body: RebalancePreview, request: Request, db: DB, user: AuthenticatedUser
+):
+    _, control = await owned(db, user, session_id)
+    if control.classification != "RESEARCH":
+        raise HTTPException(422, "Preview requires a separate research portfolio")
+    # Release the auth/session connection while consulting the trusted clock.
+    await db.commit()
+    now, clock = await utc_reference(request)
+    if not clock["trusted"]:
+        raise HTTPException(503, "Trusted application UTC unavailable for rebalance preview")
+    exchanges = {
+        exchange.slug: exchange.id
+        for exchange in await db.scalars(
+            select(Exchange).where(Exchange.slug.in_((body.from_exchange, body.to_exchange)))
+        )
+    }
+    asset_id = await db.scalar(select(Asset.id).where(Asset.canonical_key == body.asset))
+    if len(exchanges) != 2 or asset_id is None:
+        raise HTTPException(422, "Invalid transfer endpoints or canonical asset")
+    balances = dict(
+        (
+            await db.execute(
+                select(
+                    PortfolioPosition.exchange_id,
+                    PortfolioPosition.quantity - PortfolioPosition.reserved_quantity,
+                ).where(
+                    PortfolioPosition.session_id == session_id,
+                    PortfolioPosition.asset_id == asset_id,
+                    PortfolioPosition.exchange_id.in_(exchanges.values()),
+                )
+            )
+        ).all()
+    )
+    return estimate_transfer(
+        body,
+        source_available=balances.get(exchanges[body.from_exchange], Decimal(0)),
+        destination_available=balances.get(exchanges[body.to_exchange], Decimal(0)),
+        decision_at=now,
+    )
+
+
