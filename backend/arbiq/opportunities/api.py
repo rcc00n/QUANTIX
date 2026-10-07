@@ -456,3 +456,15 @@ def financial_sort(value: dict, field: str) -> tuple:
     return (number is None, number.copy_negate() if number is not None else Decimal(0), value["id"])
 
 
+@router.get("/budgets")
+async def budgets(request: Request, user: AuthenticatedUser):
+    config = request.app.state.settings.arbitrage
+    return {
+        "budgets_cad": [str(value) for value in config.budgets_cad],
+        "default_budget_cad": str(config.default_budget_cad),
+        "minimum_cad": "0.01",
+        "maximum_cad": "1000000",
+        "mode": "paper_research",
+    }
+
+
