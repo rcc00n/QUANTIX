@@ -477,3 +477,168 @@ async def diagnostics(request: Request, db: DB, user: AuthenticatedUser):
     }
 
 
+@router.get("")
+async def opportunities(
+    request: Request,
+    response: Response,
+    db: DB,
+    user: AuthenticatedUser,
+    budget_cad: Budget = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, le=CANDIDATE_WINDOW),
+    sort: Literal["net_profit", "net_return", "liquidity"] = "net_profit",
+    exchange: str = Query(default="", max_length=80, pattern="^[a-z0-9_-]*$"),
+    asset: str = Query(default="", max_length=32),
+    status: Status | None = None,
+    history: bool = False,
+    search: str = Query(default="", max_length=80),
+    min_profit_cad: ProfitFilter = None,
+    min_return_pct: ReturnFilter = None,
+    min_quantity: NonNegativeFilter = None,
+    min_liquidity_cad: NonNegativeFilter = None,
+    max_acquisition_cad: CapitalFilter = None,
+    confidence: Literal["HEALTHY", "DEGRADED", "SUSPICIOUS", "STALE", "UNAVAILABLE"] | None = None,
+):
+    config = request.app.state.settings.arbitrage
+    budget = budget_cad if budget_cad is not None else config.default_budget_cad
+    custom_budget = budget != config.default_budget_cad
+    window = CUSTOM_BUDGET_WINDOW if custom_budget else CANDIDATE_WINDOW
+    gate = _projection_gate if custom_budget else _view_gate
+    if gate.locked():
+        raise HTTPException(
+            429,
+            "A candidate sizing request is running; retry shortly",
+            headers={"Retry-After": "2"},
+        )
+    async with gate:
+        started_at = elapsed_seconds()
+        criteria = []
+        if exchange:
+            criteria.append(
+                or_(
+                    ArbitrageRoute.payload["buy_exchange"].as_string() == exchange,
+                    ArbitrageRoute.payload["sell_exchange"].as_string() == exchange,
+                )
+            )
+        if asset:
+            criteria.append(ArbitrageRoute.payload["base_asset"].as_string() == asset.upper())
+        matching = await db.scalar(
+            select(func.count()).select_from(ArbitrageRoute).where(*criteria)
+        )
+        query = list_route_query(budget, include_payload=False).where(*criteria)
+        rows = (
+            await db.execute(
+                query.order_by(ArbitrageRoute.updated_at.desc(), ArbitrageRoute.id).limit(window)
+            )
+        ).all()
+        # Return the authentication/list lease before IPC. These scalar rows are
+        # independent of the session and preserve the original candidate window.
+        await db.commit()
+        selected_at = elapsed_seconds()
+        current, health = {}, {}
+        if rows:
+            current, health = await collector_current(
+                request,
+                full=custom_budget,
+                route_ids=[row.id for row in rows] if custom_budget else None,
+            )
+            health = health or await collector_diagnostics(request, db)
+        checked_at = elapsed_seconds()
+
+        candidates = []
+        retained_ids = []
+        for row in rows:
+            item = current.get(str(row.id))
+            if live_projection_times(item) is None:
+                item = None
+            effective_status = item.get("status", row.status) if item is not None else row.status
+            # The ordinary projection never revives a terminal status. A usable
+            # live replacement can override the retained lifecycle before this test.
+            if not history and effective_status in TERMINAL:
+                continue
+            candidates.append((row, item))
+            if item is None:
+                retained_ids.append(row.id)
+
+        retained = {}
+        if retained_ids:
+            retained_query = list_route_query(budget, full=custom_budget).where(
+                ArbitrageRoute.id.in_(retained_ids)
+            )
+            # Read the status and times together with each retained payload so a
+            # concurrent collector revision cannot mix their evidence.
+            retained = {row.id: row for row in (await db.execute(retained_query)).all()}
+        await db.commit()
+        loaded_at = elapsed_seconds()
+
+        def projections(candidates, retained):
+            result = []
+            for row, item in candidates:
+                if item is None:
+                    row = retained.get(row.id)
+                    if row is None:
+                        continue
+                projected = project(
+                    row,
+                    budget,
+                    health,
+                    config.maximum_book_age_seconds,
+                    current=item,
+                    max_resize_evaluations=config.max_optimizer_evaluations,
+                )
+                result.append({k: v for k, v in projected.items() if k not in LIST_DETAIL_FIELDS})
+            return result
+
+        result = await asyncio.to_thread(projections, candidates, retained) if candidates else []
+        projected_at = elapsed_seconds()
+    response.headers["Server-Timing"] = ", ".join(
+        (
+            f'catalog;dur={(selected_at - started_at) * 1000:.2f};desc="{len(rows)} rows"',
+            f"collector;dur={(checked_at - selected_at) * 1000:.2f}",
+            f'retained;dur={(loaded_at - checked_at) * 1000:.2f};desc="{len(retained)} rows"',
+            f"projection;dur={(projected_at - loaded_at) * 1000:.2f}",
+        )
+    )
+    # Projection has completed. Rows are lightweight, untracked SQL values rather
+    # than ORM instances; release their retained/input trees before filtering and
+    # serializing the small display rows.
+    del rows, current, candidates, retained
+    if not history:
+        result = [row for row in result if row["status"] not in TERMINAL]
+    if status:
+        result = [row for row in result if row["status"] == status]
+    result = [
+        row
+        for row in result
+        if meets_filters(
+            row,
+            search=search,
+            min_profit_cad=min_profit_cad,
+            min_return_pct=min_return_pct,
+            min_quantity=min_quantity,
+            min_liquidity_cad=min_liquidity_cad,
+            max_acquisition_cad=max_acquisition_cad,
+            confidence=confidence,
+        )
+    ]
+    field = {
+        "net_profit": "net_profit_cad",
+        "net_return": "net_return_pct",
+        "liquidity": "maximum_liquidity_cad",
+    }[sort]
+    result.sort(key=lambda row: financial_sort(row, field))
+    return {
+        "items": result[offset : offset + limit],
+        "total": len(result),
+        "limit": limit,
+        "offset": offset,
+        "matching_retained_routes": matching,
+        "candidate_window": window,
+        "window_limited": matching > window,
+        "sizing_search_limit": config.max_optimizer_evaluations,
+        "sizing_scope": "Recent bounded candidate window; projected optimum may be uncertified",
+        "selected_budget_cad": str(budget),
+        "source": "live_and_retained_calculation_evidence",
+    }
+
+
