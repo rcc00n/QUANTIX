@@ -279,6 +279,31 @@ async def strategies(db: DB, user: AuthenticatedUser):
     }
 
 
+@router.get("/paper/trades")
+async def trades(
+    db: DB,
+    user: AuthenticatedUser,
+    session_id: UUID | None = None,
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=100000),
+    status: str = Query("", max_length=24),
+):
+    query = select(PaperTrade).join(PaperSession).where(PaperSession.user_id == user.id)
+    if session_id:
+        query = query.where(PaperTrade.session_id == session_id)
+    if status:
+        query = query.where(PaperTrade.status == status.upper())
+    total = await db.scalar(select(func.count()).select_from(query.subquery()))
+    rows = list(
+        await db.scalars(
+            query.order_by(PaperTrade.requested_at.desc(), PaperTrade.id)
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+    return {"items": [trade_dto(t) for t in rows], "total": total, "limit": limit, "offset": offset}
+
+
 @router.get("/paper/trades/{trade_id}")
 async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
     trade = await db.scalar(
