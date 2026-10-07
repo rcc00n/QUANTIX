@@ -68,3 +68,106 @@ async def now_checked(request):
     return now
 
 
+def record(row):
+    return safe_json({c.name: getattr(row, c.name) for c in row.__table__.columns})
+
+
+@router.get("/paper/trades/{trade_id}")
+async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
+    trade = await db.scalar(
+        select(PaperTrade)
+        .join(PaperSession)
+        .where(PaperTrade.id == trade_id, PaperSession.user_id == user.id)
+    )
+    if not trade:
+        raise HTTPException(404, "Paper trade not found")
+    orders = list(await db.scalars(select(PaperOrder).where(PaperOrder.trade_id == trade_id)))
+    fills = list(
+        await db.scalars(
+            select(PaperFill)
+            .join(PaperOrder)
+            .where(PaperOrder.trade_id == trade_id)
+            .order_by(PaperFill.executed_at)
+            .limit(100)
+        )
+    )
+    events = list(
+        await db.scalars(
+            select(SimulationEvent)
+            .where(SimulationEvent.trade_id == trade_id)
+            .order_by(
+                SimulationEvent.occurred_at,
+                lifecycle_rank(SimulationEvent.event_type),
+                SimulationEvent.id,
+            )
+            .limit(500)
+        )
+    )
+    observations = list(
+        await db.scalars(
+            select(ExecutionObservation)
+            .where(ExecutionObservation.trade_id == trade_id)
+            .order_by(ExecutionObservation.received_at)
+            .limit(200)
+        )
+    )
+    journals = list(
+        await db.scalars(
+            select(Journal)
+            .where(
+                Journal.session_id == trade.session_id,
+                or_(
+                    Journal.source_id == trade.id,
+                    Journal.idempotency_key.like("%:" + str(trade.id) + "%"),
+                ),
+            )
+            .limit(200)
+        )
+    )
+    entries = list(
+        await db.scalars(
+            select(LedgerEntry)
+            .where(LedgerEntry.journal_id.in_([j.id for j in journals]))
+            .limit(2000)
+        )
+    )
+    accounts = list(
+        await db.scalars(
+            select(VirtualAccount).where(VirtualAccount.id.in_({e.account_id for e in entries}))
+        )
+    )
+    fees = list(
+        await db.scalars(
+            select(FeeVersion).where(FeeVersion.id.in_({f.fee_version_id for f in fills}))
+        )
+    )
+    rates = list(
+        await db.scalars(
+            select(FXQuote).where(FXQuote.id.in_({f.fx_quote_id for f in fills if f.fx_quote_id}))
+        )
+    )
+    session = await db.get(PaperSession, trade.session_id)
+    return {
+        "schema_version": "paper-trade-evidence-v1",
+        "trade": trade_dto(trade),
+        "session_provenance": {
+            "initial_equity_cad": str(session.initial_equity_cad),
+            "benchmark": session.benchmark_snapshot,
+        },
+        "observations": [record(x) for x in observations],
+        "journals": [record(x) for x in journals],
+        "ledger_entries": [record(x) for x in entries],
+        "accounts": [record(x) for x in accounts],
+        "fee_versions": [record(x) for x in fees],
+        "fx_quotes": [record(x) for x in rates],
+        "record_limits": {"observations": 200, "journals": 200, "ledger_entries": 2000},
+        "export_scope": "one simulation; full portfolio ZIP available in Analytics",
+        "event_ordering": "UTC then lifecycle rank for exact ties; original timestamps unchanged",
+        "orders": [record(x) for x in orders],
+        "fills": [record(x) for x in fills],
+        "events": [record(x) for x in events],
+        "paper_only": True,
+        "event_limit": 500,
+    }
+
+
