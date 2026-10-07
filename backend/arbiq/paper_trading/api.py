@@ -265,6 +265,20 @@ async def strategy_update(
     }
 
 
+@router.get("/strategies")
+async def strategies(db: DB, user: AuthenticatedUser):
+    head = await db.get(StrategyHead, user.id)
+    row = await db.get(StrategyVersion, head.strategy_version_id) if head else None
+    return {
+        "current": {"id": str(row.id), "version": row.version, "settings": row.settings}
+        if row
+        else None,
+        "presets": {k: v.model_dump(mode="json") for k, v in presets().items()},
+        "reaction_delays": [5, 15, 30, 60, 120],
+        "profiles_are_simulated": True,
+    }
+
+
 @router.get("/paper/trades/{trade_id}")
 async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
     trade = await db.scalar(
