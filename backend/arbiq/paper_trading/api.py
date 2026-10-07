@@ -187,6 +187,22 @@ async def metrics(session_id: UUID, db: DB, user: AuthenticatedUser):
     return value
 
 
+@router.get("/paper/sessions/{session_id}/daily")
+async def daily(
+    session_id: UUID, db: DB, user: AuthenticatedUser, limit: int = Query(30, ge=1, le=90)
+):
+    await owned(db, user, session_id)
+    rows = list(
+        await db.scalars(
+            select(DailyAccountingSnapshot)
+            .where(DailyAccountingSnapshot.session_id == session_id)
+            .order_by(DailyAccountingSnapshot.as_of.desc())
+            .limit(limit)
+        )
+    )
+    return {"items": [record(r) for r in rows], "timezone": "America/Edmonton", "limit": limit}
+
+
 @router.get("/paper/trades/{trade_id}")
 async def detail(trade_id: UUID, db: DB, user: AuthenticatedUser):
     trade = await db.scalar(
