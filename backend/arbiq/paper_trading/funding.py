@@ -610,3 +610,148 @@ def constraints_for(body: ProposalRequest) -> allocation.AllocationConstraints:
     )
 
 
+async def load_planning_rows(db, body, cutoff):
+    chosen = list(
+        await db.scalars(
+            select(Exchange)
+            .where(
+                Exchange.enabled.is_(True),
+                Exchange.created_at <= cutoff,
+                Exchange.slug.in_(body.exchange_slugs) if body.exchange_slugs else True,
+            )
+            .order_by(Exchange.slug)
+        )
+    )
+    if not chosen or set(body.exchange_slugs) - {x.slug for x in chosen}:
+        raise HTTPException(422, "No matching supported exchange allocation at cutoff")
+    ids = {x.id for x in chosen}
+    buy, sell = aliased(Market), aliased(Market)
+    buy_book, sell_book = aliased(OrderBookSnapshot), aliased(OrderBookSnapshot)
+    conditions = [
+        ArbitrageEvaluation.evaluated_at.between(
+            cutoff - timedelta(days=body.lookback_days), cutoff
+        ),
+        ArbitrageEvaluation.created_at <= cutoff,
+    ]
+    positive_count = func.count(ArbitrageEvaluation.id).filter(
+        ArbitrageEvaluation.net_profit_cad > 0
+    )
+    rows = (
+        await db.execute(
+            select(ArbitrageRoute, positive_count.label("positive"))
+            .join(ArbitrageEvaluation)
+            .join(buy, buy.id == ArbitrageRoute.buy_market_id)
+            .join(sell, sell.id == ArbitrageRoute.sell_market_id)
+            .join(buy_book, buy_book.id == ArbitrageEvaluation.buy_snapshot_id)
+            .join(sell_book, sell_book.id == ArbitrageEvaluation.sell_snapshot_id)
+            .where(
+                *conditions,
+                buy_book.quality.in_(["HEALTHY", "DEGRADED"]),
+                sell_book.quality.in_(["HEALTHY", "DEGRADED"]),
+                buy.created_at <= cutoff,
+                sell.created_at <= cutoff,
+                buy.exchange_id.in_(ids),
+                sell.exchange_id.in_(ids),
+                buy.base_asset_id.in_(
+                    select(Asset.id).where(Asset.canonical_key.in_(body.asset_keys))
+                )
+                if body.asset_keys
+                else True,
+                buy.quote_asset_id.in_(
+                    select(Asset.id).where(Asset.canonical_key.in_(body.inventory_asset_keys))
+                )
+                if body.inventory_asset_keys
+                else True,
+                sell.base_asset_id.in_(
+                    select(Asset.id).where(Asset.canonical_key.in_(body.inventory_asset_keys))
+                )
+                if body.inventory_asset_keys
+                else True,
+            )
+            .group_by(ArbitrageRoute.id)
+            .order_by(
+                positive_count.desc(), func.count(ArbitrageEvaluation.id).desc(), ArbitrageRoute.id
+            )
+            .limit(31)
+        )
+    ).all()
+    selected = rows[:30]
+    market_ids = {m for route, _ in selected for m in (route.buy_market_id, route.sell_market_id)}
+    markets = {m.id: m for m in await db.scalars(select(Market).where(Market.id.in_(market_ids)))}
+    exchanges, assets = await metadata(
+        db, {item for m in markets.values() for item in (m.base_asset_id, m.quote_asset_id)}
+    )
+    cad = next((a for a in assets.values() if a.canonical_key == "fiat:CAD"), None)
+    if cad is None:
+        raise HTTPException(409, "CAD metadata not yet discovered")
+    evaluations = {
+        row.route_id: row
+        for row in await db.scalars(
+            select(ArbitrageEvaluation)
+            .options(defer(ArbitrageEvaluation.result))
+            .where(
+                ArbitrageEvaluation.route_id.in_([r.id for r, _ in selected]),
+                *conditions,
+            )
+            .distinct(ArbitrageEvaluation.route_id)
+            .order_by(
+                ArbitrageEvaluation.route_id,
+                ArbitrageEvaluation.evaluated_at.desc(),
+                ArbitrageEvaluation.id,
+            )
+        )
+    }
+    routes = []
+    for route, frequency in selected:
+        left, right = markets[route.buy_market_id], markets[route.sell_market_id]
+        lx, rx = exchanges[left.exchange_id], exchanges[right.exchange_id]
+        if left.base_asset_id != right.base_asset_id or venue_group(lx.slug) == venue_group(
+            rx.slug
+        ):
+            continue
+        quote, base = assets[left.quote_asset_id], assets[right.base_asset_id]
+        if route.id in evaluations:
+            routes.append(
+                HistoricalRoute(
+                    str(route.id),
+                    allocation.Cell(lx.slug, quote.canonical_key),
+                    allocation.Cell(rx.slug, base.canonical_key),
+                    evaluations[route.id],
+                    max(1, int(frequency)),
+                    str(lx.id),
+                    str(rx.id),
+                    str(quote.id),
+                    str(base.id),
+                    quote.symbol,
+                    base.symbol,
+                    positive_frequency=int(frequency),
+                )
+            )
+    observed_cad = set(
+        await db.scalars(
+            select(Market.exchange_id)
+            .where(
+                Market.quote_asset_id == cad.id,
+                Market.exchange_id.in_(ids),
+                Market.created_at <= cutoff,
+            )
+            .distinct()
+        )
+    )
+    reserve_venues = [
+        x.slug
+        for x in chosen
+        if x.id in observed_cad
+        and (not body.inventory_asset_keys or cad.canonical_key in body.inventory_asset_keys)
+    ]
+    cash_exchange = next(
+        (
+            x
+            for x in sorted(chosen, key=lambda x: (x.slug not in {"kraken", "ndax"}, x.slug))
+            if x.id in observed_cad
+        ),
+        chosen[0],
+    )
+    return routes, exchanges, assets, reserve_venues, cash_exchange, len(rows) > 30
+
+
