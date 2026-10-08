@@ -457,3 +457,110 @@ async def allocate_weighted(capital, weights, rates, full_marks, exchanges, asse
     return items
 
 
+@decimal_context
+async def allocate_complete_routes(
+    capital, requirements, mark_source, exchanges, assets, cash_exchange
+):
+    """Greedily admit both inventory legs, never one funded half of a route.
+
+    Shared cells use their largest alternative-route requirement. This is single
+    route coverage, not a promise that all routes can reserve funds concurrently.
+    """
+    if capital <= 0:
+        return []
+    selected, marks = {}, {}
+    for route in requirements[:30]:
+        if not route.get("required"):
+            continue
+        candidate = dict(selected)
+        for item in route["required"]:
+            key = item["exchange_id"], item["asset_id"]
+            candidate[key] = max(candidate.get(key, Decimal(0)), Decimal(item["required_quantity"]))
+        if len(candidate) > 40:
+            route["reasons"].append("ALLOCATION_CELL_LIMIT")
+            continue
+        changes = {
+            key: quantity
+            for key, quantity in candidate.items()
+            if key not in selected or selected[key] != quantity
+        }
+        needed = [
+            {"exchange_id": ex, "asset_id": asset, "quantity": str(quantity)}
+            for (ex, asset), quantity in changes.items()
+            if assets[UUID(asset)].canonical_key != "fiat:CAD"
+        ]
+        fresh = await mark_source(needed) if needed else {}
+        trial_marks = dict(marks)
+        possible = True
+        for (ex, asset), quantity in changes.items():
+            key = ex, asset
+            if assets[UUID(asset)].canonical_key == "fiat:CAD":
+                trial_marks[key] = {
+                    "cad_per_unit": "1",
+                    "quantity": str(quantity),
+                    "source": "CAD_IDENTITY",
+                }
+                continue
+            mark = fresh.get(key, {})
+            try:
+                rate = floor_value(Decimal(mark["cad_per_unit"]))
+                value = stored(quantity * rate)
+                if (
+                    rate <= 0
+                    or value <= 0
+                    or not mark.get("received_at")
+                    or Decimal(mark.get("quantity", "0")) != quantity
+                ):
+                    raise ValueError("Missing full-size initialization evidence")
+                trial_marks[key] = {**mark, "cad_per_unit": str(rate)}
+            except (KeyError, TypeError, ValueError, ArithmeticError):
+                possible = False
+                break
+        if not possible:
+            route["reasons"].append("FULL_SIZE_CAD_MARK_UNAVAILABLE")
+            continue
+        value = sum(
+            (stored(q * Decimal(trial_marks[k]["cad_per_unit"])) for k, q in candidate.items()),
+            Decimal(0),
+        )
+        if value > capital:
+            route["reasons"].append("PAIRED_INVENTORY_EXCEEDS_INITIAL_CAPITAL")
+            continue
+        selected, marks = candidate, trial_marks
+    allocations = []
+    used = Decimal(0)
+    for (ex, asset), quantity in sorted(selected.items()):
+        mark = marks[(ex, asset)]
+        rate = Decimal(mark["cad_per_unit"])
+        value = stored(quantity * rate)
+        used += value
+        allocations.append(
+            {
+                "exchange": exchanges[UUID(ex)].slug,
+                "asset": assets[UUID(asset)].canonical_key,
+                "quantity": str(quantity),
+                "cad_rate": str(rate),
+                "cad_value": str(value),
+                "evidence": {
+                    "source": "OBSERVED_RESEARCH_INITIALIZATION",
+                    "mark": mark,
+                    "hypothetical_initial_inventory": True,
+                    "allocation_policy": "COMPLETE_ALTERNATIVE_ROUTES",
+                },
+            }
+        )
+    remainder = capital - used
+    if remainder > 0:
+        allocations.append(
+            {
+                "exchange": cash_exchange.slug,
+                "asset": "fiat:CAD",
+                "quantity": str(remainder),
+                "cad_rate": "1",
+                "cad_value": str(remainder),
+                "evidence": {"source": "CAD_IDENTITY", "cash_remainder": True},
+            }
+        )
+    return allocations
+
+
