@@ -118,3 +118,14 @@ def required_quantities(evaluation, strategy):
     return best, quote, base
 
 
+async def metadata(db, asset_ids=()):
+    exchanges = {x.id: x for x in await db.scalars(select(Exchange))}
+    assets = {
+        x.id: x
+        for x in await db.scalars(
+            select(Asset).where(Asset.id.in_(asset_ids) | (Asset.canonical_key == "fiat:CAD"))
+        )
+    }
+    return exchanges, assets
+
+
