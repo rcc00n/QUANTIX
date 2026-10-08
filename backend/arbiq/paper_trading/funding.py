@@ -770,3 +770,83 @@ def proposal_marks_fresh(payload, now, maximum_age_seconds=30):
     return True
 
 
+async def baseline_comparison(
+    body, cohort, constraints, exchanges, assets, cash_exchange, venue_groups, stablecoins, cutoff
+):
+    investable = floor_value(body.capital_cad * (1 - body.reserve_cash_pct / 100))
+
+    async def source(items):
+        return {
+            (row["exchange_id"], row["asset_id"]): cohort.legacy_marks.get(
+                (row["exchange_id"], row["asset_id"], Decimal(row["quantity"])), {}
+            )
+            for row in items
+        }
+
+    contributions = await allocate_complete_routes(
+        investable, cohort.legacy_requirements, source, exchanges, assets, cash_exchange
+    )
+    reserve = body.capital_cad - investable
+    if reserve:
+        contributions.append(
+            {
+                "exchange": cash_exchange.slug,
+                "asset": allocation.CAD,
+                "quantity": str(reserve),
+                "cad_rate": "1",
+                "cad_value": str(reserve),
+                "evidence": {"source": "CAD_IDENTITY", "reserve": True},
+            }
+        )
+    legacy_count = classify_funded_requirements(cohort.legacy_requirements, contributions)
+    quantities, by_venue, by_asset = Counter(), Counter(), Counter()
+    idle = Decimal(0)
+    for item in contributions:
+        cad_value = Decimal(item["cad_value"])
+        by_venue[item["exchange"]] += cad_value
+        by_asset[item["asset"]] += cad_value
+        if item["evidence"].get("reserve") or item["evidence"].get("cash_remainder"):
+            idle += cad_value
+        else:
+            quantities[allocation.Cell(item["exchange"], item["asset"])] += Decimal(
+                item["quantity"]
+            )
+
+    def breakdown(values):
+        return {
+            key: {"cad_value": str(value), "share_pct": str(stored(value / body.capital_cad * 100))}
+            for key, value in sorted(values.items())
+        }
+
+    stable = sum((by_asset[key] for key in stablecoins), Decimal(0))
+    assessment = allocation.describe_inventory(
+        constraints,
+        cohort.demands,
+        quantities,
+        venue_groups=venue_groups,
+        stablecoin_assets=stablecoins,
+        as_of=cutoff,
+    )
+    return {
+        **assessment,
+        "policy": "COVERAGE",
+        "feasible": False,
+        "allocations": contributions,
+        "total_cad": str(sum(by_asset.values(), Decimal(0))),
+        "unallocated_cad": "0",
+        "legacy_individual_coverage": legacy_count,
+        "reasons": ["BASELINE_REPRODUCTION_FOR_COMPARISON"],
+        "allocation_summary": {
+            "invested_cad": str(body.capital_cad - idle),
+            "reserve_cad": str(idle),
+            "reserve_pct": str(stored(idle / body.capital_cad * 100)),
+            "by_exchange": breakdown(by_venue),
+            "by_asset": breakdown(by_asset),
+            "funded_cells": len(quantities),
+            "funded_venues": len({venue_groups.get(c.exchange, c.exchange) for c in quantities}),
+            "stablecoin_cad": str(stable),
+            "stablecoin_pct": str(stored(stable / body.capital_cad * 100)),
+        },
+    }
+
+
