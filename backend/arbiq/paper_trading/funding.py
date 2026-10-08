@@ -89,3 +89,32 @@ def missing_inventory(requirements, available):
     return result
 
 
+@decimal_context
+def required_quantities(evaluation, strategy):
+    inputs = evaluation.evidence.get("calculation_inputs", {})
+    buy, sell = load_input(inputs["buy"]), load_input(inputs["sell"])
+    buy = replace(
+        buy, fee=Fee(max(buy.fee.rate, strategy.taker_fee_rate), strategy.buy_fee_currency, False)
+    )
+    sell = replace(
+        sell,
+        fee=Fee(max(sell.fee.rate, strategy.taker_fee_rate), strategy.sell_fee_currency, False),
+    )
+    optimized = optimize_route(
+        buy,
+        sell,
+        budget_cad=floor_value(strategy.trade_amount_cad / (1 + strategy.slippage_bps / 10000)),
+        now=evaluation.evaluated_at,
+        costs=Costs(slippage_bps=strategy.slippage_bps, rebalancing_bps=strategy.rebalance_bps),
+        budgets=(),
+        max_search_evaluations=128,
+    )
+    best = optimized.best
+    if best is None:
+        raise ValueError("NO_FEASIBLE_PINNED_SIZE")
+    quote, base = planned_reserves(best, buy.fee, sell.fee, strategy.slippage_bps)
+    if quote <= 0 or base <= 0:
+        raise ValueError("NO_STORABLE_PINNED_SIZE")
+    return best, quote, base
+
+
