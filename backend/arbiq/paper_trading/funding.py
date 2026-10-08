@@ -755,3 +755,18 @@ async def load_planning_rows(db, body, cutoff):
     return routes, exchanges, assets, reserve_venues, cash_exchange, len(rows) > 30
 
 
+def proposal_marks_fresh(payload, now, maximum_age_seconds=30):
+    for item in payload["allocations"]:
+        if item["asset"] == allocation.CAD:
+            continue
+        evidence = item.get("evidence", {})
+        mark = evidence.get("mark", evidence)
+        try:
+            received, observed = time_value(mark["received_at"]), time_value(mark["observed_at"])
+            if not (now - timedelta(seconds=maximum_age_seconds) <= observed <= received <= now):
+                return False
+        except (TypeError, ValueError, KeyError):
+            return False
+    return True
+
+
