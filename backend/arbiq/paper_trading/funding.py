@@ -394,3 +394,66 @@ async def quote_marks(request, quantities):
         return {}
 
 
+@decimal_context
+async def allocate_weighted(capital, weights, rates, full_marks, exchanges, assets, cash_exchange):
+    """Allocate at sourced marks and keep every rounding/depth shortfall as CAD cash."""
+    total_weight = sum(weights.values(), Decimal(0))
+    items, used = [], Decimal(0)
+    for key, weight in sorted(weights.items()):
+        budget = floor_value(capital * weight / total_weight) if total_weight else Decimal(0)
+        ex, asset = key
+        rate = rates.get(key)
+        if not rate or budget <= 0:
+            continue
+        quantity = quantity_for_budget(budget, rate)
+        if quantity is None:
+            continue
+        mark = full_marks.get(key, {})
+        if assets[UUID(asset)].canonical_key != "fiat:CAD":
+            try:
+                current = floor_value(Decimal(mark["cad_per_unit"]))
+                if (
+                    not mark.get("received_at")
+                    or current <= 0
+                    or Decimal(mark.get("quantity", "0")) != quantity
+                ):
+                    continue
+                rate = current
+            except (ValueError, KeyError, TypeError, ArithmeticError):
+                continue
+        # Match the established NUMERIC contribution convention used by
+        # create_portfolio/fund. The budget guard still prevents rounding up
+        # beyond allocated capital; the remaining exact units stay CAD cash.
+        value = stored(quantity * rate)
+        if quantity <= 0 or value <= 0 or value > budget:
+            continue
+        used += value
+        items.append(
+            {
+                "exchange": exchanges[UUID(ex)].slug,
+                "asset": assets[UUID(asset)].canonical_key,
+                "quantity": str(quantity),
+                "cad_rate": str(rate),
+                "cad_value": str(value),
+                "evidence": {
+                    "source": "OBSERVED_RESEARCH_INITIALIZATION",
+                    "mark": mark,
+                    "hypothetical_initial_inventory": True,
+                },
+            }
+        )
+    remainder = capital - used
+    if remainder > 0:
+        items.append(
+            {
+                "exchange": cash_exchange.slug,
+                "asset": "fiat:CAD",
+                "quantity": str(remainder),
+                "cad_rate": "1",
+                "cad_value": str(remainder),
+                "evidence": {"source": "CAD_IDENTITY", "cash_remainder": True},
+            }
+        )
+    return items
+
+
