@@ -378,3 +378,19 @@ class ProposalRequest(Contract):
         return self
 
 
+async def quote_marks(request, quantities):
+    client = request.app.state.collector_http
+    if client is None or not quantities:
+        return {}
+    try:
+        async with client.post("/paper/funding/marks", json={"items": quantities}) as response:
+            if response.status != 200:
+                return {}
+            data = await response.json()
+            if not data.get("clock", {}).get("trusted"):
+                return {}
+            return {(x["exchange_id"], x["asset_id"]): x for x in data.get("items", [])}
+    except (aiohttp.ClientError, TimeoutError, ValueError, KeyError, TypeError):
+        return {}
+
+
