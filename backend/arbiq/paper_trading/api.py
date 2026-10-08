@@ -458,3 +458,60 @@ async def preview_rebalance(
     )
 
 
+@router.post("/paper/sessions/{session_id}/rebalance", status_code=202)
+async def rebalance(
+    session_id: UUID, body: RebalanceBody, request: Request, db: DB, user: AuthenticatedUser
+):
+    _, control = await owned(db, user, session_id)
+    now = await now_checked(request)
+    if not body.network or (
+        not body.network_verified
+        and not (control.classification == "RESEARCH" and body.research_assumption)
+    ):
+        raise HTTPException(
+            422, "Verified network or explicit isolated research assumption required"
+        )
+    source = await db.scalar(select(Exchange).where(Exchange.slug == body.from_exchange))
+    dest = await db.scalar(select(Exchange).where(Exchange.slug == body.to_exchange))
+    asset = await db.scalar(select(Asset).where(Asset.canonical_key == body.asset))
+    if not source or not dest or not asset or source.id == dest.id:
+        raise HTTPException(422, "Invalid transfer endpoints")
+    payload = {
+        **body.model_dump(mode="json"),
+        "network_compatible_verified": body.network_verified,
+        "network_compatible_assumed": body.research_assumption,
+        "research_only": control.classification == "RESEARCH",
+        "settlement_delay_seconds": body.settlement_seconds,
+    }
+    row = RebalanceRequest(
+        session_id=session_id,
+        from_exchange_id=source.id,
+        to_exchange_id=dest.id,
+        asset_id=asset.id,
+        requested_at=now,
+        eligible_at=now + timedelta(seconds=body.settlement_seconds),
+        status="PENDING",
+        request=payload,
+        result={},
+    )
+    db.add(row)
+    await db.flush()
+    try:
+        await accounting.reserve(
+            db,
+            session_id,
+            [Reservation(source.id, asset.id, body.quantity + body.fee_quantity)],
+            now,
+            f"rebalance:{row.id}:reserve",
+            {"request_id": str(row.id)},
+        )
+    except AccountingError as exc:
+        await db.rollback()
+        raise HTTPException(409, str(exc)) from None
+    await db.commit()
+    return {
+        "id": str(row.id),
+        "status": "PENDING",
+        "eligible_at": row.eligible_at,
+        "paper_only": True,
+    }
