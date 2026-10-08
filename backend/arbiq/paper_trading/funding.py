@@ -129,3 +129,32 @@ async def metadata(db, asset_ids=()):
     return exchanges, assets
 
 
+@router.get("/catalog")
+async def catalog(db: DB, user: AuthenticatedUser):
+    exchanges = await db.scalars(
+        select(Exchange).where(Exchange.enabled.is_(True)).order_by(Exchange.name).limit(30)
+    )
+    # Canonical monitored assets only; avoid sending all21k discovered listings.
+    ids = (
+        select(Market.base_asset_id)
+        .join(LatestMarketBook)
+        .union(select(Market.quote_asset_id).join(LatestMarketBook))
+    )
+    assets = await db.scalars(
+        select(Asset).where(Asset.id.in_(ids)).order_by(Asset.symbol).limit(300)
+    )
+    return {
+        "exchanges": [{"id": str(x.id), "slug": x.slug, "name": x.name} for x in exchanges],
+        "assets": [
+            {"id": str(x.id), "canonical_key": x.canonical_key, "symbol": x.symbol, "kind": x.kind}
+            for x in assets
+        ],
+        "limits": {
+            "maximum_allocations": 100,
+            "maximum_active_portfolios": 20,
+            "asset_window": 300,
+        },
+        "classification": "RESEARCH",
+    }
+
+
