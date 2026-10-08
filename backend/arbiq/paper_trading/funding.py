@@ -345,3 +345,36 @@ async def coverage(
     }
 
 
+class ProposalRequest(Contract):
+    capital_cad: PositiveDecimal = Field(default="10000", le=10000000)
+    trade_amount_cad: PositiveDecimal = Field(default="250", le=1000000)
+    exchange_slugs: tuple[str, ...] = ()
+    asset_keys: tuple[str, ...] = ()
+    policy: Literal[
+        "COVERAGE", "EQUAL_VENUES", "LIQUIDITY_WEIGHTED", "ROUTE_OPTIMIZED", "DIVERSIFIED_HYBRID"
+    ] = "COVERAGE"
+    lookback_days: int = Field(default=7, ge=1, le=30)
+    reserve_cash_pct: NonNegativeDecimal = Field(default="10", le=100)
+    min_buy_capital_cad: NonNegativeDecimal = Field(default="50", le=1000000)
+    min_cell_cad: NonNegativeDecimal = Field(default="50", le=1000000)
+    max_venue_pct: PositiveDecimal = Field(default="60", le=100)
+    max_asset_pct: PositiveDecimal = Field(default="70", le=100)
+    max_reserve_pct: NonNegativeDecimal = Field(default="50", le=100)
+    max_stablecoin_pct: NonNegativeDecimal = Field(default="50", le=100)
+    min_venues: int = Field(default=2, ge=1, le=30)
+    eligibility: Literal["RESEARCH", "VALIDATED"] = "RESEARCH"
+    planning_cutoff: datetime | None = None
+    inventory_asset_keys: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def bounded(self):
+        if (
+            len(self.exchange_slugs) > 30
+            or max(len(self.asset_keys), len(self.inventory_asset_keys)) > 100
+        ):
+            raise ValueError("Bounded funding filters required")
+        if self.planning_cutoff and self.planning_cutoff.utcoffset() != timedelta(0):
+            raise ValueError("Planning cutoff must be timezone-aware UTC")
+        return self
+
+
