@@ -71,3 +71,21 @@ def quantity_for_budget(budget, rate):
         return None
 
 
+@decimal_context
+def missing_inventory(requirements, available):
+    """Exact unit deficits, never silently converted through stablecoin parity."""
+    result = []
+    for requirement in requirements:
+        key = requirement["exchange_id"], requirement["asset_id"]
+        needed = Decimal(requirement["required_quantity"])
+        held = available.get(key, Decimal(0))
+        result.append(
+            {
+                **requirement,
+                "available_quantity": str(held),
+                "missing_quantity": str(max(Decimal(0), needed - held)),
+            }
+        )
+    return result
+
+
