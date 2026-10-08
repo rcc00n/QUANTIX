@@ -564,3 +564,22 @@ async def allocate_complete_routes(
     return allocations
 
 
+@decimal_context
+def classify_funded_requirements(requirements, allocations):
+    available = Counter()
+    for holding in allocations:
+        available[(holding["exchange"], holding["asset"])] += Decimal(holding["quantity"])
+    for route in requirements:
+        route["funded"] = bool(route.get("required")) and all(
+            available[(item["exchange"], item["canonical_key"])]
+            >= Decimal(item["required_quantity"])
+            for item in route["required"]
+        )
+        if route["funded"]:
+            route["planning_rejections_before_final_coverage"] = list(route["reasons"])
+            route["reasons"] = []
+        if not route["funded"] and not route["reasons"]:
+            route["reasons"].append("INSUFFICIENT_PAIRED_ALLOCATION")
+    return sum(x["funded"] for x in requirements)
+
+
