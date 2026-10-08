@@ -583,3 +583,15 @@ def classify_funded_requirements(requirements, allocations):
     return sum(x["funded"] for x in requirements)
 
 
+def optimized_strategy(body: ProposalRequest) -> PaperStrategy:
+    return presets()["Aggressive Research"].model_copy(
+        update={
+            "trade_amount_cad": body.trade_amount_cad,
+            "min_buy_capital_cad": body.min_buy_capital_cad,
+            "starting_capital_cad": body.capital_cad,
+            "allowed_exchanges": body.exchange_slugs,
+            "allowed_assets": body.asset_keys,
+        }
+    )
+
+
