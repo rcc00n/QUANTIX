@@ -595,3 +595,18 @@ def optimized_strategy(body: ProposalRequest) -> PaperStrategy:
     )
 
 
+def constraints_for(body: ProposalRequest) -> allocation.AllocationConstraints:
+    return allocation.AllocationConstraints(
+        capital_cad=body.capital_cad,
+        target_trade_cad=body.trade_amount_cad,
+        min_buy_capital_cad=body.min_buy_capital_cad,
+        min_cell_cad=body.min_cell_cad,
+        max_venue_pct=body.max_venue_pct,
+        max_asset_pct=body.max_asset_pct,
+        max_reserve_pct=body.max_reserve_pct,
+        max_stablecoin_pct=body.max_stablecoin_pct,
+        min_venues=body.min_venues,
+        reserve_pct=body.reserve_cash_pct,
+    )
+
+
