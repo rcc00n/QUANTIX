@@ -158,3 +158,190 @@ async def catalog(db: DB, user: AuthenticatedUser):
     }
 
 
+@router.get("/coverage")
+async def coverage(
+    session_id: UUID,
+    request: Request,
+    db: DB,
+    user: AuthenticatedUser,
+    limit: int = Query(20, ge=1, le=50),
+):
+    now = await now_checked(request)
+    session, control = await owned(db, user, session_id)
+    positions = list(
+        await db.scalars(
+            select(PortfolioPosition).where(PortfolioPosition.session_id == session_id)
+        )
+    )
+    available = {
+        (str(x.exchange_id), str(x.asset_id)): x.quantity - x.reserved_quantity for x in positions
+    }
+    latest = (
+        select(ArbitrageEvaluation.id)
+        .where(
+            ArbitrageEvaluation.route_id == ArbitrageRoute.id,
+            ArbitrageEvaluation.evaluated_at <= now,
+        )
+        .order_by(ArbitrageEvaluation.evaluated_at.desc(), ArbitrageEvaluation.id)
+        .limit(1)
+        .correlate(ArbitrageRoute)
+        .scalar_subquery()
+    )
+    pairs = list(
+        (
+            await db.execute(
+                select(ArbitrageRoute, ArbitrageEvaluation)
+                .join(ArbitrageEvaluation, ArbitrageEvaluation.id == latest)
+                .where(
+                    ArbitrageRoute.status.in_(
+                        ["DETECTED", "RECHECKING", "RESEARCH_ONLY", "VERIFIED_MARKET"]
+                    ),
+                    ArbitrageRoute.expires_at > now,
+                    ArbitrageRoute.updated_at <= now,
+                )
+                .order_by(ArbitrageRoute.updated_at.desc())
+                .limit(limit + 1)
+            )
+        ).all()
+    )
+    mids = {mid for r, _ in pairs for mid in (r.buy_market_id, r.sell_market_id)}
+    markets = {x.id: x for x in await db.scalars(select(Market).where(Market.id.in_(mids)))}
+    exchanges, assets = await metadata(
+        db,
+        {a for m in markets.values() for a in (m.base_asset_id, m.quote_asset_id)}
+        | {p.asset_id for p in positions},
+    )
+    strategy = read_pinned_strategy(control.settings)
+    output = []
+    for route, evaluation in pairs[:limit]:
+        buy, sell = markets[route.buy_market_id], markets[route.sell_market_id]
+        reasons = []
+        requirements = []
+        market_net = None
+        funded = None
+        reallocatable = None
+        limits = []
+        try:
+            best, cash, base = await asyncio.to_thread(required_quantities, evaluation, strategy)
+            for m, asset_id, qty in (
+                (buy, buy.quote_asset_id, cash),
+                (sell, sell.base_asset_id, base),
+            ):
+                if m is sell and (
+                    strategy.mode == "TRANSFER"
+                    or (
+                        strategy.mode == "RESEARCH_SHADOW"
+                        and strategy.research_execution_model == "TRANSFER"
+                    )
+                ):
+                    continue
+                requirements.append(
+                    {
+                        "exchange_id": str(m.exchange_id),
+                        "exchange": exchanges[m.exchange_id].slug,
+                        "asset_id": str(asset_id),
+                        "asset": assets[asset_id].symbol,
+                        "canonical_key": assets[asset_id].canonical_key,
+                        "required_quantity": str(qty),
+                    }
+                )
+            required = missing_inventory(requirements, available)
+            sufficient = all(Decimal(x["missing_quantity"]) == 0 for x in required)
+            if not sufficient:
+                reasons.append("INSUFFICIENT_PRE_FUNDED_INVENTORY")
+            quantity = str(best.buy_quantity)
+            market_net = best.net_profit_cad
+        except (ValueError, KeyError, TypeError, ArithmeticError):
+            required, sufficient, quantity = [], False, None
+            reasons.append("CALCULATION_EVIDENCE_INCOMPLETE")
+        if strategy.mode == "PRE_FUNDED" or (
+            strategy.mode == "RESEARCH_SHADOW" and strategy.research_execution_model == "PRE_FUNDED"
+        ):
+            try:
+                pair = read_pair(evaluation, now, strategy)
+                buy_free = available.get(
+                    (str(buy.exchange_id), str(buy.quote_asset_id)), Decimal(0)
+                )
+                sell_free = available.get(
+                    (str(sell.exchange_id), str(sell.base_asset_id)), Decimal(0)
+                )
+                funded = size_at_budget(
+                    pair,
+                    strategy.trade_amount_cad,
+                    buy_available=buy_free,
+                    sell_available=sell_free,
+                    contribution_marks=False,
+                )
+                if funded is None or funded.acquisition_cad < strategy.min_buy_capital_cad:
+                    funded = None
+                    limits.append("NO_USEFUL_FUNDED_SIZE")
+                limits.extend(
+                    "BUY_QUOTE_BALANCE" if index == 0 else "SELL_BASE_BALANCE"
+                    for index, item in enumerate(required)
+                    if Decimal(item["missing_quantity"]) > 0
+                )
+                target = size_at_budget(pair, strategy.trade_amount_cad)
+                if target is not None:
+                    paired_value = stored(target.buy_quote * target.buy_mark_rate) + stored(
+                        target.sell_base * target.sell_mark_rate
+                    )
+                    reallocatable = (
+                        not sufficient
+                        and paired_value <= session.initial_equity_cad
+                        and target.acquisition_cad >= strategy.min_buy_capital_cad
+                    )
+                if not limits:
+                    limits.append("DEPTH_FX_PRECISION_OR_TRADE_CAP")
+            except (AttributeError, ValueError, KeyError, TypeError, ArithmeticError):
+                limits.append("EXACT_FUNDED_SIZE_EVIDENCE_UNAVAILABLE")
+        output.append(
+            {
+                "route_id": str(route.id),
+                "evaluation_id": str(evaluation.id),
+                "asset": assets[buy.base_asset_id].symbol,
+                "buy_exchange": exchanges[buy.exchange_id].slug,
+                "sell_exchange": exchanges[sell.exchange_id].slug,
+                "evaluated_at": evaluation.evaluated_at.isoformat(),
+                "quantity": quantity,
+                "required": required,
+                "inventory_sufficient": sufficient,
+                "projected_net_profit_cad": str(market_net) if market_net is not None else None,
+                "market_profitability": "UNKNOWN"
+                if market_net is None
+                else ("PROJECTED_POSITIVE" if market_net > 0 else "NON_POSITIVE"),
+                "maximum_funded_acquisition_cad": str(funded.acquisition_cad) if funded else None,
+                "funded_size_net_profit_cad": str(funded.evaluation.net_profit_cad)
+                if funded
+                else None,
+                "projected_costs": projected_costs(funded.evaluation) if funded else None,
+                "limiting_constraints": limits,
+                "fundable_with_reallocation": reallocatable,
+                "reasons": reasons,
+                "actionable": False,
+                "classification": "RESEARCH",
+            }
+        )
+    balances = [
+        {
+            "exchange": exchanges[p.exchange_id].slug,
+            "asset": assets[p.asset_id].symbol,
+            "canonical_key": assets[p.asset_id].canonical_key,
+            "quantity": str(p.quantity),
+            "available_quantity": str(p.quantity - p.reserved_quantity),
+            "reserved_quantity": str(p.reserved_quantity),
+        }
+        for p in positions
+    ]
+    return {
+        "session_id": str(session.id),
+        "classification": control.classification,
+        "balances": balances,
+        "routes": output,
+        "window": {"limit": limit, "limited": len(pairs) > limit},
+        "limitations": [
+            "Pinned projected quantities are not executable quotes",
+            "Funding sufficiency does not verify fees, eligibility or clock",
+        ],
+    }
+
+
