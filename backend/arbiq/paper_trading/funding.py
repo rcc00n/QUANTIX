@@ -1300,3 +1300,99 @@ class ExperimentRequest(Contract):
         return self
 
 
+@router.post("/experiments", status_code=201)
+async def experiment(body: ExperimentRequest, request: Request, db: DB, user: AuthenticatedUser):
+    now = await now_checked(request)
+    await db.scalar(select(User).where(User.id == user.id).with_for_update())
+    proposal_row = await db.get(FundingProposal, body.proposal_id) if body.proposal_id else None
+    if body.proposal_id and (proposal_row is None or proposal_row.user_id != user.id):
+        raise HTTPException(404, "Funding proposal not found")
+    optimized = bool(proposal_row and proposal_row.payload.get("allocation_version"))
+    if not optimized and body.idempotency_key.startswith("allocation:v2:"):
+        raise HTTPException(422, "Reserved allocation idempotency namespace")
+    key = f"allocation:v2:{body.proposal_id}" if optimized else body.idempotency_key
+    fingerprint = body.model_dump(mode="json")
+    if optimized:
+        fingerprint["idempotency_key"] = key
+    digest = hashlib.sha256(
+        json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    prior = await db.scalar(
+        select(FundingExperiment).where(
+            FundingExperiment.user_id == user.id,
+            FundingExperiment.idempotency_key == key,
+        )
+    )
+    if prior:
+        if prior.fingerprint != digest:
+            raise HTTPException(409, "Idempotency key was used for a different experiment")
+        session, control = await owned(db, user, prior.session_id)
+        return {**session_dto(session, control), "reused": True}
+    if body.reset_from_session_id:
+        source, control = await owned(db, user, body.reset_from_session_id)
+        if control.classification != "RESEARCH":
+            raise HTTPException(409, "Validated portfolios cannot be reset as research")
+        if source.initial_equity_cad != body.capital_cad:
+            raise HTTPException(422, "Reset comparison must use equal initial capital")
+    allocations = list(body.allocations or [])
+    if proposal_row is not None:
+        p = proposal_row
+        if p.expires_at < now:
+            raise HTTPException(409, "Funding proposal expired; request fresh marks")
+        if Decimal(p.payload["capital_cad"]) != body.capital_cad:
+            raise HTTPException(422, "Experiment capital differs from its proposal")
+        if optimized and (
+            p.payload.get("creatable") is not True
+            or p.payload.get("feasible") is not True
+            or not proposal_marks_fresh(p.payload, now)
+        ):
+            raise HTTPException(409, "Select a feasible current allocation with fresh CAD marks")
+        allocations = [
+            Allocation.model_validate(
+                {
+                    **{k: v for k, v in item.items() if k not in {"cad_value", "evidence"}},
+                    "evidence": {
+                        **item.get("evidence", {}),
+                        "funding_proposal_id": str(p.id),
+                        "allocation_version": p.payload.get("allocation_version"),
+                        "proposal_trade_amount_cad": p.payload.get("trade_amount_cad", "250"),
+                        "proposal_funded_alternative_routes": p.payload.get(
+                            "funded_route_count", 0
+                        ),
+                    },
+                }
+            )
+            for item in p.payload["allocations"]
+        ]
+    settings = body.settings or presets()["Aggressive Research"]
+    if optimized:
+        pinned = PaperStrategy.model_validate(proposal_row.payload["proposed_strategy"])
+        if body.settings and body.settings != pinned:
+            raise HTTPException(422, "Use the selected proposal's immutable strategy settings")
+        settings = pinned
+    elif proposal_row is not None:
+        target = Decimal(proposal_row.payload.get("trade_amount_cad", "250"))
+        if body.settings and settings.trade_amount_cad != target:
+            raise HTTPException(422, "Strategy trade budget must match its funding proposal")
+        settings = settings.model_copy(update={"trade_amount_cad": target})
+    if settings.mode != "RESEARCH_SHADOW":
+        raise HTTPException(422, "Funding experiments require isolated RESEARCH_SHADOW mode")
+    settings = settings.model_copy(update={"starting_capital_cad": body.capital_cad})
+    try:
+        session, control = await create_portfolio(
+            db, user.id, body.name, settings, body.capital_cad, allocations, now
+        )
+        db.add(
+            FundingExperiment(
+                user_id=user.id,
+                session_id=session.id,
+                idempotency_key=key,
+                fingerprint=digest,
+                source_session_id=body.reset_from_session_id,
+            )
+        )
+        await db.commit()
+        return {**session_dto(session, control), "reused": False}
+    except (AccountingError, ValueError) as exc:
+        await db.rollback()
+        raise HTTPException(422, str(exc)) from None
