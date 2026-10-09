@@ -850,3 +850,155 @@ async def baseline_comparison(
     }
 
 
+@decimal_context
+async def build_proposals(body, request, db, user, policies):
+    if body.eligibility != "RESEARCH":
+        raise HTTPException(
+            422,
+            "Validated allocation needs verified account eligibility and fees",
+        )
+    if PLANNING_LIMIT.locked():
+        raise HTTPException(429, "Another bounded capital plan is running")
+    async with PLANNING_LIMIT:
+        now = await now_checked(request)
+        cutoff = body.planning_cutoff or now
+        if cutoff > now:
+            raise HTTPException(422, "Planning cutoff cannot be in the future")
+        await db.scalar(select(User).where(User.id == user.id).with_for_update())
+        recent = await db.scalar(
+            select(func.count())
+            .select_from(FundingProposal)
+            .where(
+                FundingProposal.user_id == user.id,
+                FundingProposal.expires_at >= now - timedelta(minutes=55),
+            )
+        )
+        if recent + len(policies) > 30:
+            raise HTTPException(429, "Funding proposal limit reached; at most30 per hour")
+        (
+            routes,
+            exchanges,
+            assets,
+            reserve_venues,
+            cash_exchange,
+            limited,
+        ) = await load_planning_rows(db, body, cutoff)
+        strategy = optimized_strategy(body)
+        constraints = constraints_for(body)
+        groups = {exchange.slug: venue_group(exchange.slug) for exchange in exchanges.values()}
+        stablecoins = {
+            asset.canonical_key for asset in assets.values() if asset.kind == "stablecoin"
+        }
+        cohort = await asyncio.to_thread(
+            funding_demands, routes, cutoff, strategy, include_legacy="COVERAGE" in policies
+        )
+        outputs = []
+        for policy in policies:
+            if policy == "COVERAGE":
+                data = await baseline_comparison(
+                    body,
+                    cohort,
+                    constraints,
+                    exchanges,
+                    assets,
+                    cash_exchange,
+                    groups,
+                    stablecoins,
+                    cutoff,
+                )
+            else:
+                plan = await asyncio.to_thread(
+                    allocation.optimize_allocation,
+                    policy,
+                    constraints,
+                    cohort.demands,
+                    reserve_venues,
+                    stablecoins,
+                    venue_groups=groups,
+                    as_of=cutoff,
+                )
+                data = plan.as_payload()
+            details = {item["route_id"]: item for item in data["route_capacity"]}
+            requirements = [
+                {
+                    **row,
+                    "funded": bool(
+                        (details.get(row["route_id"], {}).get("target_pinned") or {}).get(
+                            "target_met"
+                        )
+                    )
+                    and "INSUFFICIENT_PRE_FUNDED_INVENTORY"
+                    not in details[row["route_id"]]["limiting_constraints"],
+                }
+                for row in cohort.requirements
+            ]
+            ready = (
+                data["feasible"]
+                and body.planning_cutoff is None
+                and proposal_marks_fresh(data, now, strategy.maximum_book_age_seconds)
+            )
+            planned_strategy = strategy
+            if policy != "COVERAGE" and data["allocations"]:
+                active = [
+                    item for item in data["allocations"] if not item["evidence"].get("reserve")
+                ]
+                # Restrict this experiment to its modeled inventory universe. Preserve
+                # existing risk settings and earlier strategy versions.
+                planned_strategy = strategy.model_copy(
+                    update={
+                        "allowed_exchanges": tuple(sorted({item["exchange"] for item in active})),
+                        "allowed_assets": tuple(
+                            sorted(
+                                {
+                                    item["asset"]
+                                    for item in active
+                                    if (item["asset"] in {route.sell.asset for route in routes})
+                                }
+                            )
+                        ),
+                    }
+                )
+            payload = {
+                **data,
+                "allocation_version": allocation.VERSION,
+                "classification": "RESEARCH",
+                "as_of": cutoff.isoformat(),
+                "expires_at": (now + timedelta(minutes=5)).isoformat(),
+                "capital_cad": str(body.capital_cad),
+                "trade_amount_cad": str(body.trade_amount_cad),
+                "requirements": requirements,
+                "creatable": ready,
+                "eligibility_verified": False,
+                "creation_requires_fresh_marks": True,
+                "proposed_strategy": planned_strategy.model_dump(mode="json"),
+                "planning_window": {
+                    "from": (cutoff - timedelta(days=body.lookback_days)).isoformat(),
+                    "cutoff": cutoff.isoformat(),
+                    "historical": body.planning_cutoff is not None,
+                },
+                "evidence": cohort.records,
+                "evidence_exclusions": dict(cohort.exclusions),
+                "route_coverage": {
+                    "considered_routes": len(routes),
+                    "route_window_limit": 30,
+                    "route_window_limited": limited,
+                    "funded_route_count": data["funded_route_count"],
+                },
+                "limitations": [
+                    "Retained research projections use explicit source cutoffs and costs",
+                    "Largest funded size refers to evaluated size points",
+                    "Funding coverage excludes idle reserve and cannot establish actionability",
+                    "Historical or stale priced positions cannot initialize a current portfolio",
+                    "Validated account eligibility and fees remain unverified",
+                ],
+            }
+            row = FundingProposal(
+                user_id=user.id, expires_at=now + timedelta(minutes=5), payload=payload
+            )
+            db.add(row)
+            await db.flush()
+            outputs.append({"id": str(row.id), **payload})
+        await db.commit()
+        return {"as_of": cutoff.isoformat(), "proposals": outputs}
+
+
