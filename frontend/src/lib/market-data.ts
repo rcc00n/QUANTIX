@@ -77,3 +77,4 @@ export type DiscoveredMarket = {
   quote_volume: string | null;
   quote_volume_unit: string;
 };
+export type MarketPage = { total: number; markets: DiscoveredMarket[] };
