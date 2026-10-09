@@ -78,3 +78,38 @@ export type DiscoveredMarket = {
   quote_volume_unit: string;
 };
 export type MarketPage = { total: number; markets: DiscoveredMarket[] };
+export type Book = {
+  market_id: string;
+  exchange: string;
+  symbol: string;
+  base_key: string;
+  quote_key: string;
+  normalized: {
+    bids: { price: string; quantity: string }[];
+    asks: { price: string; quantity: string }[];
+  };
+  received_at: string;
+  status_generated_at?: string;
+  freshness?: { classification: string; source_age_seconds: number | null; reason?: string | null };
+  exchange_timestamp: string | null;
+  latency_ms: number | null;
+  state: DataState;
+  reasons: string[];
+  source: string;
+  sequence: string | null;
+  verification: {
+    status?: string;
+    independent_references?: {
+      exchange: string;
+      price: string;
+      quote_key: string;
+      received_at: string;
+    }[];
+  };
+  storage_origin: string;
+  collector_healthy: boolean;
+  age_ms: number | null;
+  content_sha256: string;
+  raw_evidence: unknown;
+  actionable: false;
+};
