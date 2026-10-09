@@ -1284,3 +1284,19 @@ async def proposal(body: ProposalRequest, request: Request, db: DB, user: Authen
     return {"id": str(row.id), **payload}
 
 
+class ExperimentRequest(Contract):
+    name: str = Field(default="Research allocation experiment", min_length=1, max_length=100)
+    idempotency_key: str = Field(min_length=8, max_length=100)
+    proposal_id: UUID | None = None
+    capital_cad: PositiveDecimal = "10000"
+    allocations: tuple[Allocation, ...] | None = None
+    settings: PaperStrategy | None = None
+    reset_from_session_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def source(self):
+        if bool(self.proposal_id) == bool(self.allocations):
+            raise ValueError("Use one funding source: proposal or explicit allocations")
+        return self
+
+
