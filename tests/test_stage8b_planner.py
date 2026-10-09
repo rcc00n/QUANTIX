@@ -68,6 +68,22 @@ def pinned(buy=None, sell=None, when=AT):
     )
 
 
+def test_sized_pair_funds_exactly_both_native_reservations_and_respects_inventory():
+    strategy = presets()["Aggressive Research"].model_copy(update={"sell_fee_currency": "base"})
+    pair = read_pair(pinned(), AT, strategy)
+    point = size_at_budget(pair, D("500"), at_least=True)
+    assert point is not None and point.acquisition_cad >= 500
+    assert point.buy_quote > point.evaluation.buy_quote_required
+    assert point.sell_base > point.evaluation.sell_quantity
+    capped = size_at_budget(pair, D("500"), buy_available=D("7"), sell_available=point.sell_base)
+    assert capped is None or capped.acquisition_cad < 50
+    assert (
+        size_at_budget(pair, D("500"), buy_available=point.buy_quote, sell_available=D("0")) is None
+    )
+    under_cap = size_at_budget(
+        pair, D("500"), buy_available=point.buy_quote, sell_available=point.sell_base
+    )
+    assert under_cap and under_cap.reserved_acquisition_cad <= 500
 
 
 
