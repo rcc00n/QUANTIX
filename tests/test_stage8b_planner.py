@@ -86,6 +86,23 @@ def test_sized_pair_funds_exactly_both_native_reservations_and_respects_inventor
     assert under_cap and under_cap.reserved_acquisition_cad <= 500
 
 
+def test_projected_costs_preserve_exact_values_zero_and_missing_evidence():
+    strategy = presets()["Aggressive Research"]
+    point = size_at_budget(read_pair(pinned(), AT, strategy), D("500"), at_least=True)
+    assert point is not None
+    evaluation = replace(
+        point.evaluation,
+        fees_cad=D("0.123456789012345678901"),
+        fx_cost_cad=None,
+        slippage_reserve_cad=D("0.000000000000000001"),
+        rebalancing_cost_cad=D("0"),
+    )
+    assert projected_costs(evaluation) == {
+        "fees_cad": "0.123456789012345678901",
+        "fx_drag_cad": None,
+        "slippage_reserve_cad": "0.000000000000000001",
+        "rebalancing_cad": "0",
+    }
 
 
 
