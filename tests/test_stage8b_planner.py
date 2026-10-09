@@ -125,3 +125,119 @@ def test_funding_replay_rejects_noncausal_or_unpriced_evidence(failure):
         read_pair(row, AT, presets()["Aggressive Research"])
 
 
+async def test_compare_and_select_immutable_proposal_once(funding_api, environment, monkeypatch):
+    c, sessions, _asset = funding_api
+    clock = {"now": AT + timedelta(seconds=1)}
+
+    async def now(_request):
+        return clock["now"]
+
+    monkeypatch.setattr("arbiq.paper_trading.funding.now_checked", now)
+    env = environment.ids
+    source = pinned(
+        execution.book(env["bm"], "synthetic-buy", AT),
+        execution.book(env["sm"], "synthetic-sell", AT, bid="110", ask="111"),
+    )
+    async with environment.sessions() as db:
+        venues = [await db.get(Exchange, key) for key in (env["bx"], env["sx"])]
+        for venue in venues:
+            venue.enabled = True
+        route = await db.scalar(
+            select(ArbitrageRoute).where(ArbitrageRoute.buy_market_id == env["bm"])
+        )
+        old = await db.scalar(
+            select(ArbitrageEvaluation).where(ArbitrageEvaluation.route_id == route.id)
+        )
+        snaps = []
+        for side, key in (("buy", "bm"), ("sell", "sm")):
+            b = source.evidence[f"{side}_book"]
+            s = OrderBookSnapshot(
+                market_id=env[key],
+                observed_at=AT,
+                received_at=AT,
+                bids=[[x["price"], x["quantity"]] for x in b["normalized"]["bids"]],
+                asks=[[x["price"], x["quantity"]] for x in b["normalized"]["asks"]],
+                source="SYNTHETIC",
+                quality=b["state"],
+                content_sha256=b["content_sha256"],
+                created_at=AT,
+            )
+            db.add(s)
+            snaps.append(s)
+        await db.flush()
+        db.add(
+            ArbitrageEvaluation(
+                route_id=route.id,
+                revision=old.revision + 1,
+                evaluated_at=AT,
+                created_at=AT,
+                buy_snapshot_id=snaps[0].id,
+                sell_snapshot_id=snaps[1].id,
+                buy_fee_version_id=old.buy_fee_version_id,
+                sell_fee_version_id=old.sell_fee_version_id,
+                net_profit_cad=D("10"),
+                calculation_version="SYNTHETIC",
+                evidence=source.evidence,
+                result={},
+            )
+        )
+        await db.commit()
+    body = {
+        "capital_cad": "1000",
+        "trade_amount_cad": "250",
+        "max_venue_pct": "100",
+        "max_asset_pct": "100",
+        "max_reserve_pct": "100",
+        "exchange_slugs": [v.slug for v in venues],
+    }
+    response = c.post("/api/v1/paper/funding/compare", json=body)
+    assert response.status_code == 200, response.text
+    plans = response.json()["proposals"]
+    assert [p["policy"] for p in plans] == [
+        "COVERAGE",
+        "LIQUIDITY_WEIGHTED",
+        "ROUTE_OPTIMIZED",
+        "DIVERSIFIED_HYBRID",
+    ]
+    assert len({p["as_of"] for p in plans}) == 1
+    assert all(D(p["total_cad"]) == 1000 for p in plans)
+    selected = plans[-1]
+    assert selected["feasible"] and selected["creatable"] and selected["funded_route_count"] == 1
+    costs = selected["route_capacity"][0]["target_pinned"]["projected_costs"]
+    assert set(costs) == {"fees_cad", "fx_drag_cad", "slippage_reserve_cad", "rebalancing_cad"}
+    assert isinstance(costs["fees_cad"], str) and D(costs["fees_cad"]) > 0
+    assert not plans[0]["creatable"]
+    blocked = c.post("/api/v1/paper/funding/compare", json={**body, "eligibility": "VALIDATED"})
+    assert blocked.status_code == 422
+    created_body = {
+        "name": "SYNTHETIC selected research",
+        "proposal_id": selected["id"],
+        "capital_cad": "1000",
+        "idempotency_key": "SYNTHETIC-select-one",
+    }
+    path = "/api/v1/paper/funding/experiments"
+    submissions = await asyncio.gather(
+        asyncio.to_thread(c.post, path, json=created_body),
+        asyncio.to_thread(
+            c.post, path, json={**created_body, "idempotency_key": "SYNTHETIC-concurrent-key"}
+        ),
+    )
+    assert all(item.status_code == 201 for item in submissions)
+    obs, concurrent = (item.json() for item in submissions)
+    assert concurrent["id"] == obs["id"]
+    assert {obs["reused"], concurrent["reused"]} == {True, False}
+    assert obs["classification"] == "RESEARCH"
+    changed = c.post(path, json={**created_body, "capital_cad": "999"})
+    assert changed.status_code == 409
+    clock["now"] += timedelta(seconds=40)
+    stale = c.post(
+        "/api/v1/paper/funding/experiments", json={**created_body, "proposal_id": plans[1]["id"]}
+    )
+    assert stale.status_code == 409
+    retry = c.post(
+        "/api/v1/paper/funding/experiments",
+        json={**created_body, "idempotency_key": "SYNTHETIC-another-key"},
+    )
+    assert retry.status_code == 201 and retry.json()["reused"] and retry.json()["id"] == obs["id"]
+    async with sessions() as db:
+        assert await reconcile(db, UUID(obs["id"])) is True
