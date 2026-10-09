@@ -65,3 +65,15 @@ export type ExchangeFeed = {
     };
   };
 };
+export type DiscoveredMarket = {
+  id: string;
+  symbol: string;
+  base_symbol: string;
+  quote_symbol: string;
+  active_status: string;
+  monitored: boolean;
+  base_identity_verified: boolean;
+  quote_identity_verified: boolean;
+  quote_volume: string | null;
+  quote_volume_unit: string;
+};
