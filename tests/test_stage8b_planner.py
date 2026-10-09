@@ -105,5 +105,23 @@ def test_projected_costs_preserve_exact_values_zero_and_missing_evidence():
     }
 
 
+@pytest.mark.parametrize(
+    "failure", ["future_record", "future_book", "stale_source", "anomaly", "missing_fx"]
+)
+def test_funding_replay_rejects_noncausal_or_unpriced_evidence(failure):
+    row = pinned()
+    row.evidence = deepcopy(row.evidence)
+    if failure == "future_record":
+        row.created_at += timedelta(microseconds=1)
+    elif failure == "future_book":
+        row.evidence["buy_book"]["received_at"] = (AT + timedelta(seconds=1)).isoformat()
+    elif failure == "stale_source":
+        row.evidence["sell_book"]["exchange_timestamp"] = (AT - timedelta(seconds=90)).isoformat()
+    elif failure == "anomaly":
+        row.evidence["sell_book"]["state"] = "SUSPICIOUS"
+    else:
+        row.evidence["calculation_inputs"]["buy"]["fx"] = None
+    with pytest.raises(ValueError):
+        read_pair(row, AT, presets()["Aggressive Research"])
 
 
