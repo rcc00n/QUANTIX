@@ -1,0 +1,1 @@
+export type DataState = "HEALTHY" | "DEGRADED" | "STALE" | "SUSPICIOUS" | "UNAVAILABLE";
