@@ -1002,3 +1002,285 @@ async def build_proposals(body, request, db, user, policies):
         return {"as_of": cutoff.isoformat(), "proposals": outputs}
 
 
+@router.post("/compare")
+async def compare(body: ProposalRequest, request: Request, db: DB, user: AuthenticatedUser):
+    return await build_proposals(body, request, db, user, ("COVERAGE", *OPTIMIZED_POLICIES))
+
+
+@router.post("/proposal")
+@decimal_context
+async def proposal(body: ProposalRequest, request: Request, db: DB, user: AuthenticatedUser):
+    if body.policy in OPTIMIZED_POLICIES:
+        return (await build_proposals(body, request, db, user, (body.policy,)))["proposals"][0]
+    if (
+        body.eligibility != "RESEARCH"
+        or body.planning_cutoff is not None
+        or body.inventory_asset_keys
+    ):
+        raise HTTPException(422, "Use a Stage 8B policy or comparison for these constraints")
+    now = await now_checked(request)
+    await db.scalar(select(User).where(User.id == user.id).with_for_update())
+    recent = await db.scalar(
+        select(func.count())
+        .select_from(FundingProposal)
+        .where(
+            FundingProposal.user_id == user.id,
+            FundingProposal.expires_at >= now - timedelta(minutes=55),
+        )
+    )
+    if recent >= 30:
+        raise HTTPException(429, "Funding proposal limit reached; at most30per hour")
+    exchanges = {x.id: x for x in await db.scalars(select(Exchange))}
+    chosen = [
+        x
+        for x in exchanges.values()
+        if x.enabled and (not body.exchange_slugs or x.slug in body.exchange_slugs)
+    ]
+    if not chosen or set(body.exchange_slugs) - {x.slug for x in chosen}:
+        raise HTTPException(422, "No matching supported exchange allocation")
+    chosen.sort(key=lambda x: x.slug)
+    chosen_ids = {x.id for x in chosen}
+    buy_listing, sell_listing = aliased(Market), aliased(Market)
+    counts = list(
+        (
+            await db.execute(
+                select(ArbitrageRoute, func.count(ArbitrageEvaluation.id))
+                .join(ArbitrageEvaluation)
+                .join(buy_listing, buy_listing.id == ArbitrageRoute.buy_market_id)
+                .join(sell_listing, sell_listing.id == ArbitrageRoute.sell_market_id)
+                .where(
+                    buy_listing.exchange_id.in_(chosen_ids),
+                    sell_listing.exchange_id.in_(chosen_ids),
+                    buy_listing.base_asset_id.in_(
+                        select(Asset.id).where(Asset.canonical_key.in_(body.asset_keys))
+                    )
+                    if body.asset_keys
+                    else True,
+                    ArbitrageEvaluation.evaluated_at >= now - timedelta(days=body.lookback_days),
+                    ArbitrageEvaluation.evaluated_at <= now,
+                    ArbitrageEvaluation.net_profit_cad > 0,
+                )
+                .group_by(ArbitrageRoute.id)
+                .order_by(func.count(ArbitrageEvaluation.id).desc(), ArbitrageRoute.id)
+                .limit(31)
+            )
+        ).all()
+    )
+    mids = {mid for r, _ in counts for mid in (r.buy_market_id, r.sell_market_id)}
+    markets = {x.id: x for x in await db.scalars(select(Market).where(Market.id.in_(mids)))}
+    exchanges, assets = await metadata(
+        db, {a for m in markets.values() for a in (m.base_asset_id, m.quote_asset_id)}
+    )
+    cad = next((a for a in assets.values() if a.canonical_key == "fiat:CAD"), None)
+    if cad is None:
+        raise HTTPException(409, "CAD metadata not yet discovered")
+    latest = list(
+        await db.scalars(
+            select(ArbitrageEvaluation)
+            .where(
+                ArbitrageEvaluation.route_id.in_([r.id for r, _ in counts]),
+                ArbitrageEvaluation.evaluated_at <= now,
+            )
+            .distinct(ArbitrageEvaluation.route_id)
+            .order_by(
+                ArbitrageEvaluation.route_id,
+                ArbitrageEvaluation.evaluated_at.desc(),
+                ArbitrageEvaluation.id,
+            )
+        )
+    )
+    evaluations = {x.route_id: x for x in latest}
+    strategy = presets()["Aggressive Research"].model_copy(
+        update={"trade_amount_cad": body.trade_amount_cad}
+    )
+    weights, covered, requirements = Counter(), 0, []
+    for route, n in counts[:30]:
+        buy, sell = markets[route.buy_market_id], markets[route.sell_market_id]
+        if buy.exchange_id not in chosen_ids or sell.exchange_id not in chosen_ids:
+            continue
+        if body.asset_keys and assets[buy.base_asset_id].canonical_key not in body.asset_keys:
+            continue
+        covered += 1
+        evaluation = evaluations.get(route.id)
+        item = {
+            "route_id": str(route.id),
+            "evaluation_id": str(evaluation.id) if evaluation else None,
+            "asset": assets[buy.base_asset_id].symbol,
+            "buy_exchange": exchanges[buy.exchange_id].slug,
+            "sell_exchange": exchanges[sell.exchange_id].slug,
+            "trade_amount_cad": str(body.trade_amount_cad),
+            "required": [],
+            "reasons": [],
+            "funded": False,
+            "actionable": False,
+            "classification": "RESEARCH",
+        }
+        try:
+            if (
+                not evaluation
+                or buy.base_asset_id != sell.base_asset_id
+                or venue_group(exchanges[buy.exchange_id].slug)
+                == venue_group(exchanges[sell.exchange_id].slug)
+            ):
+                raise ValueError("COMPATIBLE_PINNED_INPUTS_UNAVAILABLE")
+            best, quote_quantity, base_quantity = await asyncio.to_thread(
+                required_quantities, evaluation, strategy
+            )
+            item["evaluated_at"] = evaluation.evaluated_at.isoformat()
+            item["projected_net_profit_cad"] = (
+                str(best.net_profit_cad) if best.net_profit_cad is not None else None
+            )
+            for m, asset_id, quantity in (
+                (buy, buy.quote_asset_id, quote_quantity),
+                (sell, sell.base_asset_id, base_quantity),
+            ):
+                item["required"].append(
+                    {
+                        "exchange_id": str(m.exchange_id),
+                        "exchange": exchanges[m.exchange_id].slug,
+                        "asset_id": str(asset_id),
+                        "asset": assets[asset_id].symbol,
+                        "canonical_key": assets[asset_id].canonical_key,
+                        "required_quantity": str(quantity),
+                    }
+                )
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            item["required"] = []
+            item["reasons"].append("COMPATIBLE_PINNED_SIZE_UNAVAILABLE")
+        requirements.append(item)
+        weight = Decimal(n) if body.policy == "COVERAGE" else Decimal(1)
+        weights[(str(buy.exchange_id), str(buy.quote_asset_id))] += weight
+        weights[(str(sell.exchange_id), str(sell.base_asset_id))] += weight
+    # Equal venues normalizes each venue's covered asset demand to the same budget.
+    if body.policy == "EQUAL_VENUES":
+        totals = Counter()
+        for (ex, _), weight in weights.items():
+            totals[ex] += weight
+        weights = Counter({key: weight / totals[key[0]] for key, weight in weights.items()})
+    limits = []
+    if body.policy == "EQUAL_VENUES" and len(weights) > 40:
+        weights = Counter(dict(weights.most_common(40)))
+        limits.append("Only40highest-coverage venue/asset allocation cells included")
+    weight_total = sum(weights.values(), Decimal(0))
+    investable = floor_value(body.capital_cad * (1 - body.reserve_cash_pct / 100))
+    cad_venues = set(
+        await db.scalars(
+            select(Market.exchange_id)
+            .where(
+                Market.quote_asset_id == cad.id,
+                Market.active.is_not(False),
+                Market.exchange_id.in_(chosen_ids),
+            )
+            .distinct()
+        )
+    )
+    cash_exchange = next(
+        (
+            x
+            for x in sorted(chosen, key=lambda x: (x.slug not in {"kraken", "ndax"}, x.slug))
+            if x.id in cad_venues
+        ),
+        chosen[0],
+    )
+    if not cad_venues:
+        limits.append(
+            "Reserve CAD is accounting inventory; selected venues have no discovered CAD market"
+        )
+    if body.policy == "COVERAGE":
+
+        async def full_size_source(items):
+            return await quote_marks(request, items)
+
+        allocations = await allocate_complete_routes(
+            investable, requirements, full_size_source, exchanges, assets, cash_exchange
+        )
+    else:
+        quantities = [
+            {"exchange_id": ex, "asset_id": asset, "quantity": "0.000001"}
+            for ex, asset in weights
+            if asset != str(cad.id)
+        ]
+        probe = await quote_marks(request, quantities)
+        rates = {(str(x.id), str(cad.id)): Decimal(1) for x in chosen}
+        for key, value in probe.items():
+            try:
+                if value.get("cad_per_unit") is not None:
+                    rates[key] = floor_value(Decimal(value["cad_per_unit"]))
+            except (ValueError, TypeError, ArithmeticError):
+                continue
+        full_requests = []
+        for (ex, asset), weight in weights.items():
+            if asset == str(cad.id) or weight_total <= 0:
+                continue
+            quantity = quantity_for_budget(
+                investable * weight / weight_total, rates.get((ex, asset), Decimal(0))
+            )
+            if quantity is not None:
+                full_requests.append(
+                    {"exchange_id": ex, "asset_id": asset, "quantity": str(quantity)}
+                )
+        full = await quote_marks(request, full_requests)
+        allocations = await allocate_weighted(
+            investable, weights, rates, full, exchanges, assets, cash_exchange
+        )
+    cash_reserve = body.capital_cad - investable
+    if cash_reserve:
+        allocations.append(
+            {
+                "exchange": cash_exchange.slug,
+                "asset": "fiat:CAD",
+                "quantity": str(cash_reserve),
+                "cad_rate": "1",
+                "cad_value": str(cash_reserve),
+                "evidence": {"source": "CAD_IDENTITY", "reserve": True},
+            }
+        )
+    if not covered:
+        limits.append("No positive retained route coverage; proposal keeps capital in CAD")
+    if body.policy == "EQUAL_VENUES" and any(
+        key not in rates or (key[1] != str(cad.id) and key not in full) for key in weights
+    ):
+        limits.append(
+            "Missing executable-depth CAD marks retained as cash; no stablecoin parity assumed"
+        )
+    funded_count = classify_funded_requirements(requirements, allocations)
+    if not funded_count and covered:
+        limits.append(
+            "No complete route is funded at the selected trade budget; inspect paired deficits"
+        )
+    now = await now_checked(request)
+    payload = {
+        "classification": "RESEARCH",
+        "policy": body.policy,
+        "capital_cad": str(body.capital_cad),
+        "trade_amount_cad": str(body.trade_amount_cad),
+        "funded_route_count": funded_count,
+        "requirements": requirements,
+        "allocations": allocations,
+        "total_cad": str(sum(Decimal(a["cad_value"]) for a in allocations)),
+        "unallocated_cad": "0",
+        "route_coverage": {
+            "considered_routes": covered,
+            "historical_window_days": body.lookback_days,
+            "route_window_limit": 30,
+            "route_window_limited": len(counts) > 30,
+            "funded_route_count": funded_count,
+        },
+        "limitations": [
+            *limits,
+            "Hypothetical initial contributions, not actual purchases",
+            "Historical coverage is not a forecast of profitability",
+            "Shared cells cover alternative routes individually, not simultaneous reservations",
+            "Pinned projections can expire or change before a new candidate or reaction delay",
+            "Funding alone does not approve exposure, loss, confidence or concurrent strategy risk",
+            "Fees, trading eligibility and inventory assumptions remain unverified",
+        ],
+        "as_of": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=5)).isoformat(),
+    }
+    row = FundingProposal(user_id=user.id, expires_at=now + timedelta(minutes=5), payload=payload)
+    db.add(row)
+    await db.commit()
+    return {"id": str(row.id), **payload}
+
+
