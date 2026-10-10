@@ -48,3 +48,7 @@ export type OpportunityDiagnostics = {
   [key: string]: unknown;
 };
 export type SupportedBudgets = { budgets_cad: string[]; default_budget_cad: string };
+
+export function reasonLabel(value: string): string {
+  return value.replaceAll("_", " ").toLowerCase();
+}
