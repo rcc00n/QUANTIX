@@ -124,3 +124,8 @@ export function utc(value: string | null): string {
     ? new Date(value).toISOString().replace("T", " ").slice(0, 19) + " UTC"
     : "Not received";
 }
+export function decimal(value: string): string {
+  const [whole, fraction] = value.split(".");
+  const trimmed = fraction?.replace(/0+$/, "");
+  return whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",") + (trimmed ? `.${trimmed}` : "");
+}
