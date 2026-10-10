@@ -47,3 +47,4 @@ export type OpportunityDiagnostics = {
   reasons?: string[];
   [key: string]: unknown;
 };
+export type SupportedBudgets = { budgets_cad: string[]; default_budget_cad: string };
