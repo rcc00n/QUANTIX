@@ -1,0 +1,2 @@
+export type OpportunityStatus =
+  "DETECTED" | "RECHECKING" | "VERIFIED_MARKET" | "RESEARCH_ONLY" | "INVALIDATED" | "EXPIRED";
