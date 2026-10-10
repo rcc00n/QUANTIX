@@ -39,3 +39,37 @@ export type PaperBalance = {
   valuation_detail_reason?: string | null;
 };
 export type PortfolioValuationStatus = "COMPLETE_FRESH" | "PARTIAL" | "STALE" | "UNKNOWN";
+export type PaperPortfolio = {
+  equity_cad: string | null;
+  net_pnl_cad?: string | null;
+  net_simulated_pnl_cad?: string | null;
+  realized_trading_cad?: string | null;
+  realized_trading_pnl_cad?: string | null;
+  realized_fx_cad?: string | null;
+  realized_fx_pnl_cad?: string | null;
+  unrealized_pnl_cad: string | null;
+  fees_cad: string | null;
+  expenses_cad: string | null;
+  no_trading_benchmark_cad: string | null;
+  strategy_excess_cad: string | null;
+  drawdown_pct: string | null;
+  capital_utilization_pct: string | null;
+  portfolio_return_pct: string | null;
+  balances: PaperBalance[];
+  valuation_status?: PortfolioValuationStatus;
+  valuation_status_at_checkpoint?: PortfolioValuationStatus | null;
+  valued_subtotal_cad?: string | null;
+  priced_position_count?: number;
+  unpriced_position_count?: number;
+  unpriced_balances?: {
+    exchange: string;
+    asset: string;
+    canonical_key?: string;
+    quantity: string;
+    reason: string | null;
+    detail_reason: string | null;
+  }[];
+  limitations: string[];
+  as_of?: string;
+  [key: string]: unknown;
+};
