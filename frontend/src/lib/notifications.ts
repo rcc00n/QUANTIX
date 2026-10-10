@@ -24,3 +24,18 @@ export type NotificationStatus = {
   };
   queue_counts: Record<string, number>;
 };
+export type NotificationHistory = {
+  items: {
+    id: string;
+    kind: string;
+    status: string;
+    created_at: string;
+    expires_at: string | null;
+    delivered_at: string | null;
+    error_code: string | null;
+    attempts: number;
+    message: string;
+    alert_id: string | null;
+  }[];
+  limit: number;
+};
