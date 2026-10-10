@@ -16,3 +16,14 @@ export type PaperStrategy = {
   allowed_assets?: string[];
   [key: string]: unknown;
 };
+export type PaperSession = {
+  id: string;
+  name: string;
+  classification: PaperClassification;
+  mode: string;
+  status: string;
+  initial_equity_cad: string;
+  started_at: string;
+  strategy_version_id: string;
+  settings: PaperStrategy;
+};
