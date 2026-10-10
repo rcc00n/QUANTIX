@@ -39,3 +39,10 @@ export type NotificationHistory = {
   }[];
   limit: number;
 };
+export type NotificationPreview = {
+  message: string | null;
+  eligible?: boolean;
+  reasons: string[];
+  classification?: string;
+  evaluation_id?: string;
+};
