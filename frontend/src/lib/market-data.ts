@@ -119,3 +119,8 @@ export function age(seconds: number | null): string {
     ? `${seconds.toFixed(1)}s`
     : `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
 }
+export function utc(value: string | null): string {
+  return value
+    ? new Date(value).toISOString().replace("T", " ").slice(0, 19) + " UTC"
+    : "Not received";
+}
