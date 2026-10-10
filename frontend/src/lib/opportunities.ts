@@ -39,3 +39,11 @@ export type OpportunityPage = {
   candidate_window?: number;
   matching_retained_routes?: number;
 };
+export type OpportunityDiagnostics = {
+  healthy?: boolean;
+  clock_healthy?: boolean;
+  clock?: { trusted?: boolean; state?: string; reasons?: string[]; [key: string]: unknown };
+  metrics?: Record<string, number | string | null>;
+  reasons?: string[];
+  [key: string]: unknown;
+};
