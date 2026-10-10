@@ -113,3 +113,9 @@ export type Book = {
   raw_evidence: unknown;
   actionable: false;
 };
+export function age(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return "Unavailable";
+  return seconds < 60
+    ? `${seconds.toFixed(1)}s`
+    : `${Math.floor(seconds / 60)}m ${Math.floor(seconds % 60)}s`;
+}
