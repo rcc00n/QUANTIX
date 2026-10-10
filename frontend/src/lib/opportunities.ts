@@ -30,3 +30,12 @@ export type Opportunity = {
   lifecycle?: unknown[];
   [key: string]: unknown;
 };
+export type OpportunityPage = {
+  items: Opportunity[];
+  total: number;
+  limit: number;
+  offset: number;
+  window_limited?: boolean;
+  candidate_window?: number;
+  matching_retained_routes?: number;
+};
