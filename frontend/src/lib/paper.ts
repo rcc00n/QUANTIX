@@ -27,3 +27,14 @@ export type PaperSession = {
   strategy_version_id: string;
   settings: PaperStrategy;
 };
+export type PaperBalance = {
+  exchange: string;
+  asset: string;
+  quantity: string;
+  reserved_quantity: string;
+  available_quantity: string;
+  cost_basis_cad: string | null;
+  market_value_cad: string | null;
+  valuation_status?: PortfolioValuationStatus | "ZERO_POSITION";
+  valuation_detail_reason?: string | null;
+};
