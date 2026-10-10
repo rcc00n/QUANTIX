@@ -38,3 +38,4 @@ export type PaperBalance = {
   valuation_status?: PortfolioValuationStatus | "ZERO_POSITION";
   valuation_detail_reason?: string | null;
 };
+export type PortfolioValuationStatus = "COMPLETE_FRESH" | "PARTIAL" | "STALE" | "UNKNOWN";
