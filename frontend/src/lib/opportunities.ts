@@ -52,3 +52,19 @@ export type SupportedBudgets = { budgets_cad: string[]; default_budget_cad: stri
 export function reasonLabel(value: string): string {
   return value.replaceAll("_", " ").toLowerCase();
 }
+
+/** Display-only truncation. Exact calculation inputs and results stay untouched. */
+export function displayDecimal(value: string, places = 8): { text: string; abbreviated: boolean } {
+  if (/^[+-]?0+(?:\.0+)?[eE][+-]?\d+$/.test(value)) return { text: "0", abbreviated: false };
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value);
+  if (!match) return { text: value, abbreviated: false };
+  const [, sign, whole, rawFraction = ""] = match;
+  const fraction = rawFraction.replace(/0+$/, "");
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  if (fraction.length <= places)
+    return { text: `${sign}${grouped}${fraction ? `.${fraction}` : ""}`, abbreviated: false };
+  const visible = fraction.slice(0, places).replace(/0+$/, "");
+  if (/^0+$/.test(whole) && !visible)
+    return { text: `${sign}<0.${"0".repeat(places - 1)}1`, abbreviated: true };
+  return { text: `≈${sign}${grouped}${visible ? `.${visible}` : ""}`, abbreviated: true };
+}
