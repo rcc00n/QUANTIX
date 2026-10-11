@@ -20,6 +20,14 @@ export type SystemEvent = {
   severity: string;
   message: string;
 };
+
+export async function backendFetch(path: string): Promise<Response> {
+  return fetch(`${process.env.BACKEND_URL || "http://127.0.0.1:8000"}/api/v1${path}`, {
+    headers: { Cookie: (await cookies()).toString() },
+    cache: "no-store",
+    signal: AbortSignal.timeout(5000),
+  });
+}
 export const requireUser = cache(async (): Promise<User> => {
   const destination = safeReturnPath((await headers()).get("x-quantix-return-path"));
   const login = (unavailable = false): never => {
