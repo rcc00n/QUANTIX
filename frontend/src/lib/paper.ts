@@ -104,3 +104,4 @@ export type PaperTrade = {
   reaction_delay_ms?: number;
   assumptions?: Record<string, unknown>;
 };
+export type PaperTradePage = { items: PaperTrade[]; total: number; limit: number; offset: number };
