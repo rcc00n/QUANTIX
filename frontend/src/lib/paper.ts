@@ -105,3 +105,10 @@ export type PaperTrade = {
   assumptions?: Record<string, unknown>;
 };
 export type PaperTradePage = { items: PaperTrade[]; total: number; limit: number; offset: number };
+export type PaperTradeDetail = {
+  trade: PaperTrade;
+  orders: unknown[];
+  fills: unknown[];
+  events: unknown[];
+  [key: string]: unknown;
+};
