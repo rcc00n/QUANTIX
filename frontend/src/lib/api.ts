@@ -5,6 +5,14 @@ import { redirect } from "next/navigation";
 import { safeReturnPath } from "@/lib/return-path";
 
 export type User = { id: string; username: string; mode: "paper" };
+export type SystemStatus = {
+  mode: "paper";
+  stage: number;
+  database: string;
+  schema_revision: string;
+  services: Record<string, string>;
+  counts: { exchanges: number; opportunities: number; paper_sessions: number };
+};
 export const requireUser = cache(async (): Promise<User> => {
   const destination = safeReturnPath((await headers()).get("x-quantix-return-path"));
   const login = (unavailable = false): never => {
