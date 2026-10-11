@@ -144,3 +144,7 @@ export async function paperFetch<T>(path: string, init?: RequestInit): Promise<T
     );
   return body as T;
 }
+
+export function assetLabel(key: string): string {
+  return key.startsWith("asset:") || key.startsWith("fiat:") ? key.split(":").at(-1)! : key;
+}
