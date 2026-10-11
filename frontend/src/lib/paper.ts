@@ -148,3 +148,10 @@ export async function paperFetch<T>(path: string, init?: RequestInit): Promise<T
 export function assetLabel(key: string): string {
   return key.startsWith("asset:") || key.startsWith("fiat:") ? key.split(":").at(-1)! : key;
 }
+export function utcLabel(value: string | null | undefined): string {
+  if (!value) return "Unavailable";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? "Unavailable"
+    : `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+}
