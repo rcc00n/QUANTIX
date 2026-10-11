@@ -60,3 +60,11 @@ export async function getStatus(): Promise<SystemStatus | null> {
     return null;
   }
 }
+export async function getEvents(): Promise<SystemEvent[]> {
+  try {
+    const response = await backendFetch("/system/events");
+    return response.ok ? response.json() : [];
+  } catch {
+    return [];
+  }
+}
