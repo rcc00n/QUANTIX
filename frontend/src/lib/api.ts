@@ -13,6 +13,13 @@ export type SystemStatus = {
   services: Record<string, string>;
   counts: { exchanges: number; opportunities: number; paper_sessions: number };
 };
+export type SystemEvent = {
+  id: string;
+  created_at: string;
+  event_type: string;
+  severity: string;
+  message: string;
+};
 export const requireUser = cache(async (): Promise<User> => {
   const destination = safeReturnPath((await headers()).get("x-quantix-return-path"));
   const login = (unavailable = false): never => {
