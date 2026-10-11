@@ -87,3 +87,20 @@ export type PaperMetrics = {
   failure_reasons?: Record<string, number>;
   [key: string]: unknown;
 };
+export type PaperTrade = {
+  id: string;
+  status: string;
+  classification: PaperClassification;
+  mode: string;
+  requested_at: string;
+  eligible_at: string;
+  completed_at: string | null;
+  reason: string | null;
+  state: Record<string, unknown>;
+  requested_quantity: string | null;
+  session_id?: string;
+  evaluation_id?: string | null;
+  strategy_version_id?: string | null;
+  reaction_delay_ms?: number;
+  assumptions?: Record<string, unknown>;
+};
