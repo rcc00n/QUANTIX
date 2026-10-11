@@ -119,3 +119,9 @@ export function useLive<T>(path: string | null, interval = 15000) {
     stale: !!error || (!!last.current && performance.now() - last.current > interval * 3),
   };
 }
+
+export function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
