@@ -117,3 +117,30 @@ export type StrategyOptions = {
   presets: Record<string, PaperStrategy>;
   reaction_delays: number[];
 };
+
+export async function paperFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`/api${path}`, {
+    ...init,
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...init?.headers },
+  });
+  if (response.status === 401) {
+    window.location.assign("/login");
+    throw new Error("Your session expired. Sign in again.");
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok)
+    throw new Error(
+      typeof body?.detail === "string"
+        ? body.detail
+        : Array.isArray(body?.detail)
+          ? body.detail
+              .map(
+                (item: { loc?: string[]; msg?: string }) =>
+                  `${item.loc?.slice(1).join(".") || "Setting"}: ${item.msg || "invalid value"}`,
+              )
+              .join(" · ")
+          : "Paper service unavailable.",
+    );
+  return body as T;
+}
