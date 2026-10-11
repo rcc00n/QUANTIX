@@ -112,3 +112,8 @@ export type PaperTradeDetail = {
   events: unknown[];
   [key: string]: unknown;
 };
+export type StrategyOptions = {
+  current: { id: string; version: number; settings: PaperStrategy } | null;
+  presets: Record<string, PaperStrategy>;
+  reaction_delays: number[];
+};
