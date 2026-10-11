@@ -73,3 +73,17 @@ export type PaperPortfolio = {
   as_of?: string;
   [key: string]: unknown;
 };
+export type PaperMetrics = {
+  counts: Record<string, number>;
+  scheduled_simulations?: number;
+  completed_simulations?: number;
+  partially_completed?: number;
+  missed_simulations?: number;
+  failed_simulations?: number;
+  expired_simulations?: number;
+  maximum_drawdown_pct?: string | null;
+  win_rate_pct?: string | null;
+  average_profit_cad?: string | null;
+  failure_reasons?: Record<string, number>;
+  [key: string]: unknown;
+};
