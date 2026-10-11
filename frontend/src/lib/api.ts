@@ -52,3 +52,11 @@ export const requireUser = cache(async (): Promise<User> => {
   if (!response.ok) login(true);
   return response.json() as Promise<User>;
 });
+export async function getStatus(): Promise<SystemStatus | null> {
+  try {
+    const response = await backendFetch("/system/status");
+    return response.ok ? response.json() : null;
+  } catch {
+    return null;
+  }
+}
