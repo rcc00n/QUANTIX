@@ -59,6 +59,16 @@ function configuration() {
   };
 }
 
+async function json(api, path) {
+  const response = await api.get(path, { maxRedirects: 0 });
+  try {
+    if (!response.ok()) throw new Error(`HTTP ${response.status()}`);
+    return await response.json();
+  } finally {
+    await response.dispose();
+  }
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
