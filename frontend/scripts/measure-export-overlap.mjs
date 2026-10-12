@@ -18,6 +18,47 @@ function boundedSeconds(raw, name, min, max) {
   return value * 1000;
 }
 
+function configuration() {
+  const { values } = parseArgs({
+    options: {
+      url: { type: "string", default: "http://127.0.0.1:3181" },
+      phase: { type: "string", default: "idle" },
+      "duration-seconds": { type: "string", default: "120" },
+      "interval-seconds": { type: "string", default: "5" },
+      "wait-seconds": { type: "string", default: "120" },
+      "session-id": { type: "string" },
+      "radar-budget": { type: "string", default: "1000" },
+      browser: { type: "boolean" },
+    },
+  });
+  const url = new URL(values.url);
+  if (
+    !["127.0.0.1", "[::1]"].includes(url.hostname) ||
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    throw new Error("Use a canonical loopback URL for an isolated local deployment");
+  if (!["idle", "export"].includes(values.phase)) throw new Error("Use phase idle or export");
+  if (values["session-id"] && !uuid.test(values["session-id"]))
+    throw new Error("The requested portfolio ID must be a UUID");
+  if (!/^\d{1,8}(?:\.\d{1,18})?$/.test(values["radar-budget"]))
+    throw new Error("The Radar budget must be a positive decimal amount");
+  return {
+    origin: url.origin,
+    phase: values.phase,
+    duration: boundedSeconds(values["duration-seconds"], "duration", 5, 3600),
+    interval: boundedSeconds(values["interval-seconds"], "interval", 3, 60),
+    wait: boundedSeconds(values["wait-seconds"], "wait", 0, 1800),
+    session: values["session-id"],
+    budget: values["radar-budget"],
+    browser: values.browser,
+  };
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
