@@ -128,3 +128,6 @@ export function asRecord(value: unknown): Record<string, unknown> {
 export function asRecords(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.map(asRecord) : [];
 }
+export function amount(value: unknown): string | null {
+  return typeof value === "string" || typeof value === "number" ? String(value) : null;
+}
