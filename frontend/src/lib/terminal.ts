@@ -125,3 +125,6 @@ export function asRecord(value: unknown): Record<string, unknown> {
     ? (value as Record<string, unknown>)
     : {};
 }
+export function asRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map(asRecord) : [];
+}
