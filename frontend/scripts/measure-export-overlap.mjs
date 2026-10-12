@@ -69,6 +69,14 @@ async function json(api, path) {
   }
 }
 
+async function currentExport(api) {
+  try {
+    return { known: true, job: (await json(api, "/api/reports/exports/current")).job };
+  } catch {
+    return { known: false, job: null };
+  }
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
