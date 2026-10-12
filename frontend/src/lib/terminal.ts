@@ -134,3 +134,7 @@ export function amount(value: unknown): string | null {
 export function text(value: unknown, fallback = "Unavailable"): string {
   return typeof value === "string" || typeof value === "number" ? String(value) : fallback;
 }
+export function plot(value: unknown): number | null {
+  const n = value === null || value === undefined || value === "" ? NaN : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
