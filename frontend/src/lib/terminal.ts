@@ -131,3 +131,6 @@ export function asRecords(value: unknown): Record<string, unknown>[] {
 export function amount(value: unknown): string | null {
   return typeof value === "string" || typeof value === "number" ? String(value) : null;
 }
+export function text(value: unknown, fallback = "Unavailable"): string {
+  return typeof value === "string" || typeof value === "number" ? String(value) : fallback;
+}
