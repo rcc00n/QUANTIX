@@ -172,6 +172,42 @@ function surfaces(session, budget) {
   };
 }
 
+async function smoke(context, surface, origin) {
+  const page = await context.newPage();
+  const start = performance.now();
+  const primaryApi = page
+    .waitForResponse(
+      (response) => {
+        const url = new URL(response.url());
+        return url.origin === origin && url.pathname === (surface.browserPath ?? surface.path);
+      },
+      { timeout: 2 * requestDeadline },
+    )
+    .then(
+      (response) => responseSample(response, start, Boolean(surface.browserPath)),
+      () => ({ status: "no_response", ms: elapsed(start) }),
+    );
+  try {
+    const response = await page
+      .goto(surface.page, { waitUntil: "domcontentloaded", timeout: requestDeadline })
+      .catch(() => null);
+    const marker = await surface
+      .marker(page)
+      .waitFor({ timeout: requestDeadline })
+      .then(
+        () => elapsed(start),
+        () => null,
+      );
+    return {
+      document_status: response?.status() ?? null,
+      primary_api: await primaryApi,
+      marker_ms: marker,
+    };
+  } finally {
+    await page.close();
+  }
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
