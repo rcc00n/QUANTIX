@@ -129,6 +129,18 @@ function responseSample(response, start, includePhaseTiming) {
   return sample;
 }
 
+async function measure(api, surface) {
+  const start = performance.now();
+  try {
+    const response = await api.get(surface.path, { maxRedirects: 0 });
+    const result = responseSample(response, start, Boolean(surface.browserPath));
+    await response.dispose();
+    return result;
+  } catch {
+    return { status: "transport_error", ms: elapsed(start) };
+  }
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
