@@ -208,6 +208,12 @@ async function smoke(context, surface, origin) {
   }
 }
 
+function distribution(values) {
+  const sorted = values.sort((a, b) => a - b);
+  const rank = (p) => sorted[Math.ceil(p * sorted.length) - 1] ?? null;
+  return { n: sorted.length, p50: rank(0.5), p95: rank(0.95), p99: rank(0.99), max: rank(1) };
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
