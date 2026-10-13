@@ -280,6 +280,105 @@ async function smokePages(api, routes, initial, config) {
   }
 }
 
+async function main(config) {
+  const api = await request.newContext({ baseURL: config.origin, timeout: requestDeadline });
+  try {
+    const password = (
+      await readFile(new URL("../../.secrets/admin-password", import.meta.url), "utf8")
+    ).trim();
+    const auth = await api.post("/api/auth/login", {
+      headers: { Origin: config.origin },
+      data: { username: "quantix", password },
+      maxRedirects: 0,
+    });
+    const authenticated = auth.ok();
+    await auth.dispose();
+    if (!authenticated) throw new Error("Authentication failed");
+    const sessions = (await json(api, "/api/paper/sessions")).items;
+    const session = config.session
+      ? sessions.find((item) => item.id === config.session)
+      : (sessions.find((item) => item.classification === "VALIDATED") ?? sessions[0]);
+    if (!uuid.test(session?.id ?? "")) throw new Error("No matching owned portfolio");
+    const routes = Object.entries(surfaces(session.id, config.budget));
+    record({
+      event: "ready",
+      phase: config.phase,
+      browser: Boolean(config.browser),
+      interval_ms: config.interval,
+      radar_budget_cad: config.budget,
+    });
+    const initial = await awaitPhase(api, config);
+    if (!initial) {
+      record({ event: "no_matching_phase", phase: config.phase });
+      return 1;
+    }
+    const browserPassed = await smokePages(api, routes, initial, config);
+    const observed = Object.fromEntries(routes.map(([name]) => [name, []]));
+    const begin = performance.now();
+    let mixed = 0;
+    let state = await currentExport(api);
+    record({
+      event: "window_start",
+      phase: config.phase,
+      host_wall_utc: new Date().toISOString(),
+      export_progress: exportProgress(state),
+    });
+    while (performance.now() - begin < config.duration && samePhase(initial, state, config.phase)) {
+      const roundStart = performance.now();
+      const results = Object.fromEntries(
+        await Promise.all(routes.map(async ([name, route]) => [name, await measure(api, route)])),
+      );
+      state = await currentExport(api);
+      const inPhase = samePhase(initial, state, config.phase);
+      record({
+        event: "api_round",
+        offset_ms: elapsed(begin),
+        in_phase: inPhase,
+        export_progress: exportProgress(state),
+        results,
+      });
+      if (inPhase)
+        for (const [name, result] of Object.entries(results)) observed[name].push(result);
+      else mixed += 1;
+      const next = Math.min(
+        config.duration - elapsed(begin),
+        config.interval - elapsed(roundStart),
+      );
+      if (next > 0 && inPhase) await delay(next);
+    }
+    const apiPassed = Object.values(observed).every(
+      (samples) => samples.length && samples.every((sample) => sample.status === 200),
+    );
+    const completedExport =
+      config.phase === "export" &&
+      state.known &&
+      state.job?.id === initial.job?.id &&
+      state.job?.status === "completed";
+    const termination = completedExport
+      ? "export_completed"
+      : samePhase(initial, state, config.phase)
+        ? "duration_elapsed"
+        : "phase_changed_or_unverified";
+    record({
+      event: "api_summary",
+      phase: config.phase,
+      elapsed_ms: elapsed(begin),
+      inconclusive_rounds: mixed,
+      termination,
+      export_progress: exportProgress(state),
+      surfaces: Object.fromEntries(
+        Object.entries(observed).map(([name, samples]) => [
+          name,
+          summarize(samples, name === "radar"),
+        ]),
+      ),
+    });
+    return browserPassed && apiPassed && termination !== "phase_changed_or_unverified" ? 0 : 2;
+  } finally {
+    await api.dispose();
+  }
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
