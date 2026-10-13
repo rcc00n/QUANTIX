@@ -141,6 +141,37 @@ async function measure(api, surface) {
   }
 }
 
+function surfaces(session, budget) {
+  return {
+    radar: {
+      path: `/api/opportunities?limit=5&budget_cad=${budget}`,
+      page: "/opportunities",
+      browserPath: "/api/opportunities",
+      marker: (page) => page.getByRole("table", { name: "Cross-exchange opportunities" }),
+    },
+    analytics: {
+      path: `/api/analytics/sessions/${session}`,
+      page: `/analytics?session=${session}`,
+      marker: (page) => page.getByRole("heading", { name: "Portfolio and no-trading benchmark" }),
+    },
+    portfolio: {
+      path: `/api/paper/sessions/${session}/portfolio`,
+      page: `/portfolio?session=${session}`,
+      marker: (page) => page.getByRole("table", { name: "Virtual balances" }),
+    },
+    system_health: {
+      path: "/api/terminal/health",
+      page: "/system-health",
+      marker: (page) => page.getByText(/Status generated:\s+\d{4}-\d{2}-\d{2}/),
+    },
+    telegram_status: {
+      path: "/api/notifications/status",
+      page: "/signals",
+      marker: (page) => page.getByRole("heading", { name: "Telegram connection" }),
+    },
+  };
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
