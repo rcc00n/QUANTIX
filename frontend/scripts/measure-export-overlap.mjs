@@ -109,6 +109,26 @@ function exportProgress(state) {
     : null;
 }
 
+function responseSample(response, start, includePhaseTiming) {
+  const sample = { status: response.status(), ms: elapsed(start) };
+  const headers = response.headers();
+  if (/^\d{1,4}$/.test(headers["retry-after"]))
+    sample.retry_after_seconds = Number(headers["retry-after"]);
+  if (!includePhaseTiming || !headers["server-timing"]) return sample;
+  const entries = headers["server-timing"]
+    .split(",")
+    .map((entry) => entry.trim().match(phaseTiming));
+  if (entries.every(Boolean)) {
+    sample.server_timing = Object.fromEntries(
+      entries.map(([, phase, duration, rows]) => [
+        phase,
+        { ms: Number(duration), ...(rows === undefined ? {} : { rows: Number(rows) }) },
+      ]),
+    );
+  }
+  return sample;
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
