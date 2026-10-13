@@ -98,6 +98,17 @@ function samePhase(initial, observed, phase) {
     : !activeStatuses.has(observed.job?.status);
 }
 
+function exportProgress(state) {
+  return state.known && state.job
+    ? {
+        status: state.job.status,
+        dataset: state.job.dataset,
+        completed_datasets: state.job.completed_datasets,
+        job_elapsed_seconds: state.job.elapsed_seconds,
+      }
+    : null;
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
