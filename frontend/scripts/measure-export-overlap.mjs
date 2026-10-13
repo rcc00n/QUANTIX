@@ -91,6 +91,13 @@ async function awaitPhase(api, config) {
   return state;
 }
 
+function samePhase(initial, observed, phase) {
+  if (!observed.known || observed.job?.id !== initial.job?.id) return false;
+  return phase === "export"
+    ? observed.job?.status === "running"
+    : !activeStatuses.has(observed.job?.status);
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
