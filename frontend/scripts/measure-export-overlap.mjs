@@ -77,6 +77,20 @@ async function currentExport(api) {
   }
 }
 
+async function awaitPhase(api, config) {
+  const active = (state) =>
+    state.known && state.job?.scope === "ALL_RETAINED" && state.job?.status === "running";
+  const idle = (state) => state.known && !activeStatuses.has(state.job?.status);
+  const start = performance.now();
+  let state = await currentExport(api);
+  while (!(config.phase === "export" ? active(state) : idle(state))) {
+    if (performance.now() - start >= config.wait) return null;
+    await delay(2000);
+    state = await currentExport(api);
+  }
+  return state;
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
