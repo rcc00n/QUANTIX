@@ -241,6 +241,45 @@ function summarize(samples, includePhaseTiming) {
   };
 }
 
+async function smokePages(api, routes, initial, config) {
+  if (!config.browser) return true;
+  const browser = await chromium.launch({
+    executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
+  });
+  try {
+    const context = await browser.newContext({
+      baseURL: config.origin,
+      storageState: await api.storageState(),
+    });
+    let passed = true;
+    for (const [name, route] of routes) {
+      const before = await currentExport(api);
+      if (!samePhase(initial, before, config.phase)) {
+        record({ event: "browser_skipped", surface: name, reason: "phase_unverified" });
+        passed = false;
+        continue;
+      }
+      const result = await smoke(context, route, config.origin);
+      const inPhase = samePhase(initial, await currentExport(api), config.phase);
+      record({
+        event: "browser_sample",
+        surface: name,
+        in_phase: inPhase,
+        export_progress: exportProgress(before),
+        ...result,
+      });
+      passed &&=
+        inPhase &&
+        result.document_status === 200 &&
+        result.primary_api.status === 200 &&
+        result.marker_ms !== null;
+    }
+    return passed;
+  } finally {
+    await browser.close();
+  }
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
