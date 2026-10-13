@@ -214,6 +214,33 @@ function distribution(values) {
   return { n: sorted.length, p50: rank(0.5), p95: rank(0.95), p99: rank(0.99), max: rank(1) };
 }
 
+function summarize(samples, includePhaseTiming) {
+  const statuses = {};
+  for (const sample of samples) statuses[sample.status] = (statuses[sample.status] ?? 0) + 1;
+  const successful = samples.filter((sample) => sample.status === 200);
+  const timed = successful.map((sample) => sample.server_timing).filter(Boolean);
+  const phases = new Set(timed.flatMap(Object.keys));
+  const timings = Object.fromEntries(
+    Array.from(phases, (phase) => {
+      const entries = timed.map((sample) => sample[phase]).filter(Boolean);
+      const rowCounts = entries.map((entry) => entry.rows).filter((rows) => rows !== undefined);
+      return [
+        phase,
+        {
+          duration_ms: distribution(entries.map((entry) => entry.ms)),
+          ...(rowCounts.length ? { rows: distribution(rowCounts) } : {}),
+        },
+      ];
+    }),
+  );
+  return {
+    n: samples.length,
+    statuses,
+    successful_latency_ms: distribution(successful.map((sample) => sample.ms)),
+    ...(includePhaseTiming ? { server_timing_samples: timed.length, server_timing: timings } : {}),
+  };
+}
+
 try {
   process.exitCode = await main(configuration());
 } catch {
