@@ -96,3 +96,34 @@ export function Sidebar() {
     </>
   );
 }
+export function Logout() {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  async function logout() {
+    setBusy(true);
+    setError(false);
+    try {
+      const res = await fetch("/api/auth/logout", { method: "POST" });
+      if (!res.ok && res.status !== 401) throw new Error();
+      router.replace("/login");
+      router.refresh();
+    } catch {
+      setError(true);
+      setBusy(false);
+    }
+  }
+  return (
+    <div>
+      <Button variant="ghost" size="sm" onClick={logout} disabled={busy} aria-label="Sign out">
+        <LogOut size={16} />
+        <span>{busy ? "Signing out…" : "Sign out"}</span>
+      </Button>
+      {error && (
+        <span role="alert" className="error-text">
+          Sign out failed. Retry.
+        </span>
+      )}
+    </div>
+  );
+}
