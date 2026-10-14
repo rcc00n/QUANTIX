@@ -30,3 +30,35 @@ export function Exact({
     </span>
   );
 }
+export function Kpi({
+  label,
+  value,
+  unit = "",
+  note,
+  help,
+  color = false,
+}: {
+  label: string;
+  value: unknown;
+  unit?: string;
+  note?: string;
+  help?: string;
+  color?: boolean;
+}) {
+  return (
+    <div className="terminal-kpi">
+      <div className="kpi-label">
+        {label}
+        {help && (
+          <span title={help} tabIndex={0} aria-label={`${label}: ${help}`}>
+            <CircleHelp size={12} />
+          </span>
+        )}
+      </div>
+      <strong>
+        <Exact value={value} unit={unit} color={color} />
+      </strong>
+      {note && <span className="kpi-note">{note}</span>}
+    </div>
+  );
+}
