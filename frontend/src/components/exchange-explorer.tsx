@@ -40,3 +40,43 @@ function State({ state }: { state: DataState }) {
     </span>
   );
 }
+
+function NativeStreamMetrics({
+  stream,
+  trusted,
+}: {
+  stream: NativeStreamStatus;
+  trusted: boolean;
+}) {
+  const receiptAge = stream.book_age_seconds;
+  return (
+    <>
+      <div>
+        <dt>Valid / total cached WebSocket books</dt>
+        <dd>
+          {stream.valid_cached_stream_books} / {stream.cached_stream_books}
+        </dd>
+      </div>
+      <div>
+        <dt>WebSocket book receipt age · median / oldest</dt>
+        <dd>
+          {trusted
+            ? `${age(receiptAge.p50)} / ${age(receiptAge.maximum)} (n=${receiptAge.sample_count})`
+            : "Clock untrusted"}
+        </dd>
+      </div>
+      <div>
+        <dt>REST requests on stream markets / resynchronizations</dt>
+        <dd>
+          {stream.counters.rest_on_stream_market ?? 0} / {stream.counters.resynchronizations ?? 0}
+        </dd>
+      </div>
+      {stream.last_error && (
+        <div>
+          <dt>Last native stream error</dt>
+          <dd>{stream.last_error.replaceAll("_", " ")}</dd>
+        </div>
+      )}
+    </>
+  );
+}
