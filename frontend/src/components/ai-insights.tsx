@@ -16,3 +16,17 @@ type AiStatus = {
   deterministic_fallback: boolean;
   billing: string;
 };
+type Explanation = {
+  status: "disabled" | "unavailable" | "complete";
+  text: string;
+  provider: string;
+  reason: string | null;
+  cached: boolean;
+  deterministic: boolean;
+  numeric_inputs: Record<string, string | null>;
+  source_id: string;
+  source_type: "opportunity" | "paper_report";
+  attribution: Record<string, unknown>;
+  classification: string;
+  limitations: string[];
+};
