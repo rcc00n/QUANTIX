@@ -98,3 +98,11 @@ export function LiveStatus({
     </div>
   );
 }
+export function Warning({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="terminal-warning" role="status">
+      <AlertTriangle size={16} />
+      <div>{children}</div>
+    </div>
+  );
+}
