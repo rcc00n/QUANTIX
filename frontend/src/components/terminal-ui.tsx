@@ -106,3 +106,12 @@ export function Warning({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+export function Empty({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="terminal-empty">
+      <Activity size={22} />
+      <h3>{title}</h3>
+      <p>{children}</p>
+    </div>
+  );
+}
