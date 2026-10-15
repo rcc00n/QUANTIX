@@ -55,6 +55,13 @@ export type FundingRoute = {
   market_profitability?: "PROJECTED_POSITIVE" | "NON_POSITIVE" | "UNKNOWN";
   fundable_with_reallocation?: boolean | null;
 };
+export type FundingCoverage = {
+  session_id?: string;
+  balances: Position[];
+  routes: FundingRoute[];
+  limitations: string[];
+  window?: { limited?: boolean; limit: number };
+};
 
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
