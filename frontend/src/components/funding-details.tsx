@@ -30,6 +30,12 @@ type FundingRequirement = Position & {
   required_quantity?: string | null;
   missing_quantity?: string | null;
 };
+type ProjectedCosts = {
+  fees_cad: string | null;
+  fx_drag_cad: string | null;
+  slippage_reserve_cad: string | null;
+  rebalancing_cad: string | null;
+};
 
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
