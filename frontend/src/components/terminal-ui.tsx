@@ -123,3 +123,11 @@ export function Tag({ value, kind }: { value: unknown; kind?: string }) {
     </span>
   );
 }
+export function JsonDetails({ title, value }: { title: string; value: unknown }) {
+  return (
+    <details className="evidence-details">
+      <summary>{title}</summary>
+      <pre>{JSON.stringify(value, null, 2)}</pre>
+    </details>
+  );
+}
