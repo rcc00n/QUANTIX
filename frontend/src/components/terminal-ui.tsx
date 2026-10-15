@@ -115,3 +115,11 @@ export function Empty({ title, children }: { title: string; children: React.Reac
     </div>
   );
 }
+export function Tag({ value, kind }: { value: unknown; kind?: string }) {
+  const label = text(value);
+  return (
+    <span className={`terminal-tag ${kind || label.toLowerCase()}`}>
+      {label.replaceAll("_", " ")}
+    </span>
+  );
+}
