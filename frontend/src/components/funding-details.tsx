@@ -25,6 +25,11 @@ type Position = {
   available_quantity?: string | null;
   reserved_quantity?: string | null;
 };
+type FundingRequirement = Position & {
+  side?: "BUY" | "SELL" | "buy" | "sell";
+  required_quantity?: string | null;
+  missing_quantity?: string | null;
+};
 
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
