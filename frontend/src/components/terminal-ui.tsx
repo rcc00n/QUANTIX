@@ -62,3 +62,39 @@ export function Kpi({
     </div>
   );
 }
+export function LiveStatus({
+  error,
+  loading,
+  received,
+  refresh,
+  interval = 15,
+}: {
+  error: string;
+  loading: boolean;
+  received: string | null;
+  refresh: () => void;
+  interval?: number;
+}) {
+  return (
+    <div className="terminal-live">
+      <span className={`live-label ${error ? "live-error" : ""}`} role="status">
+        <i className={`status-dot ${error ? "offline" : ""}`} />
+        {loading ? "Updating" : error ? "Reconnecting · retained data" : "Connected"}
+        <span className="live-cadence"> · {interval}s</span>
+      </span>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={refresh}
+        aria-label="Refresh live data"
+        title={
+          received
+            ? `Last browser receipt: ${utcLabel(received)}; source timestamps remain authoritative`
+            : "Request latest data"
+        }
+      >
+        <RefreshCw size={14} className={loading ? "spin" : ""} />
+      </Button>
+    </div>
+  );
+}
