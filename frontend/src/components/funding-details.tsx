@@ -14,6 +14,10 @@ export const POLICY_LABELS = {
   EQUAL_VENUES: "Legacy equal venues",
 } as const;
 export type FundingPolicy = keyof typeof POLICY_LABELS;
+export type FundingCatalog = {
+  exchanges: { id: string; slug: string; name: string }[];
+  assets: { id: string; canonical_key: string; symbol: string; kind: string }[];
+};
 
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
