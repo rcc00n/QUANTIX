@@ -36,6 +36,25 @@ type ProjectedCosts = {
   slippage_reserve_cad: string | null;
   rebalancing_cad: string | null;
 };
+export type FundingRoute = {
+  route_id: string;
+  asset?: string;
+  buy_exchange?: string;
+  sell_exchange?: string;
+  inventory_sufficient?: boolean;
+  funded?: boolean;
+  required: FundingRequirement[];
+  reasons?: string[];
+  limiting_constraints?: string[];
+  actionable?: boolean;
+  projected_net_profit_cad?: string | null;
+  maximum_funded_acquisition_cad?: string | null;
+  maximum_observed_acquisition_cad?: string | null;
+  funded_size_net_profit_cad?: string | null;
+  projected_costs?: ProjectedCosts | null;
+  market_profitability?: "PROJECTED_POSITIVE" | "NON_POSITIVE" | "UNKNOWN";
+  fundable_with_reallocation?: boolean | null;
+};
 
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
