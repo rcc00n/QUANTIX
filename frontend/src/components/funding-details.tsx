@@ -18,6 +18,13 @@ export type FundingCatalog = {
   exchanges: { id: string; slug: string; name: string }[];
   assets: { id: string; canonical_key: string; symbol: string; kind: string }[];
 };
+type Position = {
+  exchange: string;
+  asset?: string;
+  canonical_key?: string;
+  available_quantity?: string | null;
+  reserved_quantity?: string | null;
+};
 
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
