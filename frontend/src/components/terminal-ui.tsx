@@ -131,3 +131,22 @@ export function JsonDetails({ title, value }: { title: string; value: unknown })
     </details>
   );
 }
+export function SectionTitle({
+  eyebrow,
+  title,
+  children,
+}: {
+  eyebrow?: string;
+  title: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="section-heading terminal-section-heading">
+      <div>
+        {eyebrow && <span className="small-label">{eyebrow}</span>}
+        <h2>{title}</h2>
+      </div>
+      {children}
+    </div>
+  );
+}
