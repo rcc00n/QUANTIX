@@ -70,6 +70,78 @@ type SizeCoverage = {
   profitable_funded_routes: number;
   considered_routes: number;
 };
+export type FundingProposal = {
+  id: string;
+  capital_cad: string;
+  policy: FundingPolicy;
+  eligibility?: "RESEARCH" | "VALIDATED";
+  feasible?: boolean;
+  creatable?: boolean;
+  reasons?: string[];
+  allocations: {
+    exchange: string;
+    asset: string;
+    quantity: string;
+    cad_rate: string;
+    cad_value: string;
+    evidence?: { reserve?: boolean };
+  }[];
+  total_cad: string;
+  unallocated_cad: string;
+  trade_amount_cad?: string;
+  as_of?: string;
+  expires_at: string;
+  allocation_version?: string;
+  planning_window?: { from: string; cutoff: string; historical: boolean };
+  evidence?: unknown[];
+  evidence_exclusions?: Record<string, number>;
+  route_coverage: {
+    considered_routes?: number;
+    funded_route_count?: number;
+    historical_window_days?: number;
+    route_window_limited?: boolean;
+  };
+  funded_route_count?: number;
+  simultaneous_funded_route_count?: number;
+  median_funded_acquisition_cad?: string | null;
+  allocation_summary?: {
+    allocated_cad: string;
+    invested_cad: string;
+    reserve_cad: string;
+    reserve_pct: string;
+    by_exchange: Concentration;
+    by_asset: Concentration;
+    stablecoin_cad: string;
+    stablecoin_pct: string;
+    funded_venues: number;
+    funded_cells: number;
+  };
+  coverage_by_size?: SizeCoverage[];
+  requirements?: FundingRoute[];
+  route_capacity?: {
+    route_id: string;
+    maximum_funded_acquisition_cad: string | null;
+    maximum_observed_acquisition_cad: string | null;
+    projected_net_profit_cad: string | null;
+    target_pinned: {
+      acquisition_cad: string;
+      net_profit_cad: string | null;
+      projected_costs?: ProjectedCosts | null;
+      deficits: {
+        exchange: string;
+        asset: string;
+        required_quantity: string;
+        available_quantity: string;
+        deficit_quantity: string;
+      }[];
+    } | null;
+    limiting_constraints: string[];
+    fundable_with_reallocation: boolean;
+    actionable: false;
+  }[];
+  provenance?: unknown;
+  limitations: string[];
+};
 
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
