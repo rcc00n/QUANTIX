@@ -179,3 +179,64 @@ export function AmountBars({
     </div>
   );
 }
+export function BookDepth({
+  bids,
+  asks,
+  label,
+}: {
+  bids: { price: string; quantity: string }[];
+  asks: { price: string; quantity: string }[];
+  label: string;
+}) {
+  const rows = [
+    ...bids
+      .slice(0, 15)
+      .map((x) => ({ price: plot(x.price), bid: plot(x.quantity), exact: x.quantity })),
+    ...asks
+      .slice(0, 15)
+      .map((x) => ({ price: plot(x.price), ask: plot(x.quantity), exact: x.quantity })),
+  ]
+    .filter((x) => x.price !== null)
+    .sort((a, b) => (a.price || 0) - (b.price || 0));
+  if (!rows.length)
+    return (
+      <Empty title="Depth evidence unavailable">
+        No retained levels support a depth visualization for this venue.
+      </Empty>
+    );
+  return (
+    <div
+      className="terminal-chart compact-chart"
+      role="img"
+      aria-label={`${label} observed level quantities`}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={rows}>
+          <CartesianGrid stroke={stroke} vertical={false} />
+          <XAxis dataKey="price" stroke="#7f93a7" fontSize={9} tickLine={false} minTickGap={40} />
+          <YAxis stroke="#7f93a7" fontSize={9} width={40} />
+          <Tooltip
+            formatter={(_v, name, item) => [text(item.payload.exact), String(name)]}
+            contentStyle={{ background: "#111c28", border: "1px solid #2e4355", fontSize: 10 }}
+          />
+          <Area
+            dataKey="bid"
+            name="Bid quantity at level"
+            stroke="#59d8b0"
+            fill="#59d8b0"
+            fillOpacity={0.12}
+            isAnimationActive={false}
+          />
+          <Area
+            dataKey="ask"
+            name="Ask quantity at level"
+            stroke="#ec8f9b"
+            fill="#ec8f9b"
+            fillOpacity={0.1}
+            isAnimationActive={false}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
