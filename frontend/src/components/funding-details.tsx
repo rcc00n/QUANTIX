@@ -521,3 +521,147 @@ function fundingLabel(route: FundingRoute, reasons: string[]) {
     return "TARGET SIZE UNAVAILABLE";
   return "MISSING INVENTORY";
 }
+
+export function FundingRouteDetails({
+  routes,
+  basis,
+}: {
+  routes: FundingRoute[];
+  basis: "Pinned market size" | "Capped funded size";
+}) {
+  const [visible, setVisible] = useState(12);
+  return (
+    <div className="funding-routes">
+      <p className="terminal-footnote">
+        Funding coverage and market profitability are separate. Actionability still requires
+        verified evidence and risk approval.
+      </p>
+      {routes.slice(0, visible).map((route) => {
+        const reasons = routeReasons(route);
+        return (
+          <details className="funding-route" key={route.route_id}>
+            <summary className="funding-route-title">
+              <strong>
+                {route.asset ?? "Market"} · {route.buy_exchange ?? "Buy"}{" "}
+                <ArrowRight size={12} aria-hidden="true" /> {route.sell_exchange ?? "Sell"}
+              </strong>
+              <span className="funding-route-tags">
+                <Tag value={fundingLabel(route, reasons)} />
+                {route.market_profitability && (
+                  <span>{profitabilityLabel[route.market_profitability]}</span>
+                )}
+              </span>
+            </summary>
+            <dl className="funding-route-metrics">
+              <div>
+                <dt>Maximum funded acquisition</dt>
+                <dd>
+                  <Exact value={route.maximum_funded_acquisition_cad} unit="CAD" />
+                </dd>
+              </div>
+              {route.maximum_observed_acquisition_cad !== undefined && (
+                <div>
+                  <dt>Maximum observed acquisition</dt>
+                  <dd>
+                    <Exact value={route.maximum_observed_acquisition_cad} unit="CAD" />
+                  </dd>
+                </div>
+              )}
+              <div>
+                <dt>Net projection at funded size</dt>
+                <dd>
+                  <Exact value={route.funded_size_net_profit_cad} unit="CAD" color />
+                </dd>
+              </div>
+              <div>
+                <dt>Pinned market net projection</dt>
+                <dd>
+                  <Exact value={route.projected_net_profit_cad} unit="CAD" color />
+                </dd>
+              </div>
+            </dl>
+            {route.projected_costs && (
+              <div role="group" aria-label="Expected route costs in CAD">
+                <p className="terminal-footnote">Expected costs · {basis}</p>
+                <dl className="funding-route-metrics">
+                  <div>
+                    <dt>Taker fees</dt>
+                    <dd>
+                      <Exact value={route.projected_costs.fees_cad} unit="CAD" />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Slippage reserve</dt>
+                    <dd>
+                      <Exact value={route.projected_costs.slippage_reserve_cad} unit="CAD" />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>FX drag (reflected in conversion)</dt>
+                    <dd>
+                      <Exact value={route.projected_costs.fx_drag_cad} unit="CAD" />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Rebalancing cost</dt>
+                    <dd>
+                      <Exact value={route.projected_costs.rebalancing_cad} unit="CAD" />
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            )}
+            {(route.required ?? []).map((r, i) => (
+              <div className="funding-requirement" key={`${r.exchange}:${r.asset}:${i}`}>
+                <span>
+                  {r.side?.toUpperCase() || (r.exchange === route.sell_exchange ? "SELL" : "BUY")} ·{" "}
+                  {r.exchange} · {r.asset || assetLabel(r.canonical_key || "")}
+                </span>
+                <span>
+                  Required <Exact value={r.required_quantity} places={8} />
+                </span>
+                <span>
+                  Available <Exact value={r.available_quantity} places={8} />
+                </span>
+                <strong>
+                  Missing <Exact value={r.missing_quantity} places={8} />
+                </strong>
+              </div>
+            ))}
+            {(reasons.length > 0 ||
+              route.fundable_with_reallocation !== undefined ||
+              route.actionable !== undefined) && (
+              <ul className="funding-route-limits">
+                {route.fundable_with_reallocation === true && (
+                  <li>Different inventory could cover this size.</li>
+                )}
+                {route.fundable_with_reallocation === false && (
+                  <li>No feasible reallocation was shown at this target.</li>
+                )}
+                {route.actionable === false && <li>Actionability unverified.</li>}
+                {reasons.map((reason) => (
+                  <li key={reason}>{reason.replaceAll("_", " ")}</li>
+                ))}
+              </ul>
+            )}
+          </details>
+        );
+      })}
+      {visible < routes.length && (
+        <div className="funding-actions">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setVisible((n) => n + 12)}
+          >
+            Show more routes
+          </Button>
+          <span className="terminal-footnote">
+            Showing {visible} of {routes.length}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
