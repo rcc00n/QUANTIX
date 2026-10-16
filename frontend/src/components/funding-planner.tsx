@@ -31,3 +31,11 @@ type LimitValues = Record<(typeof limits)[number]["key"], string>;
 const initialLimits = Object.fromEntries(
   limits.map(({ key, value }) => [key, value]),
 ) as LimitValues;
+
+type PlanAttempt = {
+  name: string;
+  proposal_id: string;
+  capital_cad: string;
+  idempotency_key: string;
+  reset_from_session_id?: string;
+};
