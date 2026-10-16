@@ -225,6 +225,48 @@ export function FundingModeComparison({
   );
 }
 
+function ConcentrationTable({
+  rows,
+  resolve,
+  label,
+}: {
+  rows: Concentration;
+  resolve: (key: string) => string;
+  label: string;
+}) {
+  return (
+    <div
+      className="table-wrap"
+      role="region"
+      aria-label={`Scrollable ${label.toLowerCase()}`}
+      tabIndex={0}
+    >
+      <table className="terminal-table" aria-label={label}>
+        <thead>
+          <tr>
+            <th>{label}</th>
+            <th>Initial CAD</th>
+            <th>Capital share</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Object.entries(rows).map(([key, item]) => (
+            <tr key={key}>
+              <td>{resolve(key)}</td>
+              <td>
+                <Exact value={item.cad_value} unit="CAD" />
+              </td>
+              <td>
+                <Exact value={item.share_pct} unit="%" places={2} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
   NON_POSITIVE: "Non-positive market projection",
