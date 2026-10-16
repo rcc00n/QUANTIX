@@ -267,6 +267,37 @@ function ConcentrationTable({
   );
 }
 
+function CoverageTable({ rows }: { rows: SizeCoverage[] }) {
+  return (
+    <div className="table-wrap" role="region" aria-label="Scrollable trade sizes" tabIndex={0}>
+      <table className="terminal-table" aria-label="Target trade sizes">
+        <thead>
+          <tr>
+            <th>Buy target</th>
+            <th>Funded alternatives</th>
+            <th>Funded together</th>
+            <th>Positive funded projections</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.trade_amount_cad}>
+              <td>
+                <Exact value={row.trade_amount_cad} unit="CAD" />
+              </td>
+              <td>
+                {row.funded_alternative_routes} / {row.considered_routes}
+              </td>
+              <td>{row.simultaneous_funded_routes}</td>
+              <td>{row.profitable_funded_routes}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
   NON_POSITIVE: "Non-positive market projection",
