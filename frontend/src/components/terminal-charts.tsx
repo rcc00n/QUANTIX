@@ -127,3 +127,55 @@ export function HistoryChart({
     </div>
   );
 }
+export function AmountBars({
+  rows,
+  labelKey = "label",
+  valueKey = "value",
+  unit = "CAD",
+  empty = "No completed CAD-valued results",
+}: {
+  rows: Record<string, unknown>[];
+  labelKey?: string;
+  valueKey?: string;
+  unit?: string;
+  empty?: string;
+}) {
+  const data = rows
+    .map((x) => ({ ...x, label: text(x[labelKey]), value: plot(x[valueKey]), exact: x[valueKey] }))
+    .filter((x) => x.value !== null);
+  if (!data.length)
+    return (
+      <Empty title={empty}>
+        Underlying records are unavailable or the reporting period contains no matching results.
+      </Empty>
+    );
+  return (
+    <div
+      className="terminal-chart compact-chart"
+      role="img"
+      aria-label={`Recorded ${unit} distribution`}
+    >
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data.slice(0, 12)} margin={{ top: 10, right: 8, bottom: 12, left: 0 }}>
+          <CartesianGrid stroke={stroke} vertical={false} />
+          <XAxis dataKey="label" stroke="#7f93a7" fontSize={10} tickLine={false} interval={0} />
+          <YAxis stroke="#7f93a7" fontSize={10} width={55} axisLine={false} tickLine={false} />
+          <Tooltip
+            formatter={(_v, _n, item) => [`${text(item.payload.exact)} ${unit}`, "Recorded result"]}
+            contentStyle={{
+              background: "#111c28",
+              border: "1px solid #2e4355",
+              borderRadius: 8,
+              fontSize: 11,
+            }}
+          />
+          <Bar dataKey="value" fill="#62cbdc" radius={[3, 3, 0, 0]} isAnimationActive={false}>
+            {data.slice(0, 12).map((row, i) => (
+              <Cell key={i} fill={row.value !== null && row.value < 0 ? "#ee97a3" : "#62cbdc"} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
