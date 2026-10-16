@@ -62,6 +62,7 @@ export type FundingCoverage = {
   limitations: string[];
   window?: { limited?: boolean; limit: number };
 };
+type Concentration = Record<string, { cad_value: string; share_pct: string }>;
 
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
