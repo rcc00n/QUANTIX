@@ -143,6 +143,88 @@ export type FundingProposal = {
   limitations: string[];
 };
 
+function policyLabel(policy: FundingPolicy) {
+  return POLICY_LABELS[policy] ?? policy.replaceAll("_", " ");
+}
+
+function count(value: number | undefined) {
+  return value ?? "Unavailable";
+}
+
+export function FundingModeComparison({
+  plans,
+  chosen,
+  setChosen,
+  comparisonAsOf,
+}: {
+  plans: FundingProposal[];
+  chosen: string | null;
+  setChosen: (id: string) => void;
+  comparisonAsOf?: string;
+}) {
+  return (
+    <section className="funding-comparisons" aria-label="Equal-capital funding proposals">
+      <h3>Compare allocation modes</h3>
+      <p className="terminal-footnote">
+        {comparisonAsOf
+          ? `Shared evidence cutoff ${utcLabel(comparisonAsOf)}.`
+          : "These proposals use equal settings. Check each evidence time for separately generated plans."}{" "}
+        Funding counts describe hypothetical inventory coverage.
+      </p>
+      <div className="table-wrap" role="region" aria-label="Scrollable comparison" tabIndex={0}>
+        <table className="terminal-table" aria-label="Funding mode comparison">
+          <thead>
+            <tr>
+              <th>Mode</th>
+              <th>Capital</th>
+              <th>Cash reserve</th>
+              <th>Alternatives funded</th>
+              <th>Funded together</th>
+              <th>Plan status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plans.map((plan) => (
+              <tr key={plan.id} className={plan.id === chosen ? "funding-comparison-selected" : ""}>
+                <td>
+                  <button
+                    className="funding-select"
+                    type="button"
+                    aria-pressed={plan.id === chosen}
+                    onClick={() => setChosen(plan.id)}
+                  >
+                    {policyLabel(plan.policy)}
+                  </button>
+                </td>
+                <td>
+                  <Exact value={plan.capital_cad} unit="CAD" />
+                </td>
+                <td>
+                  <Exact value={plan.allocation_summary?.reserve_cad} unit="CAD" />
+                </td>
+                <td>
+                  {count(plan.funded_route_count ?? plan.route_coverage.funded_route_count)} /{" "}
+                  {count(plan.route_coverage.considered_routes)}
+                </td>
+                <td>{count(plan.simultaneous_funded_route_count)}</td>
+                <td>
+                  {plan.feasible === false
+                    ? "Infeasible"
+                    : plan.creatable === false
+                      ? "Study only"
+                      : plan.feasible
+                        ? "Within limits"
+                        : "Legacy rules"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 const profitabilityLabel = {
   PROJECTED_POSITIVE: "Positive market projection",
   NON_POSITIVE: "Non-positive market projection",
@@ -151,3 +233,14 @@ const profitabilityLabel = {
 const routeReasons = (route: FundingRoute) => [
   ...new Set([...(route.reasons ?? []), ...(route.limiting_constraints ?? [])]),
 ];
+
+function fundingLabel(route: FundingRoute, reasons: string[]) {
+  if ((route.inventory_sufficient ?? route.funded) === true) return "FUNDED";
+  if (!route.required?.length) return "FUNDING UNAVAILABLE";
+  if (
+    reasons.includes("TARGET_ACQUISITION_NOT_OBSERVED") ||
+    reasons.includes("BELOW_MINIMUM_BUY_CAPITAL")
+  )
+    return "TARGET SIZE UNAVAILABLE";
+  return "MISSING INVENTORY";
+}
