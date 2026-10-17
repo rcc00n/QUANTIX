@@ -31,3 +31,4 @@ type AnalyticsResult = {
   limitations?: string[];
   expense_breakdown?: Record<string, unknown>;
 };
+type SeriesResult = { items: SeriesPoint[]; sampling?: unknown; available_count?: number };
