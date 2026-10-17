@@ -44,6 +44,13 @@ function Exact({ value, unit = "" }: { value: string | null | undefined; unit?: 
     </span>
   );
 }
+function Classification({ value }: { value: PaperClassification }) {
+  return (
+    <span className={`paper-class ${value === "RESEARCH" ? "research" : "validated"}`}>
+      {value === "RESEARCH" ? "Research only" : "Validated portfolio"}
+    </span>
+  );
+}
 const valuationLabels: Record<PortfolioValuationStatus | "ZERO_POSITION", string> = {
   COMPLETE_FRESH: "Complete fresh valuation",
   PARTIAL: "Partial valuation",
