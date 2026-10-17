@@ -61,3 +61,13 @@ function Confidence({ value }: { value: Opportunity["status"] }) {
     </span>
   );
 }
+
+function RecordDetails({ title, value }: { title: string; value: unknown }) {
+  if (value === null || value === undefined) return null;
+  return (
+    <details className="evidence-details">
+      <summary>{title}</summary>
+      <pre>{JSON.stringify(value, null, 2)}</pre>
+    </details>
+  );
+}
