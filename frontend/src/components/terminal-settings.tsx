@@ -15,6 +15,15 @@ type TerminalSettings = {
   market: Record<string, unknown>;
   notifications: Record<string, unknown>;
 };
+type Saved = {
+  id: string | null;
+  version: number;
+  effective_at: string | null;
+  settings: TerminalSettings;
+  defaults: TerminalSettings;
+  delivery_active: boolean;
+  delivery_stage: number;
+};
 const numericMarket = [
   ["maximum_age_seconds", "Maximum source age · seconds"],
   ["maximum_markets_per_exchange", "Market cap per exchange"],
