@@ -47,3 +47,32 @@ const alertTimes = [
   ["nighttime_minimum_persistence_seconds", "Night emergency observed persistence · seconds"],
   ["daily_emergency_cap", "Daily emergency cap"],
 ] as const;
+function Toggle({
+  label,
+  value,
+  onChange,
+  help,
+  disabled = false,
+}: {
+  label: string;
+  value: boolean;
+  onChange: (value: boolean) => void;
+  help?: string;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="terminal-toggle">
+      <input
+        type="checkbox"
+        aria-label={label}
+        checked={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span>
+        <strong>{label}</strong>
+        {help && <small>{help}</small>}
+      </span>
+    </label>
+  );
+}
