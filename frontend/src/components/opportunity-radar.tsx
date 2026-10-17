@@ -340,3 +340,675 @@ function Detail({
     </section>
   );
 }
+
+export function OpportunityRadar() {
+  const [page, setPage] = useState<OpportunityPage>(emptyPage);
+  const [diagnostics, setDiagnostics] = useState<OpportunityDiagnostics | null>(null);
+  const [budgets, setBudgets] = useState<string[]>([]);
+  const [budget, setBudget] = useState("1000");
+  const [customBudget, setCustomBudget] = useState("");
+  const [asset, setAsset] = useState("");
+  const [assetQuery, setAssetQuery] = useState("");
+  const [exchange, setExchange] = useState("");
+  const [exchanges, setExchanges] = useState<{ slug: string; name: string }[]>([]);
+  const [status, setStatus] = useState("");
+  const [sort, setSort] = useState("net_profit");
+  const [history, setHistory] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const [selected, setSelected] = useState("");
+  const [detail, setDetail] = useState<Opportunity | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [detailError, setDetailError] = useState("");
+  const [rechecking, setRechecking] = useState(false);
+  const [recheckMessage, setRecheckMessage] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  const [search, setSearch] = useState("");
+  const [minimumProfit, setMinimumProfit] = useState("");
+  const [minimumReturn, setMinimumReturn] = useState("");
+  const [minimumQuantity, setMinimumQuantity] = useState("");
+  const [minimumLiquidity, setMinimumLiquidity] = useState("");
+  const [maximumCapital, setMaximumCapital] = useState("");
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const linkedRoute = useRef("");
+
+  useEffect(() => {
+    const routeId = new URLSearchParams(location.search).get("opportunity");
+    if (
+      routeId &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(routeId)
+    ) {
+      linkedRoute.current = routeId.toLowerCase();
+      setSelected(linkedRoute.current);
+      setHistory(true);
+      setInspectorOpen(true);
+    }
+  }, []);
+  useEffect(() => {
+    if (detail?.id === linkedRoute.current) {
+      document.querySelector(".radar-inspector-container")?.scrollIntoView({ block: "start" });
+    }
+  }, [detail?.id]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setAssetQuery(asset.trim().toUpperCase()), 350);
+    return () => clearTimeout(timer);
+  }, [asset]);
+  useEffect(() => {
+    setOffset(0);
+  }, [budget, assetQuery, exchange, status, sort, history, filters]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void Promise.allSettled([
+      read<SupportedBudgets>("/api/opportunities/budgets", controller.signal).then((value) => {
+        setBudgets(value.budgets_cad);
+        setBudget(value.default_budget_cad);
+      }),
+      read<{ slug: string; name: string; enabled: boolean }[]>(
+        "/api/exchanges",
+        controller.signal,
+      ).then((value) => setExchanges(value.filter((item) => item.enabled))),
+    ]);
+    return () => controller.abort();
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    let running = false;
+    setLoading(true);
+    async function update() {
+      if (running || document.visibilityState === "hidden") return;
+      running = true;
+      const query = new URLSearchParams({
+        budget_cad: budget,
+        limit: String(PAGE_SIZE),
+        offset: String(offset),
+        sort,
+        history: String(history),
+      });
+      if (assetQuery) query.set("asset", assetQuery);
+      if (exchange) query.set("exchange", exchange);
+      if (status) query.set("status", status);
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value) query.set(key, value);
+      });
+      try {
+        const [rows, health] = await Promise.all([
+          read<OpportunityPage>(`/api/opportunities?${query}`, controller.signal),
+          read<OpportunityDiagnostics>("/api/opportunities/diagnostics", controller.signal),
+        ]);
+        if (controller.signal.aborted) return;
+        setPage(rows);
+        setDiagnostics(health);
+        setError("");
+        setSelected((value) =>
+          (linkedRoute.current && value === linkedRoute.current) ||
+          rows.items.some((row) => row.id === value)
+            ? value
+            : rows.items[0]?.id || "",
+        );
+      } catch (error) {
+        if (!controller.signal.aborted)
+          setError(error instanceof Error ? error.message : "Opportunity data unavailable.");
+      } finally {
+        running = false;
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+    void update();
+    const timer = setInterval(update, 10000);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [budget, assetQuery, exchange, status, sort, history, offset, refresh, filters]);
+  useEffect(() => {
+    setDetail(null);
+    setRecheckMessage("");
+  }, [selected, budget]);
+  useEffect(() => {
+    setDetailError("");
+    if (!selected) return;
+    const controller = new AbortController();
+    let running = false;
+    async function update() {
+      if (running || document.visibilityState === "hidden") return;
+      running = true;
+      try {
+        const value = await read<Opportunity>(
+          `/api/opportunities/${selected}?budget_cad=${encodeURIComponent(budget)}`,
+          controller.signal,
+        );
+        if (!controller.signal.aborted) {
+          setDetail(value);
+          setDetailError("");
+        }
+      } catch (error) {
+        if (!controller.signal.aborted)
+          setDetailError(
+            error instanceof Error ? error.message : "Calculation details unavailable.",
+          );
+      } finally {
+        running = false;
+      }
+    }
+    void update();
+    const timer = setInterval(update, 10000);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [selected, budget, refresh]);
+
+  async function recheck(routeId = selected) {
+    if (!routeId) return;
+    setRechecking(true);
+    setRecheckMessage("");
+    try {
+      const response = await fetch(`/api/opportunities/${routeId}/recheck`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (response.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
+      const value = await response.json();
+      if (!response.ok)
+        throw new Error(
+          typeof value.detail === "string" ? value.detail : "Recheck unavailable or rate limited.",
+        );
+      setRecheckMessage(
+        "Fresh evidence requested. The result will update after the rate-limited collector responds.",
+      );
+      setRefresh((value) => value + 1);
+    } catch (error) {
+      setRecheckMessage(error instanceof Error ? error.message : "Recheck unavailable.");
+    } finally {
+      setRechecking(false);
+    }
+  }
+
+  const metrics = diagnostics?.metrics;
+  const clockUntrusted = diagnostics?.clock_healthy !== true;
+  return (
+    <div className="radar-workspace">
+      <div className="section-heading radar-heading">
+        <div>
+          <span className="small-label">EXECUTABLE MARKET EVIDENCE</span>
+          <h2>Cross-exchange radar</h2>
+        </div>
+        <span className="loading-label" role="status">
+          {loading ? (
+            <>
+              <LoaderCircle size={13} className="spin" /> Updating
+            </>
+          ) : (
+            "Refreshes every 10s"
+          )}
+        </span>
+      </div>
+
+      <div className="radar-summary">
+        {[
+          ["Monitored books", metrics?.monitored_markets],
+          ["Compatible intersections", metrics?.compatible_intersections],
+          ["Verified market", metrics?.verified_market],
+          ["Research only", metrics?.research_only],
+        ].map(([label, value]) => (
+          <div key={label}>
+            <span>{label}</span>
+            <strong>{value ?? "—"}</strong>
+          </div>
+        ))}
+      </div>
+      {clockUntrusted && (
+        <div className="notice radar-warning" role="status">
+          <AlertTriangle size={16} />
+          <div>
+            <strong>Clock confidence prevents actionable calculations</strong>
+            <p>
+              {diagnostics
+                ? "UTC verification or host clock stability has not passed. Research observations retain their timing uncertainty."
+                : "Clock diagnostics are not available. No live opportunity can be assumed trustworthy."}
+            </p>
+          </div>
+        </div>
+      )}
+      {diagnostics?.healthy === false && (
+        <p className="notice">
+          The scanner is unavailable or its heartbeat is stale. Retained evidence may be historical.
+        </p>
+      )}
+      <Button
+        className="radar-filter-toggle"
+        variant="outline"
+        size="sm"
+        onClick={() => setFiltersOpen(!filtersOpen)}
+        aria-expanded={filtersOpen}
+      >
+        {filtersOpen ? "Hide filters" : "Filter Radar"}
+      </Button>
+      <div className={`radar-filters ${filtersOpen ? "filters-expanded" : ""}`}>
+        <label>
+          Capital budget · CAD
+          <select value={budget} onChange={(event) => setBudget(event.target.value)}>
+            {!(budgets.length ? budgets : ["1000"]).includes(budget) && (
+              <option value={budget}>{decimal(budget)} · custom</option>
+            )}
+            {(budgets.length ? budgets : ["1000"]).map((value) => (
+              <option value={value} key={value}>
+                {decimal(value)}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Asset
+          <input
+            value={asset}
+            maxLength={32}
+            onChange={(event) => setAsset(event.target.value)}
+            placeholder="All assets"
+          />
+        </label>
+        <label>
+          Exchange
+          <select value={exchange} onChange={(event) => setExchange(event.target.value)}>
+            <option value="">All exchanges</option>
+            {exchanges.map((value) => (
+              <option key={value.slug} value={value.slug}>
+                {value.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Confidence
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="">All states</option>
+            <option value="VERIFIED_MARKET">Verified market</option>
+            <option value="RESEARCH_ONLY">Research only / anomalies</option>
+            <option value="RECHECKING">Rechecking</option>
+            <option value="INVALIDATED">Invalidated</option>
+            <option value="EXPIRED">Expired</option>
+          </select>
+        </label>
+
+        <label>
+          Sort by
+          <select value={sort} onChange={(event) => setSort(event.target.value)}>
+            <option value="net_profit">Net CAD profit</option>
+            <option value="net_return">Net return %</option>
+          </select>
+        </label>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={history}
+            onChange={(event) => setHistory(event.target.checked)}
+          />{" "}
+          Include history
+        </label>
+      </div>
+      <details className="radar-extra-controls">
+        <summary>
+          Advanced filters <small>Profit, liquidity, custom budget and book quality</small>
+        </summary>
+        <form
+          className="terminal-filterbar radar-advanced-filters"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setFilters({
+              ...filters,
+              search: search.trim(),
+              min_profit_cad: minimumProfit,
+              min_return_pct: minimumReturn,
+              min_quantity: minimumQuantity,
+              min_liquidity_cad: minimumLiquidity,
+              max_acquisition_cad: maximumCapital,
+            });
+          }}
+        >
+          <label>
+            Search routes
+            <input
+              aria-label="Search opportunity routes"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              maxLength={80}
+              placeholder="Asset, venue or symbol"
+            />
+          </label>
+          {(
+            [
+              ["Minimum net CAD profit", minimumProfit, setMinimumProfit],
+              ["Minimum net return %", minimumReturn, setMinimumReturn],
+              ["Minimum base quantity", minimumQuantity, setMinimumQuantity],
+              ["Minimum liquidity CAD", minimumLiquidity, setMinimumLiquidity],
+              ["Maximum acquisition CAD", maximumCapital, setMaximumCapital],
+            ] as const
+          ).map(([label, value, set]) => (
+            <label key={label}>
+              {label}
+              <input
+                aria-label={label}
+                inputMode="decimal"
+                value={value}
+                onChange={(e) => set(e.target.value)}
+              />
+            </label>
+          ))}
+          <Button variant="outline" size="sm" type="submit">
+            Apply filters
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            onClick={() => {
+              setSearch("");
+              setMinimumProfit("");
+              setMinimumReturn("");
+              setMinimumQuantity("");
+              setMinimumLiquidity("");
+              setMaximumCapital("");
+              setFilters({});
+            }}
+          >
+            Clear extra filters
+          </Button>
+        </form>
+        <div className="radar-extra-secondary">
+          {" "}
+          <form
+            className="radar-custom-budget"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (/^\d{1,7}(\.\d{1,2})?$/.test(customBudget) && /[1-9]/.test(customBudget))
+                setBudget(customBudget);
+            }}
+          >
+            <label>
+              Custom CAD budget
+              <input
+                inputMode="decimal"
+                value={customBudget}
+                onChange={(event) => setCustomBudget(event.target.value)}
+                placeholder="e.g. 750"
+                pattern="[0-9]{1,7}(\.[0-9]{1,2})?"
+              />
+            </label>
+            <Button type="submit" size="sm" variant="outline">
+              Apply
+            </Button>
+          </form>{" "}
+          <label>
+            Data confidence
+            <select
+              aria-label="Data confidence"
+              value={filters.confidence || ""}
+              onChange={(event) =>
+                setFilters((old) => ({ ...old, confidence: event.target.value }))
+              }
+            >
+              <option value="">All book quality states</option>
+              {["HEALTHY", "DEGRADED", "SUSPICIOUS", "STALE", "UNAVAILABLE"].map((value) => (
+                <option key={value} value={value}>
+                  {reasonLabel(value)}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      </details>
+      <p className="catalog-meta">
+        Depth-aware pre-funded estimates include explicit costs. Missing conversion evidence is
+        shown as unavailable. Long decimals use ≈; hover for exact values or open calculation
+        evidence. Public API access does not establish Canadian or Alberta trading eligibility.
+      </p>
+      {error && (
+        <p className="notice" role="alert">
+          {error} Any retained rows below may be outdated.
+        </p>
+      )}
+      {page.window_limited && (
+        <p className="notice">
+          Showing the most recent {page.candidate_window} matching routes from{" "}
+          {page.matching_retained_routes} retained routes. Narrow the asset or exchange filter to
+          inspect older evidence.
+        </p>
+      )}
+      <div className="radar-mobile-cards" aria-label="Mobile opportunity summaries">
+        {page.items.map((row) => (
+          <article key={row.id}>
+            <div className="opportunity-card-top">
+              <strong>{row.base_asset}</strong>
+              <Confidence value={row.status} />
+            </div>
+            <div className="opportunity-card-venues">
+              <span>
+                <small>BUY</small>
+                {row.buy_exchange}
+                <Amount value={row.buy_price} />
+              </span>
+              <ChevronRight size={17} />
+              <span>
+                <small>SELL</small>
+                {row.sell_exchange}
+                <Amount value={row.sell_price} />
+              </span>
+            </div>
+            <div className="opportunity-card-profit">
+              <div>
+                <small>Expected net · CAD</small>
+                <strong className={row.net_profit_cad?.startsWith("-") ? "value-negative" : ""}>
+                  <Amount value={row.net_profit_cad} />
+                </strong>
+              </div>
+              <div>
+                <small>Net return</small>
+                <strong className={row.net_return_pct?.startsWith("-") ? "value-negative" : ""}>
+                  <Amount value={row.net_return_pct} suffix="%" />
+                </strong>
+              </div>
+            </div>
+            <p>
+              <Amount value={row.quantity} /> base units · age{" "}
+              {row.age_seconds === null || row.age_seconds === undefined
+                ? "unavailable"
+                : `${Math.max(0, Math.floor(row.age_seconds))}s`}{" "}
+              · {reasonLabel(row.eligibility)}
+            </p>
+            <div className="paper-actions">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setSelected(row.id);
+                  setInspectorOpen(true);
+                }}
+              >
+                Inspect evidence
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={rechecking}
+                onClick={() => {
+                  setSelected(row.id);
+                  void recheck(row.id);
+                }}
+              >
+                <RefreshCw size={13} /> Fresh recheck
+              </Button>
+            </div>
+          </article>
+        ))}
+      </div>
+      <div className="table-wrap feeds-table radar-table">
+        <table aria-label="Cross-exchange opportunities">
+          <thead>
+            <tr>
+              {[
+                "Asset",
+                "Buy / sell venues",
+                "Weighted buy / sell",
+                "Base quantity",
+                "Net P&L · CAD",
+                "Net return",
+                "Buy capital · CAD",
+                "Confidence / eligibility",
+                "Detected · UTC",
+              ].map((label) => (
+                <th key={label}>{label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {page.items.length ? (
+              page.items.map((row) => (
+                <tr key={row.id} className={selected === row.id ? "selected-feed" : ""}>
+                  <td>
+                    <button
+                      className="exchange-select"
+                      onClick={() => {
+                        setSelected(row.id);
+                        setInspectorOpen(true);
+                        setRecheckMessage("");
+                      }}
+                      aria-label={`Inspect ${row.base_asset} ${row.buy_exchange} to ${row.sell_exchange}`}
+                    >
+                      <strong>{row.base_asset}</strong>
+                      <small>
+                        {row.buy_symbol} → {row.sell_symbol}
+                      </small>
+                    </button>
+                  </td>
+                  <td>
+                    <span>{row.buy_exchange}</span>
+                    <small className="eligibility-note">→ {row.sell_exchange}</small>
+                  </td>
+                  <td className="radar-number">
+                    <Amount value={row.buy_price} />
+                    <small className="eligibility-note">
+                      <Amount value={row.sell_price} />
+                    </small>
+                  </td>
+                  <td className="radar-number">
+                    <Amount value={row.quantity} />
+                  </td>
+                  <td className="radar-number">
+                    <Amount value={row.net_profit_cad} />
+                  </td>
+                  <td className="radar-number">
+                    <Amount value={row.net_return_pct} suffix="%" />
+                  </td>
+                  <td className="radar-number">
+                    <Amount value={row.acquisition_cost_cad} />
+                  </td>
+                  <td>
+                    <Confidence value={row.status} />
+                    <small className="eligibility-note">
+                      {reasonLabel(row.eligibility)} ·{" "}
+                      {row.actionable ? "eligible" : "not actionable"}
+                    </small>
+                  </td>
+                  <td className="timing-cell">
+                    <time dateTime={row.detected_at}>{utc(row.detected_at)}</time>
+                    {row.age_seconds !== undefined && row.age_seconds !== null && (
+                      <small>
+                        {row.age_seconds < 0
+                          ? "Clock uncertainty"
+                          : `${Math.floor(row.age_seconds)}s ago`}
+                      </small>
+                    )}
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={9}>
+                  <div className="table-empty">
+                    <Radar size={25} />
+                    <strong>
+                      {loading
+                        ? "Reading current market evidence"
+                        : error
+                          ? "Opportunity data unavailable"
+                          : "No matching opportunities"}
+                    </strong>
+                    <span>
+                      {loading
+                        ? "Waiting for the authenticated scanner API."
+                        : "A positive spread is not guaranteed. The engine records real evidence and suppresses unsupported profitability."}
+                    </span>
+                  </div>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="radar-pagination">
+        <span>
+          {page.total
+            ? `${offset + 1}–${Math.min(offset + PAGE_SIZE, page.total)} of ${page.total}`
+            : "0 results"}
+        </span>
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={offset === 0 || loading}
+            onClick={() => setOffset((value) => Math.max(0, value - PAGE_SIZE))}
+          >
+            <ChevronLeft size={14} /> Previous
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={offset + PAGE_SIZE >= page.total || loading}
+            onClick={() => setOffset((value) => value + PAGE_SIZE)}
+          >
+            Next <ChevronRight size={14} />
+          </Button>
+        </div>
+      </div>
+      {detailError && (
+        <p className="notice" role="alert">
+          {detailError}
+        </p>
+      )}
+      <div className={`radar-inspector-container ${inspectorOpen ? "inspector-open" : ""}`}>
+        <Button
+          className="inspector-close"
+          variant="outline"
+          size="sm"
+          onClick={() => setInspectorOpen(false)}
+          aria-label="Close opportunity inspector"
+        >
+          <X size={16} /> Close evidence
+        </Button>
+        {detail && (
+          <Detail
+            opportunity={detail}
+            budget={budget}
+            recheck={() => void recheck()}
+            busy={rechecking}
+            message={recheckMessage}
+          />
+        )}
+      </div>
+      {selected && !detail && !detailError && (
+        <p className="loading-label">
+          <LoaderCircle size={13} className="spin" /> Loading calculation evidence
+        </p>
+      )}
+      <RecordDetails title="Scanner and UTC diagnostics" value={diagnostics} />
+    </div>
+  );
+}
