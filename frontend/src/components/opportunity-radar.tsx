@@ -53,3 +53,11 @@ function Amount({ value, suffix = "" }: { value: string | null | undefined; suff
     </span>
   );
 }
+
+function Confidence({ value }: { value: Opportunity["status"] }) {
+  return (
+    <span className={`opportunity-state opportunity-${value.toLowerCase()}`}>
+      {reasonLabel(value)}
+    </span>
+  );
+}
