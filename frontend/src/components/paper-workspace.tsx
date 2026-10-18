@@ -51,6 +51,14 @@ function Classification({ value }: { value: PaperClassification }) {
     </span>
   );
 }
+function Notice({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="paper-notice">
+      <ShieldCheck size={16} />
+      <span>{children}</span>
+    </div>
+  );
+}
 const valuationLabels: Record<PortfolioValuationStatus | "ZERO_POSITION", string> = {
   COMPLETE_FRESH: "Complete fresh valuation",
   PARTIAL: "Partial valuation",
