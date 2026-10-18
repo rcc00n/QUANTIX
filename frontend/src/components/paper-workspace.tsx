@@ -184,3 +184,448 @@ function Summary({
 function JsonEvidence({ value }: { value: unknown }) {
   return <pre className="paper-evidence">{JSON.stringify(value, null, 2)}</pre>;
 }
+function StrategyForm({
+  session,
+  options,
+  onSaved,
+}: {
+  session: PaperSession;
+  options: StrategyOptions | null;
+  onSaved: () => Promise<void>;
+}) {
+  const [settings, setSettings] = useState<PaperStrategy>(session.settings);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    setSettings(session.settings);
+    setMessage("");
+  }, [session.id, session.settings]);
+  function field(key: string, value: unknown) {
+    setSettings((old) => ({ ...old, [key]: value, preset: "Custom" }));
+  }
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setSaving(true);
+    setMessage("");
+    try {
+      await paperFetch(`/paper/sessions/${session.id}/strategy`, {
+        method: "PUT",
+        body: JSON.stringify({
+          ...settings,
+          mode: session.classification === "RESEARCH" ? "RESEARCH_SHADOW" : settings.mode,
+        }),
+      });
+      await onSaved();
+      setMessage("Strategy version saved. Scheduled simulations retain their original version.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Strategy could not be saved.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <section className="paper-detail">
+      <div className="section-heading">
+        <div>
+          <span className="small-label">VERSIONED CONFIGURATION</span>
+          <h2>Paper strategy</h2>
+        </div>
+        <span className="subtle-tag">
+          {settings.preset} · {session.strategy_version_id.slice(0, 8)}
+        </span>
+      </div>
+      <form onSubmit={save}>
+        <div className="paper-form-grid">
+          <label>
+            Preset
+            <select
+              aria-label="Strategy preset"
+              value={options?.presets[settings.preset] ? settings.preset : "Custom"}
+              onChange={(e) => {
+                const next = options?.presets[e.target.value];
+                if (next?.mode === "RESEARCH_SHADOW" && session.classification !== "RESEARCH") {
+                  setMessage("Use a separate research portfolio for Aggressive Research.");
+                  return;
+                }
+                if (next) {
+                  setSettings({
+                    ...next,
+                    mode: session.classification === "RESEARCH" ? "RESEARCH_SHADOW" : next.mode,
+                  });
+                  setMessage("");
+                }
+              }}
+            >
+              <option value="Custom">Custom</option>
+              {Object.keys(options?.presets || {}).map((name) => (
+                <option key={name}>{name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Simulation mode
+            <select
+              aria-label="Simulation mode"
+              value={settings.mode}
+              onChange={(e) => field("mode", e.target.value)}
+            >
+              {session.classification === "RESEARCH" ? (
+                <option value="RESEARCH_SHADOW">Research shadow</option>
+              ) : (
+                <>
+                  <option value="PRE_FUNDED">Pre-funded arbitrage</option>
+                  <option value="TRANSFER">Transfer-based simulation</option>
+                </>
+              )}
+            </select>
+          </label>
+          {session.classification === "RESEARCH" && (
+            <label>
+              Research execution model
+              <select
+                value={settings.research_execution_model || "PRE_FUNDED"}
+                onChange={(e) => field("research_execution_model", e.target.value)}
+              >
+                <option value="PRE_FUNDED">Pre-funded</option>
+                <option value="TRANSFER">Transfer-based</option>
+              </select>
+            </label>
+          )}
+          <label>
+            Starting capital · CAD
+            <input
+              aria-label="Starting capital CAD"
+              inputMode="decimal"
+              value={settings.starting_capital_cad}
+              readOnly
+              required
+            />
+          </label>
+          <label>
+            Trade budget / maximum acquisition · CAD
+            <input
+              aria-label="Trade amount CAD"
+              inputMode="decimal"
+              value={settings.trade_amount_cad}
+              onChange={(e) => field("trade_amount_cad", e.target.value)}
+              required
+            />
+          </label>
+          <BuyCapitalControl
+            label="Minimum simulated Buy Capital · CAD"
+            value={
+              typeof settings.min_buy_capital_cad === "string" ? settings.min_buy_capital_cad : "0"
+            }
+            onChange={(value) => field("min_buy_capital_cad", value)}
+          />
+          <label>
+            Minimum projected profit · CAD
+            <input
+              aria-label="Minimum profit CAD"
+              inputMode="decimal"
+              value={settings.minimum_profit_cad}
+              onChange={(e) => field("minimum_profit_cad", e.target.value)}
+              required
+            />
+          </label>
+          <label>
+            Minimum projected return · %
+            <input
+              aria-label="Minimum profit percentage"
+              inputMode="decimal"
+              value={settings.minimum_profit_pct}
+              onChange={(e) => field("minimum_profit_pct", e.target.value)}
+              required
+            />
+          </label>
+          <label>
+            Threshold logic
+            <select
+              value={settings.threshold_logic}
+              onChange={(e) => field("threshold_logic", e.target.value)}
+            >
+              <option value="AND">CAD and percentage</option>
+              <option value="OR">CAD or percentage</option>
+            </select>
+          </label>
+          <label>
+            Reaction delay · seconds
+            <input
+              aria-label="Reaction delay seconds"
+              type="number"
+              min="0"
+              max="3600"
+              step="1"
+              list="paper-reaction-delays"
+              value={settings.reaction_delay_seconds}
+              onChange={(e) => field("reaction_delay_seconds", e.target.valueAsNumber)}
+              required
+            />
+            <datalist id="paper-reaction-delays">
+              {(options?.reaction_delays || [5, 15, 30, 60, 120]).map((n) => (
+                <option key={n} value={n} />
+              ))}
+            </datalist>
+          </label>
+          <label>
+            Concurrent simulations
+            <input
+              aria-label="Maximum concurrent simulations"
+              type="number"
+              min="1"
+              max="20"
+              value={settings.maximum_concurrent}
+              onChange={(e) => field("maximum_concurrent", e.target.valueAsNumber)}
+              required
+            />
+          </label>
+          <label>
+            Allowed exchanges
+            <input
+              value={(settings.allowed_exchanges || []).join(", ")}
+              placeholder="All supported exchanges"
+              onChange={(e) =>
+                field(
+                  "allowed_exchanges",
+                  e.target.value
+                    .split(",")
+                    .map((x) => x.trim())
+                    .filter(Boolean),
+                )
+              }
+            />
+          </label>
+          <label>
+            Allowed assets
+            <input
+              value={(settings.allowed_assets || []).join(", ")}
+              placeholder="All supported assets"
+              onChange={(e) =>
+                field(
+                  "allowed_assets",
+                  e.target.value
+                    .split(",")
+                    .map((x) => x.trim())
+                    .filter(Boolean),
+                )
+              }
+            />
+          </label>
+        </div>
+        <fieldset className="strategy-risk-fields">
+          <legend>Risk, liquidity and costs</legend>
+          <div className="paper-form-grid">
+            {(
+              [
+                ["minimum_liquidity_cad", "Minimum executable liquidity · CAD", "100"],
+                ["maximum_capital_per_exchange_pct", "Maximum capital per venue · %", "75"],
+                ["maximum_inventory_exposure_pct", "Maximum inventory exposure · %", "75"],
+                ["maximum_loss_cad", "Maximum tolerated loss · CAD", "50"],
+                ["taker_fee_rate", "Conservative taker fee · fraction", "0.006"],
+                ["slippage_bps", "Adverse execution slippage · bps", "10"],
+                ["rebalance_bps", "Projected rebalancing reserve · bps", "10"],
+              ] as const
+            ).map(([key, label, fallback]) => (
+              <label key={key}>
+                {label}
+                <input
+                  aria-label={label}
+                  inputMode="decimal"
+                  value={String(settings[key] ?? fallback)}
+                  onChange={(e) => field(key, e.target.value)}
+                  required
+                />
+              </label>
+            ))}
+            <label>
+              Maximum acceptable slippage · bps
+              <input
+                aria-label="Maximum acceptable slippage bps"
+                inputMode="decimal"
+                value={String(settings.maximum_slippage_bps ?? "")}
+                placeholder="Additional cap unset"
+                onChange={(e) => field("maximum_slippage_bps", e.target.value || null)}
+              />
+            </label>
+            <label>
+              Maximum simulations per hour
+              <input
+                type="number"
+                min={1}
+                max={1000}
+                step={1}
+                value={Number(settings.maximum_simulations_per_hour ?? 60)}
+                onChange={(e) => field("maximum_simulations_per_hour", e.target.valueAsNumber)}
+                required
+              />
+            </label>
+            <label>
+              Maximum book age · seconds
+              <input
+                type="number"
+                min={1}
+                max={60}
+                step={1}
+                value={Number(settings.maximum_book_age_seconds ?? 30)}
+                onChange={(e) => field("maximum_book_age_seconds", e.target.valueAsNumber)}
+                required
+              />
+            </label>
+            <label>
+              Execution profile
+              <select
+                value={String(settings.execution_profile ?? "MANUAL")}
+                onChange={(e) => field("execution_profile", e.target.value)}
+              >
+                <option value="MANUAL">Human reaction scenario</option>
+                <option value="FAST_COUNTERFACTUAL">Fast counterfactual scenario</option>
+                <option value="CUSTOM">Custom scenario</option>
+              </select>
+            </label>
+            <label>
+              Required data confidence
+              <select
+                value={String(settings.minimum_confidence ?? "HEALTHY")}
+                onChange={(e) => field("minimum_confidence", e.target.value)}
+              >
+                <option value="HEALTHY">Healthy observations</option>
+                {session.classification === "RESEARCH" && (
+                  <>
+                    <option value="DEGRADED">Degraded · research only</option>
+                    <option value="ANOMALY_RESEARCH">Anomalies · research only</option>
+                  </>
+                )}
+              </select>
+            </label>
+            {(["buy_fee_currency", "sell_fee_currency"] as const).map((key) => (
+              <label key={key}>
+                {key === "buy_fee_currency" ? "Buy fee currency" : "Sell fee currency"}
+                <select
+                  value={String(settings[key] ?? "quote")}
+                  onChange={(e) => field(key, e.target.value)}
+                >
+                  <option value="quote">Quote currency</option>
+                  <option value="base">Base asset</option>
+                </select>
+              </label>
+            ))}
+          </div>
+          <p className="paper-help">
+            Taker fee rates are fractions: 0.006 means 0.6%. Costs remain assumptions until
+            independently verified. Slippage caps apply to depth plus the adverse model; loss limits
+            cannot guarantee future execution prices.
+          </p>
+        </fieldset>
+        {(settings.mode === "TRANSFER" || settings.research_execution_model === "TRANSFER") && (
+          <fieldset className="strategy-risk-fields">
+            <legend>Transfer scenario assumptions</legend>
+            <div className="paper-form-grid">
+              {(
+                [
+                  ["network", "Compatible network", ""],
+                  ["withdrawal_fee_base", "Withdrawal fee · base units", "0"],
+                  ["network_fee_base", "Network fee · base units", "0"],
+                  ["haircut_pct", "Pretrade transfer risk haircut · %", "5"],
+                ] as const
+              ).map(([key, label, fallback]) => (
+                <label key={key}>
+                  {label}
+                  <input
+                    value={String(asRecord(settings.transfer)[key] ?? fallback)}
+                    onChange={(e) =>
+                      field("transfer", { ...asRecord(settings.transfer), [key]: e.target.value })
+                    }
+                  />
+                </label>
+              ))}
+              {(
+                [
+                  ["confirmations", "Confirmation assumption", 0],
+                  ["settlement_seconds", "Settlement delay · seconds", 600],
+                ] as const
+              ).map(([key, label, fallback]) => (
+                <label key={key}>
+                  {label}
+                  <input
+                    type="number"
+                    min={key === "settlement_seconds" ? 1 : 0}
+                    step={1}
+                    value={Number(asRecord(settings.transfer)[key] ?? fallback)}
+                    onChange={(e) =>
+                      field("transfer", {
+                        ...asRecord(settings.transfer),
+                        [key]: e.target.valueAsNumber,
+                      })
+                    }
+                  />
+                </label>
+              ))}
+              {(
+                [
+                  ["withdrawal_enabled", "Assume withdrawals available"],
+                  ["deposit_enabled", "Assume deposits available"],
+                ] as const
+              ).map(([key, label]) => (
+                <label className="checkbox-label" key={key}>
+                  <input
+                    type="checkbox"
+                    checked={asRecord(settings.transfer)[key] === true}
+                    onChange={(e) =>
+                      field("transfer", { ...asRecord(settings.transfer), [key]: e.target.checked })
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <p className="paper-help">
+              These are explicit scenario assumptions, not verified blockchain or account
+              capabilities. A later sell requires new observed depth after settlement.
+            </p>
+          </fieldset>
+        )}
+        <p className="paper-help">
+          Minimum Buy Capital checks the actual executable purchase size independently of profit,
+          return and the maximum budget. Legacy versions retain their original minimum until saved.
+          Starting capital applies when creating a portfolio; saving a strategy never grants assets
+          or resets balances. Reaction profiles are simulations of human or automated timing, not
+          measured exchange latency.
+        </p>
+        {settings.mode === "TRANSFER" || settings.research_execution_model === "TRANSFER" ? (
+          <Notice>
+            Transfer simulations require explicit compatible networks, fees and settlement
+            assumptions. The eventual sale uses newly available evidence after arrival.
+          </Notice>
+        ) : null}
+        <div className="paper-actions">
+          <Button type="submit" disabled={saving}>
+            {saving ? "Saving…" : "Save strategy version"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              const defaults =
+                options?.presets[
+                  session.classification === "RESEARCH" ? "Aggressive Research" : "Balanced"
+                ];
+              if (defaults) {
+                setSettings({ ...defaults, starting_capital_cad: session.initial_equity_cad });
+                setMessage(
+                  "Defaults loaded. Save a new version to apply; scheduled simulations keep their original settings.",
+                );
+              }
+            }}
+          >
+            Reset strategy defaults
+          </Button>
+          {message && <span role="status">{message}</span>}
+        </div>
+        <details className="paper-disclosure">
+          <summary>Complete strategy and risk limits</summary>
+          <JsonEvidence value={settings} />
+        </details>
+      </form>
+    </section>
+  );
+}
