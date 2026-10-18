@@ -52,3 +52,65 @@ function Header({
     </>
   );
 }
+export default async function SectionPage({ params }: { params: Promise<{ section: string }> }) {
+  await requireUser();
+  const { section } = await params;
+  const item = navigation.find((x) => x.slug === section);
+  if (!item) notFound();
+  const statusPromise = getStatus();
+  let feeds: ExchangeFeed[] = [];
+  if (section === "exchanges") {
+    try {
+      const response = await backendFetch("/exchanges");
+      if (response.ok) feeds = await response.json();
+    } catch {
+      /* Explicit unavailable state in explorer. */
+    }
+  }
+  const status = await statusPromise;
+  const subtitles: Record<string, string> = {
+    overview: "Live market intelligence and isolated virtual portfolio performance.",
+    opportunities: "Executable-depth projections, current evidence and confidence gates.",
+    exchanges: "Public market feeds, discovery and source confidence.",
+    "paper-trading": "Independent simulated legs, real observations and auditable outcomes.",
+    portfolio: "Virtual inventory, cost basis and no-trading benchmark.",
+    analytics: "Reconciled performance, recorded history and self-contained exports.",
+    settings: "Versioned strategies, market coverage and owner notification policies.",
+    "system-health": "Live operational measurements, clock confidence and data reliability.",
+    signals: "Private owner pairing, quantitative alert policy and recorded delivery outcomes.",
+    "ai-insights": "Optional explanatory analysis. Core decisions remain quantitative.",
+  };
+  return (
+    <>
+      <Header
+        title={section === "overview" ? "Command Center" : item.label}
+        subtitle={subtitles[section]}
+        status={status}
+      />
+      {section === "overview" ? (
+        <CommandCenter />
+      ) : section === "opportunities" ? (
+        <OpportunityRadar />
+      ) : section === "exchanges" ? (
+        <ExchangeExplorer initialFeeds={feeds} />
+      ) : section === "paper-trading" ? (
+        <PaperWorkspace view="trading" />
+      ) : section === "portfolio" ? (
+        <PaperWorkspace view="portfolio" />
+      ) : section === "analytics" ? (
+        <AnalyticsWorkspace />
+      ) : section === "settings" ? (
+        <>
+          <PaperWorkspace view="settings" />
+          <TerminalSettingsWorkspace />
+        </>
+      ) : section === "system-health" ? (
+        <SystemHealthWorkspace />
+      ) : section === "signals" ? (
+        <SignalsWorkspace />
+      ) : (
+        <AiInsightsWorkspace />
+      )}
+    </>
+  );
+}
