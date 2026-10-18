@@ -141,3 +141,43 @@ function ExecutionReasons({ metrics }: { metrics: PaperMetrics | null }) {
     </details>
   );
 }
+function Summary({
+  session,
+  portfolio,
+  metrics,
+}: {
+  session: PaperSession;
+  portfolio: PaperPortfolio | null;
+  metrics: PaperMetrics | null;
+}) {
+  return (
+    <>
+      <div className="paper-summary">
+        <Metric label="Initial equity" value={session.initial_equity_cad} />
+        <Metric label="Current virtual equity" value={portfolio?.equity_cad} />
+        <Metric
+          label="Net simulated P&L"
+          value={portfolio?.net_simulated_pnl_cad ?? portfolio?.net_pnl_cad}
+        />
+        <Metric label="Maximum drawdown" value={metrics?.maximum_drawdown_pct} unit="%" />
+      </div>
+      {session.classification === "RESEARCH" && (
+        <Notice>
+          Hypothetical research portfolio. These balances and outcomes are excluded from validated
+          performance and never combined with its capital.
+        </Notice>
+      )}
+      {portfolio && <ValuationCoverage portfolio={portfolio} />}
+      {portfolio?.limitations?.length ? (
+        <div className="paper-limitations">
+          <strong>Valuation and evidence limitations</strong>
+          <ul>
+            {portfolio.limitations.map((reason) => (
+              <li key={reason}>{reason.replaceAll("_", " ")}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </>
+  );
+}
