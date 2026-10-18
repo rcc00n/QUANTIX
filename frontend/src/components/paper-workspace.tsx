@@ -806,3 +806,73 @@ function CreatePortfolio({
     </section>
   );
 }
+function Balances({ portfolio }: { portfolio: PaperPortfolio | null }) {
+  return (
+    <section className="paper-detail">
+      <div className="section-heading">
+        <div>
+          <span className="small-label">LEDGER-BACKED INVENTORY</span>
+          <h2>Virtual exchange balances</h2>
+        </div>
+      </div>
+      <div className="table-wrap">
+        <table className="paper-table" aria-label="Virtual balances">
+          <thead>
+            <tr>
+              {[
+                "Exchange",
+                "Asset",
+                "Available",
+                "Reserved",
+                "Total inventory",
+                "CAD cost basis",
+                "CAD valuation",
+              ].map((label) => (
+                <th key={label}>{label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {portfolio?.balances?.length ? (
+              portfolio.balances.map((balance) => (
+                <tr key={`${balance.exchange}:${balance.asset}`}>
+                  <td>{balance.exchange}</td>
+                  <td>{assetLabel(balance.asset)}</td>
+                  <td>
+                    <Exact value={balance.available_quantity} />
+                  </td>
+                  <td>
+                    <Exact value={balance.reserved_quantity} />
+                  </td>
+                  <td>
+                    <Exact value={balance.quantity} />
+                  </td>
+                  <td>
+                    <Exact value={balance.cost_basis_cad} />
+                  </td>
+                  <td>
+                    <Exact value={balance.market_value_cad} />
+                    {balance.valuation_detail_reason && (
+                      <small className="paper-valuation-note">
+                        {balance.valuation_detail_reason.replaceAll("_", " ")}
+                      </small>
+                    )}
+                  </td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={7}>
+                  <div className="table-empty">
+                    <strong>No virtual balances available</strong>
+                    <span>Funding and valuation require an initialized paper portfolio.</span>
+                  </div>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
