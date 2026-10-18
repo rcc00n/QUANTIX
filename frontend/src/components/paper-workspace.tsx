@@ -181,3 +181,6 @@ function Summary({
     </>
   );
 }
+function JsonEvidence({ value }: { value: unknown }) {
+  return <pre className="paper-evidence">{JSON.stringify(value, null, 2)}</pre>;
+}
