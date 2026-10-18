@@ -876,3 +876,55 @@ function Balances({ portfolio }: { portfolio: PaperPortfolio | null }) {
     </section>
   );
 }
+function PortfolioDetails({ portfolio }: { portfolio: PaperPortfolio | null }) {
+  return (
+    <section className="paper-detail">
+      <div className="section-heading">
+        <div>
+          <span className="small-label">ACCOUNTING BREAKDOWN</span>
+          <h2>Inventory and strategy performance</h2>
+        </div>
+      </div>
+      <div className="paper-accounting-grid">
+        <dl className="settings-list">
+          {[
+            [
+              "Realized simulated trading P&L",
+              portfolio?.realized_trading_pnl_cad ?? portfolio?.realized_trading_cad,
+            ],
+            ["Realized currency P&L", portfolio?.realized_fx_pnl_cad ?? portfolio?.realized_fx_cad],
+            ["Unrealized inventory P&L", portfolio?.unrealized_pnl_cad],
+            ["Trading fees", portfolio?.fees_cad],
+            ["FX, slippage and rebalancing expenses", portfolio?.expenses_cad],
+          ].map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>
+                <Exact value={value} unit="CAD" />
+              </dd>
+            </div>
+          ))}
+        </dl>
+        <dl className="settings-list">
+          {[
+            ["No-trading benchmark", portfolio?.no_trading_benchmark_cad, "CAD"],
+            ["Strategy excess versus benchmark", portfolio?.strategy_excess_cad, "CAD"],
+            ["Portfolio return", portfolio?.portfolio_return_pct, "%"],
+            ["Capital utilization", portfolio?.capital_utilization_pct, "%"],
+          ].map(([label, value, unit]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>
+                <Exact value={value} unit={unit || "CAD"} />
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+      <p className="paper-help">
+        Fees and expenses are disclosed separately and are already reflected in balances and cost
+        basis. They are not deducted twice. The benchmark retains initial inventory without trading.
+      </p>
+    </section>
+  );
+}
