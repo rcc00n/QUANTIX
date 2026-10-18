@@ -84,3 +84,41 @@ const valuationLabels: Record<PortfolioValuationStatus | "ZERO_POSITION", string
   UNKNOWN: "Valuation unavailable",
   ZERO_POSITION: "Empty position",
 };
+
+function ValuationCoverage({ portfolio }: { portfolio: PaperPortfolio }) {
+  const valuation = portfolio.valuation_status;
+  if (!valuation) return null;
+  const unpriced = portfolio.unpriced_balances ?? [];
+  return (
+    <section className="paper-limitations" aria-label="Portfolio valuation coverage">
+      <strong>{valuationLabels[valuation]}</strong>
+      {valuation === "STALE" && <p>Retained as of {utcLabel(portfolio.as_of)}.</p>}
+      {(valuation === "PARTIAL" || valuation === "STALE") &&
+        portfolio.valued_subtotal_cad != null && (
+          <p>
+            Marked positions subtotal <Exact value={portfolio.valued_subtotal_cad} unit="CAD" />.
+            Full portfolio equity requires every balance.
+          </p>
+        )}
+      {unpriced.length > 0 && (
+        <details className="planner-inventory">
+          <summary>
+            {portfolio.unpriced_position_count ?? unpriced.length} balances without complete marks
+          </summary>
+          <ul>
+            {unpriced.map((balance) => (
+              <li key={`${balance.exchange}:${balance.canonical_key ?? balance.asset}`}>
+                {balance.exchange} · {assetLabel(balance.canonical_key ?? balance.asset)}{" "}
+                <Exact value={balance.quantity} />
+                {balance.reason && ` · ${balance.reason.replaceAll("_", " ")}`}
+                {balance.detail_reason &&
+                  balance.detail_reason !== balance.reason &&
+                  ` · ${balance.detail_reason.replaceAll("_", " ")}`}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </section>
+  );
+}
