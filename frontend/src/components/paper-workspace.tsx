@@ -59,6 +59,24 @@ function Notice({ children }: { children: React.ReactNode }) {
     </div>
   );
 }
+function Metric({
+  label,
+  value,
+  unit = "CAD",
+}: {
+  label: string;
+  value: string | null | undefined;
+  unit?: string;
+}) {
+  return (
+    <div>
+      <span>{label}</span>
+      <strong>
+        <Exact value={value} unit={unit} />
+      </strong>
+    </div>
+  );
+}
 const valuationLabels: Record<PortfolioValuationStatus | "ZERO_POSITION", string> = {
   COMPLETE_FRESH: "Complete fresh valuation",
   PARTIAL: "Partial valuation",
