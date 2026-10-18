@@ -928,3 +928,435 @@ function PortfolioDetails({ portfolio }: { portfolio: PaperPortfolio | null }) {
     </section>
   );
 }
+export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "settings" }) {
+  const [sessions, setSessions] = useState<PaperSession[]>([]);
+  const [sessionId, setSessionId] = useState("");
+  const [options, setOptions] = useState<StrategyOptions | null>(null);
+  const [portfolioState, setPortfolio] = useState<PaperPortfolio | null>(null);
+  const [metricsState, setMetrics] = useState<PaperMetrics | null>(null);
+  const [tradesState, setTrades] = useState<PaperTradePage | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [detailState, setDetail] = useState<PaperTradeDetail | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [showFunding, setShowFunding] = useState(false);
+  const [fundingDraft, setFundingDraft] = useState<{ capital: string; name: string }>();
+  const scopeRef = useRef(sessionId);
+  scopeRef.current = sessionId;
+  const [loadedScope, setLoadedScope] = useState("");
+  const portfolio = loadedScope === sessionId ? portfolioState : null;
+  const metrics = loadedScope === sessionId ? metricsState : null;
+  const trades = loadedScope === sessionId ? tradesState : null;
+  const detail = loadedScope === sessionId ? detailState : null;
+  const session = sessions.find((item) => item.id === sessionId) || null;
+  useEffect(() => {
+    if (!showFunding) return;
+    const frame = requestAnimationFrame(() =>
+      document.getElementById("virtual-funding-planner")?.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "start",
+      }),
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [showFunding, sessionId, fundingDraft]);
+  const loadSessions = useCallback(async () => {
+    const [response, strategies] = await Promise.all([
+      paperFetch<{ items: PaperSession[] }>("/paper/sessions"),
+      paperFetch<StrategyOptions>("/strategies"),
+    ]);
+    setSessions(response.items);
+    setOptions(strategies);
+    const requested = new URLSearchParams(window.location.search).get("session");
+    setSessionId((old) =>
+      response.items.some((s) => s.id === old)
+        ? old
+        : response.items.find((s) => s.id === requested)?.id ||
+          response.items.find((s) => s.classification === "VALIDATED")?.id ||
+          response.items[0]?.id ||
+          "",
+    );
+  }, []);
+  useEffect(() => {
+    loadSessions()
+      .catch((reason) => setError(reason.message))
+      .finally(() => setLoading(false));
+  }, [loadSessions]);
+  useEffect(() => {
+    if (!sessionId) return;
+    let active = true;
+    let running = false;
+    const controller = new AbortController();
+    setPortfolio(null);
+    setMetrics(null);
+    setTrades(null);
+    setDetail(null);
+    async function refresh() {
+      if (running || document.visibilityState === "hidden") return;
+      running = true;
+      try {
+        const [value, activity, page] = await Promise.all([
+          paperFetch<PaperPortfolio>(`/paper/sessions/${sessionId}/portfolio`, {
+            signal: controller.signal,
+          }),
+          paperFetch<PaperMetrics>(`/paper/sessions/${sessionId}/metrics`, {
+            signal: controller.signal,
+          }),
+          paperFetch<PaperTradePage>(
+            `/paper/trades?session_id=${sessionId}&limit=25&offset=${offset}`,
+            { signal: controller.signal },
+          ),
+        ]);
+        if (active) {
+          setLoadedScope(sessionId);
+          setPortfolio(value);
+          setMetrics(activity);
+          setTrades(page);
+          setError("");
+        }
+      } catch (reason) {
+        if (active) setError(reason instanceof Error ? reason.message : "Paper data unavailable.");
+      } finally {
+        running = false;
+      }
+    }
+    void refresh();
+    const timer = window.setInterval(refresh, 15000);
+    return () => {
+      active = false;
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [sessionId, offset]);
+  async function toggle() {
+    if (!session) return;
+    setBusy(true);
+    setError("");
+    try {
+      await paperFetch(
+        `/paper/sessions/${session.id}/${session.status.toLowerCase() === "active" ? "pause" : "resume"}`,
+        { method: "POST", body: "{}" },
+      );
+      await loadSessions();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Portfolio status could not change.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function openTrade(trade: PaperTrade) {
+    try {
+      const requestedScope = sessionId;
+      const value = await paperFetch<PaperTradeDetail>(`/paper/trades/${trade.id}`);
+      if (scopeRef.current === requestedScope) setDetail(value);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Execution evidence unavailable.");
+    }
+  }
+  return (
+    <div className="paper-workspace">
+      <div className="section-heading paper-heading">
+        <div>
+          <span className="small-label">AUTONOMOUS SIMULATION</span>
+          <h2>
+            {view === "portfolio"
+              ? "Portfolio accounting"
+              : view === "settings"
+                ? "Strategy management"
+                : "Paper trading activity"}
+          </h2>
+        </div>
+        <div className="paper-actions">
+          <Button
+            variant="outline"
+            size="sm"
+            aria-expanded={showFunding}
+            aria-controls="virtual-funding-planner"
+            onClick={() => setShowFunding(!showFunding)}
+          >
+            {showFunding ? "Hide funding planner" : "Virtual Funding Planner"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setCreating(!creating)}>
+            <Plus size={14} /> New portfolio
+          </Button>
+        </div>
+      </div>
+      <Notice>
+        Virtual funds and simulated executions only. Research results are excluded from validated
+        performance. Real exchange orders are never submitted.
+      </Notice>
+      {error && (
+        <div className="notice" role="alert">
+          {error}{" "}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void loadSessions().catch((reason) => setError(reason.message))}
+          >
+            <RefreshCw size={13} /> Retry
+          </Button>
+        </div>
+      )}
+      {creating && (
+        <CreatePortfolio
+          options={options}
+          onCreated={loadSessions}
+          onClose={() => setCreating(false)}
+          onPlan={(capital, name) => {
+            setFundingDraft({ capital, name });
+            setCreating(false);
+            setShowFunding(true);
+          }}
+        />
+      )}
+      {loading ? (
+        <p className="empty-line" role="status">
+          Loading paper portfolios…
+        </p>
+      ) : sessions.length ? (
+        <>
+          <div className="paper-toolbar">
+            <label>
+              Paper portfolio
+              <select
+                aria-label="Paper portfolio"
+                value={sessionId}
+                onChange={(e) => {
+                  setSessionId(e.target.value);
+                  setOffset(0);
+                }}
+              >
+                {sessions.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name} ·{" "}
+                    {item.classification === "RESEARCH" ? "Research only" : "Validated"}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {session && (
+              <>
+                <Classification value={session.classification} />
+                <span className="subtle-tag">{session.status}</span>
+                <Button variant="outline" size="sm" disabled={busy} onClick={toggle}>
+                  {session.status.toLowerCase() === "active" ? (
+                    <CirclePause size={14} />
+                  ) : (
+                    <Play size={14} />
+                  )}
+                  {session.status.toLowerCase() === "active"
+                    ? "Pause simulations"
+                    : "Resume simulations"}
+                </Button>
+              </>
+            )}
+          </div>
+          {session && (
+            <>
+              <Summary session={session} portfolio={portfolio} metrics={metrics} />
+              {showFunding && (
+                <FundingPlanner
+                  key={`${session.id}:${fundingDraft?.capital ?? ""}:${fundingDraft?.name ?? ""}`}
+                  session={session}
+                  onCreated={loadSessions}
+                  initialCapital={fundingDraft?.capital}
+                  initialName={fundingDraft?.name}
+                />
+              )}
+              {view === "settings" ? (
+                <StrategyForm
+                  key={session.id}
+                  session={session}
+                  options={options}
+                  onSaved={loadSessions}
+                />
+              ) : view === "portfolio" ? (
+                <>
+                  <PortfolioDetails portfolio={portfolio} />
+                  <Balances portfolio={portfolio} />
+                </>
+              ) : (
+                <>
+                  <div className="paper-counts" aria-label="Simulation outcomes">
+                    {[
+                      ["scheduled", metrics?.scheduled_simulations],
+                      ["completed", metrics?.completed_simulations],
+                      ["partial", metrics?.partially_completed],
+                      ["missed", metrics?.missed_simulations],
+                      ["failed", metrics?.failed_simulations],
+                      ["expired", metrics?.expired_simulations],
+                    ].map(([key, count]) => (
+                      <div key={key}>
+                        <span>{key}</span>
+                        <strong>{metrics ? (count ?? 0) : "—"}</strong>
+                      </div>
+                    ))}
+                    <div>
+                      <span>Win rate</span>
+                      <strong>
+                        <Exact value={metrics?.win_rate_pct} unit="%" />
+                      </strong>
+                    </div>
+                  </div>
+                  <ExecutionReasons metrics={metrics} />
+                  <div className="section-heading paper-ledger-heading">
+                    <h3>Simulation history</h3>
+                    <Link href={`/portfolio?session=${session.id}`} className="text-link">
+                      Inspect virtual balances <ChevronRight size={14} />
+                    </Link>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="paper-table" aria-label="Paper simulations">
+                      <thead>
+                        <tr>
+                          {[
+                            "Simulation",
+                            "Classification",
+                            "Mode",
+                            "Lifecycle",
+                            "Requested quantity",
+                            "Eligible after",
+                            "Outcome reason",
+                          ].map((label) => (
+                            <th key={label}>{label}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {trades?.items?.length ? (
+                          trades.items.map((trade) => (
+                            <tr key={trade.id}>
+                              <td>
+                                <button
+                                  className="paper-row-link"
+                                  onClick={() => void openTrade(trade)}
+                                >
+                                  {trade.id.slice(0, 8)}
+                                </button>
+                              </td>
+                              <td>
+                                <Classification value={trade.classification} />
+                              </td>
+                              <td>{trade.mode.replaceAll("_", " ")}</td>
+                              <td>
+                                <span className={`paper-state state-${trade.status.toLowerCase()}`}>
+                                  {trade.status}
+                                </span>
+                              </td>
+                              <td>
+                                <Exact value={trade.requested_quantity} />
+                              </td>
+                              <td>{utcLabel(trade.eligible_at)}</td>
+                              <td className="paper-reason">
+                                {trade.reason || "Awaiting next lifecycle transition"}
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={7}>
+                              <div className="table-empty">
+                                <strong>
+                                  {trades
+                                    ? "No recorded simulations"
+                                    : "Loading simulation history…"}
+                                </strong>
+                                <span>
+                                  Eligible candidates require virtual funding and causally valid
+                                  market evidence. Empty results never imply a successful trade.
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="radar-pagination">
+                    <span>{trades?.total ?? 0} recorded simulations · UTC timestamps</span>
+                    <div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={offset === 0}
+                        onClick={() => setOffset(Math.max(0, offset - 25))}
+                      >
+                        <ChevronLeft size={13} /> Previous
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!trades || offset + 25 >= trades.total}
+                        onClick={() => setOffset(offset + 25)}
+                      >
+                        Next <ChevronRight size={13} />
+                      </Button>
+                    </div>
+                  </div>
+                  {detail && (
+                    <section className="paper-detail">
+                      <div className="section-heading">
+                        <h3>Execution evidence · {detail.trade.id.slice(0, 8)}</h3>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const url = URL.createObjectURL(
+                              new Blob([JSON.stringify(detail, null, 2)], {
+                                type: "application/json",
+                              }),
+                            );
+                            const link = document.createElement("a");
+                            link.href = url;
+                            link.download = `quantix-paper-${detail.trade.id}.json`;
+                            link.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                        >
+                          Download JSON evidence
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setDetail(null)}
+                          aria-label="Close execution evidence"
+                        >
+                          <X size={15} />
+                        </Button>
+                      </div>
+                      <Notice>
+                        Every fill is virtual. Missing evidence produces missed or failed outcomes;
+                        the two exchange legs are independent.
+                      </Notice>
+                      <TradeInspector detail={detail} />
+                      <details className="paper-disclosure">
+                        <summary>Remaining exposure and complete simulation</summary>
+                        <JsonEvidence value={detail.trade} />
+                      </details>
+                    </section>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          <div className="paper-empty">
+            <h3>No paper portfolios initialized</h3>
+            <p>Create a portfolio to allocate virtual capital.</p>
+          </div>
+          {showFunding && (
+            <FundingPlanner
+              session={null}
+              onCreated={loadSessions}
+              initialCapital={fundingDraft?.capital}
+              initialName={fundingDraft?.name}
+            />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
