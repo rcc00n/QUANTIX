@@ -1360,3 +1360,67 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
     </div>
   );
 }
+
+export function PaperOverview() {
+  const [session, setSession] = useState<PaperSession | null>(null);
+  const [portfolio, setPortfolio] = useState<PaperPortfolio | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      try {
+        const list = await paperFetch<{ items: PaperSession[] }>("/paper/sessions");
+        const primary = list.items.find((x) => x.classification === "VALIDATED");
+        if (primary) {
+          const value = await paperFetch<PaperPortfolio>(`/paper/sessions/${primary.id}/portfolio`);
+          if (active) {
+            setSession(primary);
+            setPortfolio(value);
+          }
+        }
+      } finally {
+        if (active) setLoaded(true);
+      }
+    }
+    void load().catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+  return (
+    <>
+      <div className="metrics-strip">
+        {[
+          [
+            "Validated portfolio equity",
+            portfolio?.equity_cad,
+            session
+              ? session.name
+              : loaded
+                ? "No validated portfolio available"
+                : "Loading portfolio",
+          ],
+          [
+            "Realized simulated P&L",
+            portfolio?.realized_trading_pnl_cad ?? portfolio?.realized_trading_cad,
+            "Research results excluded",
+          ],
+          [
+            "Unrealized inventory P&L",
+            portfolio?.unrealized_pnl_cad,
+            "Observed valuation evidence required",
+          ],
+          ["Capital utilization", portfolio?.capital_utilization_pct, "Reserved virtual inventory"],
+        ].map(([label, value, note]) => (
+          <div className="metric" key={label}>
+            <span>{label}</span>
+            <div>
+              <Exact value={value} unit={label === "Capital utilization" ? "%" : "CAD"} />
+            </div>
+            <p>{note}</p>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
