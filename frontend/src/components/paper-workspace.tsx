@@ -122,3 +122,22 @@ function ValuationCoverage({ portfolio }: { portfolio: PaperPortfolio }) {
     </section>
   );
 }
+
+function ExecutionReasons({ metrics }: { metrics: PaperMetrics | null }) {
+  const reasons = Object.entries(metrics?.failure_reasons ?? {}).sort(
+    (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+  );
+  if (!reasons.length) return null;
+  return (
+    <details className="planner-inventory paper-limitations">
+      <summary>Recorded simulation outcome reasons</summary>
+      <ul>
+        {reasons.map(([reason, count]) => (
+          <li key={reason}>
+            {reason.replaceAll("_", " ")} · {count}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
