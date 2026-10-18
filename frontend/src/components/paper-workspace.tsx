@@ -629,3 +629,180 @@ function StrategyForm({
     </section>
   );
 }
+function CreatePortfolio({
+  options,
+  onCreated,
+  onClose,
+  onPlan,
+}: {
+  options: StrategyOptions | null;
+  onCreated: () => Promise<void>;
+  onClose: () => void;
+  onPlan: (capital: string, name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [capital, setCapital] = useState("10000");
+  const [classification, setClassification] = useState<PaperClassification>("RESEARCH");
+  const [allocations, setAllocations] = useState<Array<{ exchange: string; quantity: string }>>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (classification === "RESEARCH") {
+      onPlan(capital, name.trim());
+      return;
+    }
+    setError("");
+    setSaving(true);
+    try {
+      const preset = options?.presets.Balanced;
+      await paperFetch("/paper/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          name: name.trim(),
+          classification,
+          starting_capital_cad: capital,
+          ...(preset ? { settings: { ...preset, starting_capital_cad: capital } } : {}),
+          ...(allocations.length
+            ? {
+                allocations: allocations.map((allocation) => ({
+                  ...allocation,
+                  asset: "fiat:CAD",
+                  cad_rate: "1",
+                })),
+              }
+            : {}),
+        }),
+      });
+      await onCreated();
+      onClose();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Portfolio could not be created.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <section className="paper-detail paper-create">
+      <div className="section-heading">
+        <h2>Create paper portfolio</h2>
+        <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close portfolio form">
+          <X size={16} />
+        </Button>
+      </div>
+      <form onSubmit={submit}>
+        <div className="paper-form-grid">
+          <label>
+            Portfolio name
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              minLength={1}
+              maxLength={100}
+              required
+            />
+          </label>
+          <label>
+            Classification
+            <select
+              value={classification}
+              onChange={(e) => setClassification(e.target.value as PaperClassification)}
+            >
+              <option value="RESEARCH">Research-only shadow</option>
+              <option value="VALIDATED">Validated paper portfolio</option>
+            </select>
+          </label>
+          <label>
+            Starting equity · CAD
+            <input
+              inputMode="decimal"
+              value={capital}
+              onChange={(e) => setCapital(e.target.value)}
+              required
+            />
+          </label>
+        </div>
+        {classification === "RESEARCH" ? (
+          <p className="paper-help">
+            Review an immutable allocation proposal before creating this research portfolio.
+          </p>
+        ) : (
+          <>
+            <p className="paper-help">
+              Default validated funding is split in CAD between Kraken and NDAX.
+            </p>
+            <details className="paper-disclosure">
+              <summary>Set initial CAD inventories</summary>
+              <p className="paper-help">
+                Custom CAD positions must total the exact starting equity.
+              </p>
+              {allocations.map((allocation, index) => (
+                <div className="paper-allocation" key={index}>
+                  <label>
+                    Exchange
+                    <input
+                      aria-label={`Allocation ${index + 1} exchange`}
+                      value={allocation.exchange}
+                      onChange={(e) =>
+                        setAllocations((old) =>
+                          old.map((a, i) => (i === index ? { ...a, exchange: e.target.value } : a)),
+                        )
+                      }
+                      required
+                    />
+                  </label>
+                  <label>
+                    CAD quantity
+                    <input
+                      aria-label={`Allocation ${index + 1} CAD quantity`}
+                      inputMode="decimal"
+                      value={allocation.quantity}
+                      onChange={(e) =>
+                        setAllocations((old) =>
+                          old.map((a, i) => (i === index ? { ...a, quantity: e.target.value } : a)),
+                        )
+                      }
+                      required
+                    />
+                  </label>
+                  <label>
+                    CAD per unit · identity
+                    <input aria-label={`Allocation ${index + 1} CAD rate`} value="1" readOnly />
+                  </label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => setAllocations((old) => old.filter((_, i) => i !== index))}
+                    aria-label={`Remove allocation ${index + 1}`}
+                  >
+                    <X size={14} />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setAllocations((old) => [...old, { exchange: "kraken", quantity: "" }])
+                }
+              >
+                <Plus size={14} /> Add allocation
+              </Button>
+            </details>
+          </>
+        )}
+        <div className="paper-actions">
+          <Button type="submit" disabled={saving}>
+            {classification === "RESEARCH"
+              ? "Open funding planner"
+              : saving
+                ? "Creating…"
+                : "Create virtual portfolio"}
+          </Button>
+          {error && <span role="alert">{error}</span>}
+        </div>
+      </form>
+    </section>
+  );
+}
