@@ -42,3 +42,39 @@ test("dashboard and private API require a valid session", async ({ page, request
   await page.goto("/portfolio");
   await expect(page).toHaveURL(/\/login$/);
 });
+
+test("login, backend status, navigation, contract download and logout", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await signIn(page);
+  await expect(page.getByText("Backend connected", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Command Center.", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Equity versus benchmark" })).toBeVisible();
+  await page
+    .getByRole("navigation", { name: "Main navigation" })
+    .getByRole("link", { name: "Analytics", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Portfolio and no-trading benchmark" }),
+  ).toBeVisible();
+  const downloadEvent = page.waitForEvent("download");
+  await page.getByRole("link", { name: "Download report contract" }).click();
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toBe("quantix-report-contract.json");
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Strategy management" })).toBeVisible();
+  // Local collector is deliberately paused after cutover. Wait for the actual
+  // bounded health read before checking its data, rather than a 5s navigation race.
+  const healthResponse = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/terminal/health",
+    { timeout: 12000 },
+  );
+  await page.getByRole("link", { name: "System Health", exact: true }).click();
+  expect((await healthResponse).status()).toBe(200);
+  await expect(page.getByText(/^00\d{2}_[a-z0-9_]+$/, { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await page.goto("/overview");
+  await expect(page).toHaveURL(/\/login$/);
+  expect(errors).toEqual([]);
+});
