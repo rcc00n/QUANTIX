@@ -301,3 +301,39 @@ test("SYNTHETIC: paper balances, research isolation, evidence and persistent str
   );
   expect(errors).toEqual([]);
 });
+
+test("LIVE: initialized paper portfolios and balances are genuine authenticated state", async ({
+  page,
+}) => {
+  test.skip(process.env.QUANTIX_LIVE_E2E !== "1", "Opt-in actual paper-accounting verification");
+  await signIn(page);
+  await page.getByRole("link", { name: "Paper Trading", exact: true }).click();
+  const response = await page.request.get("/api/paper/sessions");
+  expect(response.status()).toBe(200);
+  const sessions = await response.json();
+  expect(sessions.items.length).toBeGreaterThan(0);
+  await expect(page.getByLabel("Paper portfolio")).not.toHaveValue("");
+  const id = await page.getByLabel("Paper portfolio").inputValue();
+  // Genuine reversible control check: append a strategy version with identical
+  // owner settings. No fixture prices/funds/executions enter the live database.
+  const selected = sessions.items.find((item: { id: string }) => item.id === id);
+  const savedUnchanged = await page.request.put(`/api/paper/sessions/${id}/strategy`, {
+    headers: { Origin: new URL(page.url()).origin },
+    data: selected.settings,
+  });
+  expect(savedUnchanged.status()).toBe(200);
+  const savedValue = await savedUnchanged.json();
+  expect(savedValue.settings.reaction_delay_seconds).toBe(selected.settings.reaction_delay_seconds);
+  const portfolioResponse = await page.request.get(`/api/paper/sessions/${id}/portfolio`);
+  expect(portfolioResponse.status()).toBe(200);
+  const portfolio = await portfolioResponse.json();
+  expect(Array.isArray(portfolio.balances)).toBe(true);
+  expect(portfolio.equity_cad === null || typeof portfolio.equity_cad === "string").toBe(true);
+  await page.getByRole("link", { name: "Portfolio", exact: true }).click();
+  await expect(page.getByRole("table", { name: "Virtual balances" })).toBeVisible();
+  await expect(page.getByText("Realized simulated trading P&L", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});
