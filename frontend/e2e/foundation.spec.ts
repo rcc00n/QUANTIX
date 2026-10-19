@@ -90,3 +90,16 @@ test("mobile navigation fits the viewport", async ({ page }) => {
   );
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
 });
+
+test("BFF rejects cross-origin writes and unlisted routes", async ({ request }) => {
+  expect(
+    (
+      await request.post("/api/auth/login", {
+        headers: { Origin: "https://evil.example" },
+        data: {},
+      })
+    ).status(),
+  ).toBe(403);
+  expect((await request.get("/api/not-allowlisted")).status()).toBe(404);
+  expect((await request.get("/api/auth/login")).status()).toBe(405);
+});
