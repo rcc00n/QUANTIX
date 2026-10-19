@@ -103,3 +103,11 @@ test("BFF rejects cross-origin writes and unlisted routes", async ({ request }) 
   expect((await request.get("/api/not-allowlisted")).status()).toBe(404);
   expect((await request.get("/api/auth/login")).status()).toBe(405);
 });
+
+test("login rejects an external return destination", async ({ page }) => {
+  await page.goto("/login?next=https%3A%2F%2Fevil.example%2F");
+  await page.getByLabel("Username", { exact: true }).fill(username);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Enter workspace" }).click();
+  await expect(page).toHaveURL(/\/overview$/);
+});
