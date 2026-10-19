@@ -126,3 +126,63 @@ test("SYNTHETIC: secure dashboard pairing, pause/resume and revoke use real rout
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
     .toBe(true);
 });
+
+test("SYNTHETIC: delivery preview, history and explicit owner test stay separate from trades", async ({
+  page,
+}) => {
+  const writes: string[] = [];
+  await page.route("**/api/notifications/**", async (route) => {
+    const path = new URL(route.request().url()).pathname.split("/notifications/")[1];
+    if (route.request().method() === "POST") {
+      writes.push(path);
+      return route.fulfill({
+        json: path === "test" ? { id, status: "QUEUED" } : { acknowledged: true },
+      });
+    }
+    if (path === "status") return route.fulfill({ json: connection(true) });
+    if (path === "preview")
+      return route.fulfill({
+        json: {
+          message:
+            "QUANTIX — RESEARCH ONLY\nSYNTHETIC BTC/CAD\nBuy Capital: C$6.71\nNot actionable: account eligibility unverified",
+          eligible: false,
+          reasons: ["MINIMUM_BUY_CAPITAL", "ELIGIBILITY_UNVERIFIED"],
+          classification: "RESEARCH_ONLY",
+          evaluation_id: id,
+        },
+      });
+    if (path.startsWith("history"))
+      return route.fulfill({
+        json: {
+          items: [id, other].map((alertId, i) => ({
+            id: alertId,
+            alert_id: alertId,
+            kind: "URGENT",
+            status: "DELIVERED",
+            created_at: "2026-01-02T00:00:00Z",
+            expires_at: "2099-01-02T00:00:00Z",
+            delivered_at: "2026-01-02T00:00:01Z",
+            error_code: null,
+            attempts: 1,
+            message: `SYNTHETIC notification ${i + 1}`,
+          })),
+          limit: 30,
+        },
+      });
+    return route.fulfill({ status: 404, json: { detail: "SYNTHETIC_UNKNOWN_ROUTE" } });
+  });
+  await signIn(page);
+  await page.goto("/signals");
+  await expect(page.getByText("SYNTHETIC BTC/CAD", { exact: false })).toBeVisible();
+  await expect(page.getByText("MINIMUM BUY CAPITAL", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Send owner test notification" }).click();
+  await expect(page.getByText("Test notification queued.", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Acknowledge alert" }).first().click();
+  await page.getByRole("button", { name: "Cancel alert" }).last().click();
+  expect(writes).toEqual(["test", `${id}/acknowledge`, `${other}/cancel`]);
+  await expect(page.getByText("Disabled · separate authorization required")).toHaveCount(2);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+    .toBe(true);
+});
