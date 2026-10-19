@@ -144,3 +144,34 @@ test("SYNTHETIC: radar preserves exact amounts, confidence gates, filters and re
   );
   expect(errors).toEqual([]);
 });
+
+test("LIVE: authenticated radar exposes actual scanner diagnostics without invented results", async ({
+  page,
+}) => {
+  test.skip(process.env.QUANTIX_LIVE_E2E !== "1", "Opt-in live scanner verification");
+  await signIn(page);
+  await page.getByRole("link", { name: "Opportunity Radar", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Cross-exchange radar" })).toBeVisible();
+  const health = await page.request.get("/api/opportunities/diagnostics");
+  expect(health.status()).toBe(200);
+  const diagnostics = await health.json();
+  expect(typeof diagnostics.healthy).toBe("boolean");
+  let response = await page.request.get("/api/opportunities?limit=5&budget_cad=1000");
+  // The page's own sizing request shares a bounded gate with this independent
+  // inspection. Respect its advertised backoff instead of bypassing resource limits.
+  for (let attempt = 0; response.status() === 429 && attempt < 4; attempt++) {
+    const delay = Math.min(3, Math.max(1, Number(response.headers()["retry-after"] || "2")));
+    await response.dispose();
+    await page.waitForTimeout(delay * 1000);
+    response = await page.request.get("/api/opportunities?limit=5&budget_cad=1000");
+  }
+  expect(response.status()).toBe(200);
+  const result = await response.json();
+  expect(Array.isArray(result.items)).toBe(true);
+  for (const row of result.items) {
+    expect(row.actionable).toBe(false);
+    expect(row.buy_exchange).not.toBe(row.sell_exchange);
+    expect(row.net_profit_cad === null || typeof row.net_profit_cad === "string").toBe(true);
+  }
+  await expect(page.getByRole("table", { name: "Cross-exchange opportunities" })).toBeVisible();
+});
