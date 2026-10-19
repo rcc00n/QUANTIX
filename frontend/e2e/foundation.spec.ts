@@ -111,3 +111,35 @@ test("login rejects an external return destination", async ({ page }) => {
   await page.getByRole("button", { name: "Enter workspace" }).click();
   await expect(page).toHaveURL(/\/overview$/);
 });
+
+test("LIVE: QUANTIX assets and real normalized books in the explorer", async ({ page }) => {
+  test.skip(process.env.QUANTIX_LIVE_E2E !== "1", "Opt-in live public-data verification");
+  await signIn(page);
+  await expect(page).toHaveTitle("QUANTIX");
+  await expect(page.getByRole("img", { name: "QUANTIX", exact: true })).toBeVisible();
+  expect((await page.request.get("/brand/quantix-icon-32.png")).status()).toBe(200);
+  await page.getByRole("link", { name: "Exchanges", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Public data connections" })).toBeVisible();
+  await expect(page.getByLabel("Market", { exact: true })).not.toHaveValue("");
+  const marketId = await page.getByLabel("Market", { exact: true }).inputValue();
+  const response = await page.request.get(`/api/markets/${marketId}/book`);
+  expect(response.status()).toBe(200);
+  const book = await response.json();
+  expect(book.normalized.bids.length).toBeGreaterThan(0);
+  expect(book.normalized.asks.length).toBeGreaterThan(0);
+  expect(typeof book.normalized.bids[0].price).toBe("string");
+  expect(["rest", `${book.exchange}_ws`]).toContain(book.source);
+  expect(book.actionable).toBe(false);
+  await expect(page.getByRole("table", { name: "bids order book", exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Public API access does not establish Canadian trading eligibility.", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page).toHaveURL(/\/login$/);
+});
