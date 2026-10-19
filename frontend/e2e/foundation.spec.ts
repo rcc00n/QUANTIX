@@ -78,3 +78,15 @@ test("login, backend status, navigation, contract download and logout", async ({
   await expect(page).toHaveURL(/\/login$/);
   expect(errors).toEqual([]);
 });
+
+test("mobile navigation fits the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await signIn(page);
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("link", { name: "Paper Trading", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Paper trading activity" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+});
