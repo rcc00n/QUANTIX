@@ -200,3 +200,32 @@ test("SYNTHETIC: Telegram deep link opens retained evidence outside the current 
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
     .toBe(true);
 });
+
+test("SYNTHETIC: Telegram retained-evidence link survives owner login", async ({ page }) => {
+  await page.route("**/api/opportunities**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    await route.fulfill({
+      json: path.endsWith("/budgets")
+        ? { budgets_cad: ["1000"], default_budget_cad: "1000" }
+        : path.endsWith("/diagnostics")
+          ? { healthy: true, clock_healthy: true, metrics: {} }
+          : path.endsWith(synthetic.id)
+            ? synthetic
+            : { items: [], total: 0, limit: 25, offset: 0 },
+    });
+  });
+  await page.goto(`/opportunities?opportunity=${synthetic.id}`);
+  await expect(page).toHaveURL(/\/login\?next=/);
+  await page
+    .getByLabel("Username", { exact: true })
+    .fill(process.env.QUANTIX_E2E_USERNAME || "quantix");
+  await page
+    .getByLabel("Password", { exact: true })
+    .fill(
+      process.env.QUANTIX_E2E_PASSWORD ||
+        readFileSync(resolve(__dirname, "../../.secrets/admin-password"), "utf8").trim(),
+    );
+  await page.getByRole("button", { name: "Enter workspace" }).click();
+  await expect(page).toHaveURL(new RegExp(`/opportunities\\?opportunity=${synthetic.id}$`));
+  await expect(page.getByRole("region", { name: "Opportunity detail" })).toBeVisible();
+});
