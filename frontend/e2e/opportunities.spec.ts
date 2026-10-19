@@ -175,3 +175,28 @@ test("LIVE: authenticated radar exposes actual scanner diagnostics without inven
   }
   await expect(page.getByRole("table", { name: "Cross-exchange opportunities" })).toBeVisible();
 });
+
+test("SYNTHETIC: Telegram deep link opens retained evidence outside the current page on mobile", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.route("**/api/opportunities**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const json = path.endsWith("/budgets")
+      ? { budgets_cad: ["1000"], default_budget_cad: "1000" }
+      : path.endsWith("/diagnostics")
+        ? { healthy: true, clock_healthy: true, metrics: {} }
+        : path.endsWith(synthetic.id)
+          ? synthetic
+          : { items: [], total: 0, limit: 25, offset: 0 };
+    await route.fulfill({ json });
+  });
+  await signIn(page);
+  await page.goto(`/opportunities?opportunity=${synthetic.id}`);
+  await expect(page.getByRole("region", { name: "Opportunity detail" })).toBeVisible();
+  await expect(page.getByText("Not actionable", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Recheck books" })).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+    .toBe(true);
+});
