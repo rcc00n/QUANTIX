@@ -186,3 +186,58 @@ test("SYNTHETIC: delivery preview, history and explicit owner test stay separate
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
     .toBe(true);
 });
+
+test("SYNTHETIC: disabled AI explains actual selected evidence without arbitrary prompts", async ({
+  page,
+}) => {
+  let submitted: unknown;
+  await page.route("**/api/ai/status", (route) =>
+    route.fulfill({
+      json: {
+        enabled: false,
+        provider: "none",
+        external_calls_active: false,
+        deterministic_fallback: true,
+        billing: "No paid usage authorized",
+      },
+    }),
+  );
+  await page.route("**/api/paper/sessions", (route) =>
+    route.fulfill({
+      json: { items: [{ id, name: "SYNTHETIC research", classification: "RESEARCH" }] },
+    }),
+  );
+  await page.route("**/api/opportunities?**", (route) =>
+    route.fulfill({ json: { items: [], total: 0 } }),
+  );
+  await page.route("**/api/ai/explain", async (route) => {
+    submitted = route.request().postDataJSON();
+    await route.fulfill({
+      json: {
+        status: "disabled",
+        provider: "none",
+        reason: "AI_DISABLED",
+        cached: false,
+        deterministic: true,
+        numeric_inputs: { completed: "0", equity_cad: null },
+        source_id: id,
+        source_type: "paper_report",
+        attribution: { current_quote: false },
+        classification: "RESEARCH",
+        limitations: ["No financial decision authority"],
+        text: "SYNTHETIC retained evidence: completed simulations: 0. Equity unavailable; no value is invented.",
+      },
+    });
+  });
+  await signIn(page);
+  await page.goto("/ai-insights");
+  await expect(page.getByText("External AI disabled", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Explain selected evidence" }).click();
+  await expect(page.getByText("SYNTHETIC retained evidence:", { exact: false })).toBeVisible();
+  expect(submitted).toEqual({ session_id: id });
+  await expect(page.getByRole("textbox")).toHaveCount(0);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+    .toBe(true);
+});
