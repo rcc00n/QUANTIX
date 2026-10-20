@@ -727,3 +727,24 @@ async function openLiveAnalytics(page: Page) {
   expect(Number.isFinite(cutoff)).toBe(true);
   return { sessionId, cutoff, end };
 }
+
+// The compatibility response and the background download each generate a scoped archive.
+test("LIVE: analytics and legacy scoped ZIP expose genuine authenticated records", async ({
+  page,
+}) => {
+  test.setTimeout(60000);
+  test.skip(process.env.QUANTIX_LIVE_E2E !== "1", "Opt-in live backend verification");
+  const { sessionId, cutoff, end } = await openLiveAnalytics(page);
+  const query = new URLSearchParams({
+    session_id: sessionId,
+    start: new Date(cutoff - 60000).toISOString(),
+    end,
+  });
+  const zip = await page.request.get(`/api/reports/export?${query}`);
+  expect(zip.status()).toBe(200);
+  expect(zip.headers()["content-type"]).toContain("application/zip");
+  const bytes = await zip.body();
+  expect(bytes.subarray(0, 2).toString()).toBe("PK");
+  expect(zip.headers()["content-disposition"]).toContain("quantix-analysis-");
+  expect(zip.headers()["x-content-sha256"]).toBe(createHash("sha256").update(bytes).digest("hex"));
+});
