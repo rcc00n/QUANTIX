@@ -748,3 +748,24 @@ test("LIVE: analytics and legacy scoped ZIP expose genuine authenticated records
   expect(zip.headers()["content-disposition"]).toContain("quantix-analysis-");
   expect(zip.headers()["x-content-sha256"]).toBe(createHash("sha256").update(bytes).digest("hex"));
 });
+
+test("LIVE: selected scoped ZIP downloads as a browser attachment", async ({ page }) => {
+  test.setTimeout(60000);
+  test.skip(process.env.QUANTIX_LIVE_E2E !== "1", "Opt-in live backend verification");
+  const { cutoff } = await openLiveAnalytics(page);
+  const minute = Math.floor(cutoff / 60000) * 60000;
+  await page
+    .getByLabel("Report period start UTC")
+    .fill(new Date(minute - 60000).toISOString().slice(0, 16));
+  await page.getByLabel("Report period end UTC").fill(new Date(minute).toISOString().slice(0, 16));
+  await page.getByRole("button", { name: "Apply period", exact: true }).click();
+  await page.getByText("Advanced custom-filter export", { exact: true }).click();
+  const exportControl = page.getByRole("button", { name: "Export selected scope", exact: true });
+  const pendingDownload = page.waitForEvent("download");
+  await exportControl.click();
+  const downloaded = await pendingDownload;
+  expect(downloaded.suggestedFilename()).toMatch(/^quantix-analysis-.*\.zip$/);
+  const savedPath = await downloaded.path();
+  expect(savedPath).not.toBeNull();
+  expect(readFileSync(savedPath!).subarray(0, 2).toString()).toBe("PK");
+});
