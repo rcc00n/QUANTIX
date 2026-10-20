@@ -279,3 +279,74 @@ async def analytics(db, session, control, period, strategy_version_id=None):
     )
 
 
+async def series(db, session_id, period, limit=300):
+    conditions = [
+        PortfolioCheckpoint.session_id == session_id,
+        PortfolioCheckpoint.as_of >= period.start,
+        PortfolioCheckpoint.as_of < period.end,
+    ]
+    count = await db.scalar(
+        select(func.count()).select_from(PortfolioCheckpoint).where(*conditions)
+    )
+    if not count:
+        return {
+            "items": [],
+            "available_count": 0,
+            "limit": limit,
+            "sampling": "none",
+            "limitations": ["NO_RETAINED_VALUATION_IN_PERIOD"],
+        }
+    stride = max(1, (count - 1 + limit - 2) // (limit - 1))
+    ranked = (
+        select(
+            PortfolioCheckpoint.id,
+            func.row_number()
+            .over(order_by=(PortfolioCheckpoint.as_of, PortfolioCheckpoint.id))
+            .label("n"),
+        )
+        .where(*conditions)
+        .subquery()
+    )
+    rows = list(
+        await db.scalars(
+            select(PortfolioCheckpoint)
+            .join(ranked, PortfolioCheckpoint.id == ranked.c.id)
+            .where(((ranked.c.n - 1) % stride == 0) | (ranked.c.n == count))
+            .order_by(PortfolioCheckpoint.as_of, PortfolioCheckpoint.id)
+            .limit(limit)
+        )
+    )
+    items = [
+        {
+            "id": str(r.id),
+            "as_of": r.as_of.isoformat(),
+            **{k: r.payload.get(k) for k in SERIES_KEYS},
+            "valuation_complete": r.payload.get("valuation_complete"),
+            "valuation_verified": r.payload.get("valuation_verified"),
+            "limitations": r.payload.get("limitations", []),
+        }
+        for r in rows
+    ]
+    return safe_json(
+        {
+            "items": items,
+            "available_count": count,
+            "limit": limit,
+            "sampling": "all" if stride == 1 else f"every{stride}th plus final; no interpolation",
+            "max_drawdown_full_period_pct": await db.scalar(
+                select(
+                    func.max(
+                        cast(
+                            PortfolioCheckpoint.payload["drawdown_pct"].as_string(), Numeric(38, 18)
+                        )
+                    )
+                ).where(*conditions)
+            ),
+            "limitations": [
+                "Sampled charts may omit intra-sample extremes; full-period "
+                "metric uses all checkpoints."
+            ]
+            if stride > 1
+            else [],
+        }
+    )
