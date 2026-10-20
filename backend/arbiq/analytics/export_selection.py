@@ -94,3 +94,22 @@ class AnalysisSelection:
             changed = True
         return row, changed
 
+    @staticmethod
+    def trim_evidence(value):
+        removed = {
+            k: v
+            for k, v in value.items()
+            if k in {"buy_book", "sell_book", "fx_books", "raw_evidence"}
+        }
+        if not removed:
+            return value, False
+        result = {k: v for k, v in value.items() if k not in removed}
+        result["$quantix_omitted_raw"] = {
+            "keys": sorted(removed),
+            "source_sha256": hashlib.sha256(compact(removed).encode()).hexdigest(),
+            "reason": "REDUNDANT_RAW_WRAPPERS_SIZE_BUDGET",
+            "retained": (
+                "calculation_inputs, normalized source snapshots, all costs/budgets/decisions"
+            ),
+        }
+        return result, True
