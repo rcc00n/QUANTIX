@@ -600,6 +600,112 @@ test("SYNTHETIC: funding modes share a cutoff and creation retries the same immu
     .toBe(true);
 });
 
+test("SYNTHETIC: alert policy persists versions and authenticated polling reconnects", async ({
+  page,
+}) => {
+  const writes = await fixtures(page);
+  await signIn(page);
+  await page.getByRole("link", { name: "Settings", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Market coverage and alert policy" }),
+  ).toBeVisible();
+  await expect(page.getByText("Telegram delivery inactive", { exact: true })).toBeVisible();
+  await page.getByLabel("Normal minimum profit · CAD", { exact: true }).fill("12.3456789012345678");
+  await page.getByLabel("Enable Telegram notifications").check();
+  await page.getByLabel("Minimum Buy Capital · CAD", { exact: true }).fill("25.123456789012345678");
+  await page.getByLabel("Ordinary research notifications", { exact: true }).check();
+  await page.getByLabel("Quiet-hours ordinary delivery").selectOption("SILENT");
+  await page.getByLabel("Report time Edmonton").fill("10:15");
+  await page.getByLabel("Weekly owner summary").check();
+  await page.getByRole("button", { name: "Save terminal preferences" }).click();
+  await expect(page.getByText("Settings version 2 saved.", { exact: false })).toBeVisible();
+  expect(
+    (writes.find((x) => x.path === "terminal")?.body.settings as typeof preferences).notifications
+      .minimum_profit_cad,
+  ).toBe("12.3456789012345678");
+  const notifications = (
+    writes.find((x) => x.path === "terminal")?.body.settings as typeof preferences
+  ).notifications;
+  expect(notifications.minimum_buy_capital_cad).toBe("25.123456789012345678");
+  expect(notifications.minimum_return_pct).toBe("0.5");
+  expect(notifications.research_enabled).toBe(true);
+  expect(notifications.emergency_alerts).toBe(false);
+  expect(notifications.daily_report_time).toBe("10:15");
+  expect(notifications.weekly_report_enabled).toBe(true);
+  let requests = 0;
+  let disconnected = true;
+  const healthy = {
+    database: "connected",
+    schema_revision: "0009_terminal_settings",
+    scanner: { healthy: true, clock: { trusted: true, host_healthy: false } },
+    paper: { healthy: true },
+    feeds: [],
+    events: [],
+    telemetry: {},
+  };
+  await page.route("**/api/terminal/health", (route) => {
+    requests++;
+    // Settings also refreshes health after saving. Keep the outage active so a
+    // late Settings request cannot consume the target page's sole failure.
+    return disconnected
+      ? route.fulfill({ status: 503, json: { detail: "SYNTHETIC_TRANSIENT_DISCONNECT" } })
+      : route.fulfill({ json: healthy });
+  });
+  await page.getByRole("link", { name: "System Health", exact: true }).click();
+  await expect(page.getByText("SYNTHETIC_TRANSIENT_DISCONNECT", { exact: true })).toBeVisible();
+  disconnected = false;
+  await page.getByRole("button", { name: "Refresh live data" }).click();
+  await expect(page.getByText("0009_terminal_settings", { exact: true })).toBeVisible();
+  await expect(page.getByText("SYNTHETIC_TRANSIENT_DISCONNECT", { exact: true })).toHaveCount(0);
+  expect(requests).toBeGreaterThanOrEqual(2);
+
+  await test.step("actual polling backs off, pauses while hidden and reconnects automatically", async () => {
+    // A fresh component separates automatic reconnect from the manual refresh
+    // above. Only browser time and SYNTHETIC responses are controlled.
+    await page.goto("/overview");
+    await page.unroute("**/api/terminal/health");
+    await page.clock.install({ time: new Date("2026-01-02T00:00:00Z") });
+    await page.clock.pauseAt(new Date("2026-01-02T00:01:00Z"));
+    let outage = true;
+    const requestTimes: number[] = [];
+    await page.route("**/api/terminal/health", async (route) => {
+      requestTimes.push(await page.evaluate(() => performance.now()));
+      await route.fulfill(
+        outage
+          ? { status: 503, json: { detail: "SYNTHETIC_AUTOMATIC_RECONNECT" } }
+          : { json: healthy },
+      );
+    });
+    await page.goto("/system-health");
+    await expect(page.getByText("SYNTHETIC_AUTOMATIC_RECONNECT", { exact: true })).toBeVisible();
+    expect(requestTimes).toHaveLength(1);
+    await page.clock.runFor(29000);
+    expect(requestTimes).toHaveLength(1);
+    outage = false;
+    await page.clock.runFor(1000);
+    await expect(page.getByText("0009_terminal_settings", { exact: true })).toBeVisible();
+    await expect(page.getByText("SYNTHETIC_AUTOMATIC_RECONNECT", { exact: true })).toHaveCount(0);
+    expect(requestTimes).toHaveLength(2);
+    expect(requestTimes[1] - requestTimes[0]).toBe(30000);
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.clock.runFor(45000);
+    expect(requestTimes).toHaveLength(2);
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect.poll(() => requestTimes.length).toBe(3);
+    await page.clock.resume();
+  });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+    .toBe(true);
+});
+
 async function openLiveAnalytics(page: Page) {
   await signIn(page);
   await page
