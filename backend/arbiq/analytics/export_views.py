@@ -76,3 +76,49 @@ def readable_projection(table, row):
     return None
 
 
+async def write_coverage(db, archive, snapshot_time):
+    from arbiq.analytics.full_export import stream_rows
+
+    base, quote = aliased(Asset), aliased(Asset)
+    query = (
+        select(
+            Market.id.label("market_id"),
+            Exchange.slug.label("exchange"),
+            base.canonical_key.label("base_asset"),
+            base.symbol.label("base_symbol"),
+            quote.canonical_key.label("quote_asset"),
+            quote.symbol.label("quote_symbol"),
+            Market.native_symbol,
+            Market.active,
+            LatestMarketBook.state.label("retained_book_state"),
+            LatestMarketBook.received_at.label("last_book_received_at"),
+            LatestMarketBook.exchange_timestamp,
+            (LatestMarketBook.run_id == ExchangeHealth.run_id).label("in_reported_collector_run"),
+            CollectorRun.status.label("collector_run_status"),
+            CollectorRun.heartbeat_at,
+            ExchangeHealth.state.label("venue_health"),
+            ExchangeHealth.latency_ms,
+            func.extract("epoch", snapshot_time - LatestMarketBook.received_at).label(
+                "book_age_seconds"
+            ),
+        )
+        .join(Exchange, Exchange.id == Market.exchange_id)
+        .join(base, base.id == Market.base_asset_id)
+        .join(quote, quote.id == Market.quote_asset_id)
+        .outerjoin(LatestMarketBook, LatestMarketBook.market_id == Market.id)
+        .outerjoin(ExchangeHealth, ExchangeHealth.exchange_id == Market.exchange_id)
+        .outerjoin(CollectorRun, CollectorRun.id == ExchangeHealth.run_id)
+        .order_by(Market.id)
+    )
+    columns = [c.key for c in query.selected_columns]
+    return await archive.csv(
+        "exchanges/market_coverage.csv",
+        columns,
+        stream_rows(db, query),
+        auxiliary=True,
+        derived_from="markets/assets/exchanges/latest_market_books/exchange_health/collector_runs",
+        scope=(
+            "all retained spot listings; reported run membership and quote age "
+            "are separate from actionability"
+        ),
+    )
