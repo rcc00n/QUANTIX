@@ -769,3 +769,129 @@ test("LIVE: selected scoped ZIP downloads as a browser attachment", async ({ pag
   expect(savedPath).not.toBeNull();
   expect(readFileSync(savedPath!).subarray(0, 2).toString()).toBe("PK");
 });
+
+test("SYNTHETIC: partial valuation and transfer preview keep unavailable CAD distinct", async ({
+  page,
+}) => {
+  const writes = await fixtures(page);
+  await page.route(`**/api/paper/sessions/${research}/portfolio`, (route) =>
+    route.fulfill({
+      json: {
+        ...portfolio(true),
+        equity_cad: null,
+        valuation_status: "PARTIAL",
+        valued_subtotal_cad: "9000.123456789012345678",
+        unpriced_position_count: 1,
+        unpriced_balances: [
+          {
+            exchange: "synthetic_sell",
+            asset: "fiat:EUR",
+            quantity: "3.999999999999999999",
+            detail_reason: "EUR_CAD_CONVERSION_UNAVAILABLE",
+            reason: "CAD_MARK_UNAVAILABLE",
+          },
+        ],
+      },
+    }),
+  );
+  await page.route("**/api/paper/funding/catalog", (route) =>
+    route.fulfill({
+      json: {
+        exchanges: [],
+        assets: [
+          { id: "synthetic-asset", canonical_key: "asset:SYNTH", symbol: "SYNTH", kind: "crypto" },
+        ],
+      },
+    }),
+  );
+  let request: Record<string, unknown> | undefined;
+  await page.route(`**/api/paper/sessions/${research}/rebalance/preview`, (route) => {
+    request = route.request().postDataJSON();
+    return route.fulfill({
+      json: {
+        status: "RESEARCH_TRANSFER_ESTIMATE",
+        decision_at: "2026-01-02T11:00:00Z",
+        request: {
+          from_exchange: "synthetic_buy",
+          to_exchange: "synthetic_sell",
+          asset: "asset:SYNTH",
+          network: "SYNTHETIC_NET",
+        },
+        no_rebalance_benchmark: {
+          source_available_quantity: "5",
+          destination_available_quantity: "0",
+          destination_deficit: "3.123456789012345678",
+          fee_quantity: "0",
+        },
+        hypothetical_transfer: {
+          estimated_available_at: "2026-01-02T11:01:00Z",
+          source_debit_quantity: "3.223456789012345678",
+          fee_quantity: "0.1",
+          delivered_quantity_after_settlement: "3.123456789012345678",
+          remaining_destination_deficit: "0",
+          transfer_fee_cad: null,
+          conversion_cost_cad: "0",
+        },
+        blockers: [],
+        risks: ["OWNER_SYNTHETIC_ASSUMPTIONS"],
+      },
+    });
+  });
+  await signIn(page);
+  await page.getByRole("link", { name: "Portfolio", exact: true }).click();
+  await page.getByLabel("Paper portfolio").selectOption(research);
+  const value = page.getByRole("region", { name: "Portfolio valuation coverage" });
+  await expect(value.getByText("Partial valuation", { exact: true })).toBeVisible();
+  await expect(value.getByTitle("9000.123456789012345678 CAD")).toBeVisible();
+  await value.getByText("1 balances without complete marks", { exact: true }).click();
+  await expect(value.getByText(/EUR CAD CONVERSION UNAVAILABLE/)).toBeVisible();
+  await expect(
+    page
+      .locator(".paper-summary > div")
+      .filter({ hasText: "Current virtual equity" })
+      .getByText("Unavailable", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Virtual Funding Planner", exact: true }).click();
+  const planner = page.getByRole("region", { name: "Virtual Funding Planner" });
+  await planner.getByText("Research rebalance preview", { exact: true }).click();
+  await planner.getByLabel("Source exchange", { exact: true }).fill("synthetic_buy");
+  await planner.getByLabel("Destination exchange", { exact: true }).fill("synthetic_sell");
+  await planner
+    .getByRole("combobox", { name: "Canonical asset", exact: true })
+    .selectOption("asset:SYNTH");
+  await planner
+    .getByLabel("Target destination units", { exact: true })
+    .fill("3.123456789012345678");
+  await planner.getByText("Network and cost assumptions", { exact: true }).click();
+  await planner.getByLabel("Network", { exact: true }).fill("SYNTHETIC_NET");
+  await planner
+    .getByRole("combobox", { name: "Source withdrawal", exact: true })
+    .selectOption("available");
+  await planner
+    .getByRole("combobox", { name: "Destination deposit", exact: true })
+    .selectOption("available");
+  await planner.getByLabel("Withdrawal fee · asset units", { exact: true }).fill("0.1");
+  await planner.getByLabel("Network fee · asset units", { exact: true }).fill("0");
+  await planner.getByLabel("Settlement time · seconds", { exact: true }).fill("60");
+  await planner.getByRole("button", { name: "Preview rebalance", exact: true }).click();
+  const transfer = planner.getByRole("table", { name: "Rebalance versus no transfer" });
+  await expect(
+    transfer
+      .getByRole("row")
+      .filter({ hasText: "CAD value of fees" })
+      .getByText("Unavailable", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    transfer
+      .getByRole("row")
+      .filter({ hasText: "Source debit" })
+      .getByTitle("3.223456789012345678 SYNTH"),
+  ).toBeVisible();
+  expect(request).toMatchObject({
+    asset: "asset:SYNTH",
+    target_destination_quantity: "3.123456789012345678",
+    network_fee_quantity: "0",
+    settlement_seconds: 60,
+  });
+  expect(writes.some((item) => item.path.endsWith("/rebalance"))).toBe(false);
+});
