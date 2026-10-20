@@ -112,3 +112,20 @@ class EvidenceStore:
         self.db.close()
 
 
+def decode(value, lookup):
+    """Reference implementation; lookup(id) returns the stored JSON node text."""
+
+    def node(packed):
+        if not isinstance(packed, dict):
+            return packed
+        if set(packed) == {"r"}:
+            return node(json.loads(lookup(packed["r"])))
+        if set(packed) == {"m"}:
+            return {k: node(v) for k, v in packed["m"].items()}
+        if set(packed) == {"a"}:
+            return [node(v) for v in packed["a"]]
+        raise ValueError("Invalid typed evidence node")
+
+    if isinstance(value, dict) and value.get("$quantix_codec") == CODEC:
+        return node(value["value"])
+    return value
