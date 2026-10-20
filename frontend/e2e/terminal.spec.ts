@@ -346,6 +346,70 @@ test("SYNTHETIC: negative research analytics preserve exact values, zero win-rat
     .toBe(true);
 });
 
+test("SYNTHETIC: planner explains exact missing inventory and creates independent funding", async ({
+  page,
+}) => {
+  const writes = await fixtures(page);
+  await signIn(page);
+  await page.getByRole("link", { name: "Portfolio", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Portfolio accounting" })).toBeVisible();
+  const equity = page.locator(".paper-summary > div").filter({ hasText: "Current virtual equity" });
+  await expect(equity.getByTitle("10000 CAD")).toBeVisible();
+  await page.route(`**/api/paper/sessions/${research}/portfolio`, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await route.fulfill({ json: portfolio(true) });
+  });
+  await page.getByLabel("Paper portfolio").selectOption(research);
+  await expect(equity.getByText("Unavailable", { exact: true })).toBeVisible();
+  await expect(equity.getByTitle("9850.123456789012345678 CAD")).toBeVisible();
+  await page.getByRole("button", { name: "Virtual Funding Planner", exact: true }).click();
+  const planner = page.getByRole("region", { name: "Virtual Funding Planner" });
+  await expect(planner).toBeVisible();
+  await planner
+    .locator("summary")
+    .filter({ hasText: "Current virtual funds and route constraints" })
+    .click();
+  await planner.locator(".funding-route > summary").first().click();
+  await expect(
+    planner.locator(".funding-requirement strong").getByTitle("3.123456789012345678"),
+  ).toBeVisible();
+  await expect(planner.getByText("MISSING INVENTORY", { exact: true })).toBeVisible();
+  await expect(planner.getByText("Non-positive market projection", { exact: true })).toBeVisible();
+  await expect(planner.getByTitle("-0.123456789012345678 CAD")).toBeVisible();
+  await page.getByRole("button", { name: "Propose virtual funding" }).click();
+  await expect(page.getByRole("table", { name: "Proposed funding allocations" })).toBeVisible();
+  await page.getByRole("button", { name: "Create independent experiment" }).click();
+  await expect(page.getByText(/Created independent research experiment/)).toBeVisible();
+  const create = writes.find((x) => x.path.endsWith("/experiments"));
+  expect(create?.body.proposal_id).toBe(proposal);
+  expect(typeof create?.body.idempotency_key).toBe("string");
+  expect(create?.body.capital_cad).toBe("10000");
+  await expect(planner.getByText("Portfolio created from this proposal.")).toBeVisible();
+  await expect(planner.getByRole("button", { name: "Create independent experiment" })).toHaveCount(
+    0,
+  );
+  expect(writes.some((x) => x.path.includes("/rebalance"))).toBe(false);
+  await page.getByRole("button", { name: "New portfolio", exact: true }).click();
+  await page
+    .getByRole("combobox", { name: "Classification", exact: true })
+    .selectOption("VALIDATED");
+  await page.getByText("Set initial CAD inventories", { exact: true }).click();
+  await page.getByRole("button", { name: "Add allocation", exact: true }).click();
+  const rate = page.getByLabel("Allocation 1 CAD rate", { exact: true });
+  await expect(rate).toHaveValue("1");
+  await expect(rate).toHaveAttribute("readonly", "");
+  await page
+    .getByRole("combobox", { name: "Classification", exact: true })
+    .selectOption("RESEARCH");
+  await page.getByLabel("Portfolio name", { exact: true }).fill("SYNTHETIC prefunded run");
+  await page.getByLabel("Starting equity · CAD", { exact: true }).fill("50000.000000000000000001");
+  await page.getByRole("button", { name: "Open funding planner", exact: true }).click();
+  await expect(planner.getByLabel("Funding capital CAD", { exact: true })).toHaveValue(
+    "50000.000000000000000001",
+  );
+  expect(writes.some((item) => item.path.endsWith("/sessions"))).toBe(false);
+});
+
 async function openLiveAnalytics(page: Page) {
   await signIn(page);
   await page
