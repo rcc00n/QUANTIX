@@ -50,3 +50,24 @@ def period_for(session, start, end, now):
     return ReportPeriod(start=start, end=end)
 
 
+async def owned_session(db, user_id, session_id, strategy_version_id=None):
+    row = (
+        await db.execute(
+            select(PaperSession, PaperControl)
+            .join(PaperControl)
+            .where(PaperSession.id == session_id, PaperSession.user_id == user_id)
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(404, "Paper portfolio not found")
+    if strategy_version_id is not None:
+        version = await db.scalar(
+            select(StrategyVersion).where(
+                StrategyVersion.id == strategy_version_id, StrategyVersion.user_id == user_id
+            )
+        )
+        if version is None:
+            raise HTTPException(404, "Strategy version not found")
+    return row
+
+
