@@ -410,6 +410,196 @@ test("SYNTHETIC: planner explains exact missing inventory and creates independen
   expect(writes.some((item) => item.path.endsWith("/sessions"))).toBe(false);
 });
 
+test("SYNTHETIC: funding modes share a cutoff and creation retries the same immutable proposal", async ({
+  page,
+}) => {
+  await fixtures(page);
+  const comparisonTime = "2026-01-02T11:00:00Z";
+  const capital = "10000.123456789012345678";
+  const modes = ["COVERAGE", "LIQUIDITY_WEIGHTED", "ROUTE_OPTIMIZED", "DIVERSIFIED_HYBRID"];
+  const plans = modes.map((policy, i) => ({
+    id: `cccccccc-0000-4000-8000-00000000000${i + 1}`,
+    policy,
+    capital_cad: capital,
+    eligibility: "RESEARCH",
+    total_cad: capital,
+    as_of: comparisonTime,
+    expires_at: "2026-01-02T11:05:00Z",
+    trade_amount_cad: "500",
+    unallocated_cad: "0",
+    limits: {},
+    limitations: [],
+    reasons: i === 1 ? ["MAXIMUM_RESERVE_EXCEEDED"] : [],
+    feasible: i !== 1,
+    creatable: i !== 0 && i !== 1,
+    funded_route_count: 4 + i,
+    simultaneous_funded_route_count: 2,
+    median_funded_acquisition_cad: "505.999999999999999999",
+    route_coverage: { considered_routes: 10 },
+    evidence: [{ evaluation_id: "synthetic-evaluation-at-cutoff" }],
+    requirements: [
+      {
+        route_id: "synthetic-funded-route",
+        asset: "SYNTH",
+        buy_exchange: "synthetic_buy",
+        sell_exchange: "synthetic_sell",
+        required: [],
+        funded: true,
+      },
+    ],
+    route_capacity: [
+      {
+        route_id: "synthetic-funded-route",
+        maximum_funded_acquisition_cad: "505.999999999999999999",
+        maximum_observed_acquisition_cad: "505.999999999999999999",
+        projected_net_profit_cad: "-1",
+        target_pinned: {
+          acquisition_cad: "500",
+          net_profit_cad: "-0.5",
+          deficits: [],
+          projected_costs: {
+            fees_cad: "2.123456789012345678",
+            fx_drag_cad: "0.123456789012345678",
+            slippage_reserve_cad: "1.050000000000000001",
+            rebalancing_cad: null,
+          },
+        },
+        limiting_constraints: ["NON_POSITIVE_NET_PROJECTION"],
+        fundable_with_reallocation: false,
+        actionable: false,
+      },
+    ],
+    allocation_summary: {
+      allocated_cad: capital,
+      invested_cad: "9000.123456789012345678",
+      reserve_cad: "1000",
+      reserve_pct: "9.9998765",
+      stablecoin_cad: "675",
+      stablecoin_pct: "6.749917",
+      funded_venues: 2,
+      funded_cells: 3,
+      by_asset: {
+        "asset:SYNTH": { cad_value: "9000.123456789012345678", share_pct: "90.0001235" },
+      },
+      by_exchange: { synthetic_sell: { cad_value: "4000", share_pct: "39.9995" } },
+    },
+    coverage_by_size: [
+      {
+        trade_amount_cad: "500",
+        funded_alternative_routes: 7,
+        simultaneous_funded_routes: 2,
+        profitable_funded_routes: 0,
+        considered_routes: 10,
+      },
+    ],
+    allocations: [
+      {
+        exchange: "synthetic_sell",
+        asset: "asset:SYNTH",
+        quantity: "3.123456789012345678",
+        cad_rate: "277.500000000000000001",
+        cad_value: "9000.123456789012345678",
+      },
+    ],
+  }));
+  const compareWrites: unknown[] = [];
+  const creates: Record<string, unknown>[] = [];
+  await page.route("**/api/paper/funding/compare", async (route) => {
+    compareWrites.push(route.request().postDataJSON());
+    await route.fulfill({ json: { as_of: comparisonTime, proposals: plans } });
+  });
+  await page.route("**/api/paper/funding/experiments", async (route) => {
+    creates.push(route.request().postDataJSON());
+    if (creates.length === 1)
+      await route.fulfill({ status: 503, json: { detail: "SYNTHETIC retryable reply" } });
+    else await route.fulfill({ json: { id: research, reused: true } });
+  });
+  await signIn(page);
+  await page.getByRole("link", { name: "Portfolio", exact: true }).click();
+  await page.getByRole("button", { name: "Virtual Funding Planner", exact: true }).click();
+  const planner = page.getByRole("region", { name: "Virtual Funding Planner" });
+  await planner.getByLabel("Funding capital CAD").fill(capital);
+  await planner.getByLabel("Funding target trade budget CAD").fill("500");
+  await planner.getByText("Limits, reserve and allowed markets", { exact: true }).click();
+  await planner.getByLabel("Minimum position · CAD", { exact: true }).fill("60.000000000000000001");
+  await planner.getByRole("button", { name: "Compare all modes", exact: true }).click();
+  await expect(
+    planner.getByText("Shared evidence cutoff 2026-01-02 11:00:00 UTC.", { exact: false }),
+  ).toBeVisible();
+  expect(compareWrites).toMatchObject([
+    {
+      capital_cad: capital,
+      trade_amount_cad: "500",
+      min_cell_cad: "60.000000000000000001",
+      eligibility: "RESEARCH",
+    },
+  ]);
+  expect(compareWrites[0]).not.toHaveProperty("policy");
+  await expect(
+    planner.getByRole("table", { name: "Funding mode comparison" }).getByRole("row"),
+  ).toHaveCount(5);
+  await expect(planner.getByRole("button", { name: "Create independent experiment" })).toHaveCount(
+    0,
+  );
+  await planner.getByRole("button", { name: "Baseline route coverage", exact: true }).click();
+  await expect(
+    planner.getByText("This study proposal cannot fund a new portfolio.", { exact: false }),
+  ).toBeVisible();
+  await expect(planner.getByRole("button", { name: "Create independent experiment" })).toHaveCount(
+    0,
+  );
+  await planner.getByRole("button", { name: "Liquidity weighted", exact: true }).click();
+  await expect(planner.getByText("MAXIMUM RESERVE EXCEEDED", { exact: true })).toBeVisible();
+  await expect(planner.getByRole("button", { name: "Create independent experiment" })).toHaveCount(
+    0,
+  );
+  await planner.getByRole("button", { name: "Diversified hybrid", exact: true }).click();
+  const selected = planner.getByRole("region", { name: "Selected funding proposal" });
+  await expect(
+    selected
+      .getByRole("table", { name: "Target trade sizes" })
+      .getByRole("row")
+      .nth(1)
+      .getByRole("cell")
+      .last(),
+  ).toHaveText("0");
+  await expect(
+    selected
+      .getByRole("table", { name: "Proposed funding allocations" })
+      .getByTitle("277.500000000000000001"),
+  ).toBeVisible();
+  await selected
+    .getByText("Both-leg requirements and funding constraints", { exact: true })
+    .click();
+  await selected.locator(".funding-route > summary").click();
+  const costs = selected.getByRole("group", { name: "Expected route costs in CAD" });
+  await expect(costs.getByText("Expected costs · Pinned market size")).toBeVisible();
+  await expect(costs.getByTitle("2.123456789012345678 CAD")).toBeVisible();
+  await expect(costs.getByTitle("1.050000000000000001 CAD")).toBeVisible();
+  await expect(costs.getByText("FX drag (reflected in conversion)")).toBeVisible();
+  await expect(costs.getByTitle("0.123456789012345678 CAD")).toBeVisible();
+  await expect(costs.getByText("Unavailable", { exact: true })).toBeVisible();
+  await selected.getByText("Inspect retained allocation evidence", { exact: true }).click();
+  await expect(selected.getByText(/synthetic-evaluation-at-cutoff/)).toBeVisible();
+  await planner.getByRole("button", { name: "Create independent experiment" }).click();
+  await expect(planner.getByText("SYNTHETIC retryable reply", { exact: true })).toBeVisible();
+  await planner.getByRole("button", { name: "Route optimized", exact: true }).click();
+  await planner.getByRole("button", { name: "Diversified hybrid", exact: true }).click();
+  await planner.getByRole("button", { name: "Retry experiment creation", exact: true }).click();
+  await expect(planner.getByText(/Existing research experiment/)).toBeVisible();
+  expect(creates).toHaveLength(2);
+  expect(creates[0]).toEqual(creates[1]);
+  expect(creates[0]).toMatchObject({
+    proposal_id: plans[3].id,
+    capital_cad: capital,
+    idempotency_key: `funding:${plans[3].id}`,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
+    .toBe(true);
+});
+
 async function openLiveAnalytics(page: Page) {
   await signIn(page);
   await page
