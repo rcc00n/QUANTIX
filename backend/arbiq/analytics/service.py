@@ -71,3 +71,42 @@ async def owned_session(db, user_id, session_id, strategy_version_id=None):
     return row
 
 
+async def reconciliation(db, session_id, end):
+    entries = (
+        select(
+            LedgerEntry.journal_id,
+            VirtualAccount.asset_id,
+            func.sum(LedgerEntry.quantity).label("quantity"),
+        )
+        .join(VirtualAccount, VirtualAccount.id == LedgerEntry.account_id)
+        .join(Journal, Journal.id == LedgerEntry.journal_id)
+        .where(Journal.session_id == session_id, Journal.effective_at < end)
+        .group_by(LedgerEntry.journal_id, VirtualAccount.asset_id)
+        .subquery()
+    )
+    unbalanced = await db.scalar(
+        select(func.count()).select_from(entries).where(entries.c.quantity != 0)
+    )
+    accounts = (
+        select(VirtualAccount.id, func.sum(LedgerEntry.quantity).label("quantity"))
+        .join(LedgerEntry, LedgerEntry.account_id == VirtualAccount.id)
+        .join(Journal, Journal.id == LedgerEntry.journal_id)
+        .where(
+            Journal.session_id == session_id,
+            Journal.effective_at < end,
+            VirtualAccount.role.in_(("available", "reserved")),
+        )
+        .group_by(VirtualAccount.id)
+        .subquery()
+    )
+    negative = await db.scalar(
+        select(func.count()).select_from(accounts).where(accounts.c.quantity < 0)
+    )
+    return {
+        "scope": "all session journals effective before cutoff, including opening history",
+        "balanced": unbalanced == 0 and negative == 0,
+        "unbalanced_journal_assets": unbalanced,
+        "negative_inventory_accounts": negative,
+    }
+
+
