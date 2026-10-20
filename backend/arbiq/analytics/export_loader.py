@@ -91,3 +91,35 @@ class ExportReader:
         self.zip.close()
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("archive")
+    parser.add_argument("--dataset", required=True)
+    parser.add_argument("--output")
+    args = parser.parse_args()
+    reader = ExportReader(args.archive)
+    try:
+        if args.output:
+            with open(args.output, "w", encoding="utf-8", newline="") as stream:
+                writer = None
+                for row in reader.rows(args.dataset):
+                    if writer is None:
+                        writer = csv.DictWriter(stream, fieldnames=list(row))
+                        writer.writeheader()
+                    writer.writerow(
+                        {
+                            k: json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+                            if isinstance(v, (dict, list))
+                            else v
+                            for k, v in row.items()
+                        }
+                    )
+        else:
+            count = sum(1 for _ in reader.rows(args.dataset))
+            print(json.dumps({"dataset": args.dataset, "decoded_rows": count}))
+    finally:
+        reader.close()
+
+
+if __name__ == "__main__":
+    main()
