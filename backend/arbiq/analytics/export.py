@@ -154,6 +154,35 @@ def json_text(value):
     return json.dumps(sanitize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def cell(value, *, financial=False):
+    if value is None:
+        return ""
+    if financial and isinstance(value, (float, bool)):
+        raise ValueError("Financial export fields require exact decimals, never binary floats")
+    if isinstance(value, (dict, list, tuple)):
+        return json_text(value)
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if financial and isinstance(value, str):
+        parsed = Decimal(value)
+        if not parsed.is_finite():
+            raise ValueError("Non-finite financial export value")
+        return format(parsed, "f")
+    if isinstance(value, (datetime, UUID)):
+        return exact(value)
+    value = str(sanitize(value))
+    # Numeric strings retain their real signs; text cannot execute spreadsheet formulas.
+    if value[:1] in ("=", "+", "-", "@", "\t", "\r", "\n"):
+        try:
+            parsed = Decimal(value)
+            numeric = parsed.is_finite()
+        except Exception:
+            numeric = False
+        if not numeric:
+            value = "'" + value
+    return value
+
+
 async def records(db, query):
     result = await db.stream_scalars(query.execution_options(yield_per=BATCH_ROWS))
     async for row in result:
