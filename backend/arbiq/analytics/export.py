@@ -183,6 +183,60 @@ def cell(value, *, financial=False):
     return value
 
 
+def column_definition(name):
+    meanings = {
+        "id": "Stable source-record UUID; join to corresponding *_id fields.",
+        "record_json": "Complete sanitized retained source fields; decimals stay exact strings.",
+        "quantity": "Exact units of the joined asset, never CAD unless the asset is CAD.",
+        "price": "Quote-currency units per base-asset unit; simulated modeled execution price.",
+        "status": "Recorded lifecycle state; cutoff-derived/unknown states are explicitly labeled.",
+        "reason": "Recorded reason code/text, not an AI conclusion.",
+        "account_role": "available/reserved inventory or equity/expense counteraccount.",
+        "role": "available/reserved inventory or equity/expense counteraccount.",
+        "side": "buy consumes quote/acquires base; sell consumes base/acquires quote.",
+        "reaction_delay_ms": "Configured counterfactual human reaction delay, milliseconds.",
+        "calculation_version": "Original deterministic calculation version used by this record.",
+        "source": "Recorded data/assumption origin; not an eligibility guarantee.",
+        "quality": "Retained data-quality classification at observation time.",
+        "asset": "Asset symbol or UUID; join assets.csv for canonical identity and units.",
+        "exchange": "Exchange slug; public data access does not establish trading eligibility.",
+        "fee_asset": "Fee-asset UUID; join assets.csv for exact currency identity.",
+        "quote_asset": "Quote-asset symbol; canonical identity comes from linked market metadata.",
+        "fee_quantity": "Fee amount in fee_asset units, separately disclosed from CAD value.",
+        "bids": "Retained [price,quantity] arrays, descending price; price in quote/base units.",
+        "asks": "Retained [price,quantity] arrays, ascending price; price in quote/base units.",
+        "canonical_key": "Normalized identity; wrapped/ambiguous assets stay distinct.",
+        "native_symbol": "Exchange-native symbol; text never proves asset equivalence.",
+    }
+    if name in meanings:
+        return meanings[name]
+    if name.endswith("_json") or name in (
+        "details",
+        "provenance",
+        "evidence",
+        "payload",
+        "settings",
+        "assumptions",
+        "metadata_json",
+    ):
+        return (
+            "Sanitized structured source evidence; IDs, exact units and limitations are retained."
+        )
+    if name.endswith("_id"):
+        return "Stable linked record UUID; corresponding raw reconstruction table is included."
+    if name.endswith("_at") or name == "as_of":
+        return "ISO-8601 UTC timestamp; source/receipt/effective time remain distinct."
+    if name.endswith("_cad") or name == "cad_value":
+        return "Exact Canadian dollars; empty means unavailable, never zero."
+    if name.endswith("_pct"):
+        return "Exact percentage points (0.5 means0.5%, not50%)."
+    if name.endswith("_rate") or name == "rate":
+        return "Exact fractional fee rate or explicitly joined FX quote units per base unit."
+    if name.endswith("_quantity"):
+        return "Exact units of the referenced asset; inspect asset/market joins."
+    return "Retained named source-model field; complete context is preserved in record_json."
+
+
 async def records(db, query):
     result = await db.stream_scalars(query.execution_options(yield_per=BATCH_ROWS))
     async for row in result:
