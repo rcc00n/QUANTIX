@@ -192,3 +192,89 @@ class FullArchive:
             if shutil.disk_usage(self.path.parent).free < MIN_FREE_BYTES:
                 raise RuntimeError("DISK_RESERVE: export stopped to preserve6GiB")
 
+    async def csv(self, name, columns, rows, **metadata):
+        digest, semantic = hashlib.sha256(), hashlib.sha256()
+        size = count = reduced = 0
+        temporal = {}
+        json_columns = list(metadata.get("json_columns", ()))
+        table = metadata.get("source_table")
+        with self.zip.open(name, "w", force_zip64=True) as target:
+
+            def emit(batch, header=False):
+                nonlocal size, reduced
+                stream = io.StringIO(newline="")
+                writer = csv.writer(stream, lineterminator="\r\n")
+                if header:
+                    writer.writerow(columns)
+                for original in batch:
+                    row = public_record(original)
+                    projection = readable_projection(table, row)
+                    if projection is not None:
+                        self.store.projection(*projection)
+                    if self.selection and table:
+                        row, changed = self.selection.apply(table, row, json_columns)
+                        reduced += int(changed)
+                    semantic.update(
+                        (compact({k: row.get(k) for k in json_columns}) + "\n").encode()
+                    )
+                    values = []
+                    for column in columns:
+                        value = row.get(column)
+                        if column in json_columns and value is not None:
+                            if table in CODED_TABLES:
+                                value = self.store.encode(value)
+                            values.append(compact(value))
+                        elif isinstance(value, (dict, list)):
+                            values.append(compact(value))
+                        else:
+                            values.append(cell(value))
+                    writer.writerow(values)
+                    for key, value in original.items():
+                        if isinstance(value, datetime):
+                            limits = temporal.setdefault(key, [value, value])
+                            limits[0], limits[1] = min(limits[0], value), max(limits[1], value)
+                data = stream.getvalue().encode("utf-8")
+                digest.update(data)
+                size += len(data)
+                self.bytes += len(data)
+                target.write(data)
+                self.check()
+
+            await sequential_thread(emit, [], True)
+            batch = []
+            try:
+                async for row in rows:
+                    batch.append(row)
+                    count += 1
+                    if len(batch) == BATCH:
+                        await sequential_thread(emit, batch)
+                        batch = []
+                        await self.progress(name, count, self.bytes)
+                if batch:
+                    await sequential_thread(emit, batch)
+            finally:
+                if hasattr(rows, "aclose"):
+                    await rows.aclose()
+        entry = {
+            "name": name,
+            "sha256": digest.hexdigest(),
+            "bytes": size,
+            "rows": count,
+            "columns": list(columns),
+            "status": "complete",
+            "included_rows": count,
+            "omitted_rows": 0,
+            "complete_raw_rows": count - reduced,
+            "raw_payload_reduced_rows": reduced,
+            "json_semantic_sha256": semantic.hexdigest(),
+            "json_encoding": CODEC if table in CODED_TABLES else "plain JSON",
+            "empty_state": "No retained records in this scope" if not count else None,
+            "timestamp_ranges": {
+                k: {"min": exact(v[0]), "max": exact(v[1])} for k, v in temporal.items()
+            },
+            **metadata,
+        }
+        self.files.append(entry)
+        await self.progress(name, count, self.bytes, completed=not metadata.get("auxiliary", False))
+        return entry
+
