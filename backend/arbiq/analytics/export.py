@@ -113,7 +113,25 @@ def sanitize(value):
     return value
 
 
+def record(row):
+    # SQLAlchemy attributes are extracted on the event-loop thread. Nested public
+    # evidence stays referenced until one bounded worker serializes this row.
+    result = {}
+    for column in row.__table__.columns:
+        value = getattr(row, column.name)
+        result[column.name] = (
+            exact(value) if isinstance(value, (Decimal, datetime, UUID)) else value
+        )
+    return result
+
+
 def json_text(value):
     return json.dumps(sanitize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+async def records(db, query):
+    result = await db.stream_scalars(query.execution_options(yield_per=BATCH_ROWS))
+    async for row in result:
+        yield record(row)
 
 
