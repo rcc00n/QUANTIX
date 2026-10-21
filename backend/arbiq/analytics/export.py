@@ -237,6 +237,63 @@ def column_definition(name):
     return "Retained named source-model field; complete context is preserved in record_json."
 
 
+class Archive:
+    def __init__(self, path):
+        self.zip = zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=1)
+        self.files = []
+        self.total_bytes = 0
+
+    async def csv(self, name, columns, rows):
+        digest = hashlib.sha256()
+        size = count = 0
+        line = io.StringIO(newline="")
+        writer = csv.writer(line, lineterminator="\r\n")
+        with self.zip.open(name, "w") as target:
+
+            def emit(values, *, header=False):
+                nonlocal size
+                if not header:
+                    values = [
+                        cell(
+                            values.get(column),
+                            financial=(
+                                column.endswith(("_cad", "_pct", "_quantity", "_rate"))
+                                or column in ("quantity", "price", "rate", "quote_notional")
+                            ),
+                        )
+                        for column in columns
+                    ]
+                line.seek(0)
+                line.truncate(0)
+                writer.writerow(values)
+                data = line.getvalue().encode("utf-8")
+                size += len(data)
+                self.total_bytes += len(data)
+                if self.total_bytes > MAX_UNCOMPRESSED_BYTES:
+                    raise HTTPException(
+                        413, "Export exceeds256MiB; select a shorter reporting period"
+                    )
+                digest.update(data)
+                target.write(data)
+
+            await sequential_thread(emit, columns, header=True)
+            async for row in rows:
+                count += 1
+                if count > MAX_ROWS_PER_FILE:
+                    raise HTTPException(
+                        413, "Export exceeds100000rows/file; select a shorter period"
+                    )
+                await sequential_thread(emit, row)
+        self.files.append(
+            {
+                "name": name,
+                "sha256": digest.hexdigest(),
+                "bytes": size,
+                "records": count,
+                "columns": list(columns),
+            }
+        )
+
 async def records(db, query):
     result = await db.stream_scalars(query.execution_options(yield_per=BATCH_ROWS))
     async for row in result:
