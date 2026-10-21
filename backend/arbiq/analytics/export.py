@@ -125,6 +125,31 @@ def record(row):
     return result
 
 
+async def sequential_thread(function, *args, **kwargs):
+    """Drain one worker before cancellation may close its ZIP member or file.
+
+    No queue/fanout is created: callers await every row before fetching the next.
+    Shield alone is insufficient because cancellation would otherwise close the
+    member while a still-running thread writes to it.
+    """
+    job = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(job)
+    except asyncio.CancelledError:
+        while not job.done():
+            try:
+                await asyncio.shield(job)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        try:
+            job.result()
+        except BaseException:
+            pass
+        raise
+
+
 def json_text(value):
     return json.dumps(sanitize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
