@@ -294,6 +294,34 @@ class Archive:
             }
         )
 
+    def _text(self, name, value):
+        data = value.encode("utf-8")
+        self.total_bytes += len(data)
+        if self.total_bytes > MAX_UNCOMPRESSED_BYTES:
+            raise HTTPException(413, "Export exceeds256MiB; shorten the reporting period")
+        self.zip.writestr(name, data)
+        self.files.append(
+            {
+                "name": name,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "bytes": len(data),
+                "records": None,
+            }
+        )
+
+    async def text(self, name, value):
+        await sequential_thread(self._text, name, value)
+
+    async def json(self, name, value):
+        def write():
+            self._text(name, json.dumps(sanitize(value), ensure_ascii=False, indent=2))
+
+        await sequential_thread(write)
+
+    def close(self):
+        self.zip.close()
+
+
 async def records(db, query):
     result = await db.stream_scalars(query.execution_options(yield_per=BATCH_ROWS))
     async for row in result:
