@@ -38,3 +38,25 @@ async def session_analytics(
     return value
 
 
+@router.get("/analytics/sessions/{session_id}/series")
+async def session_series(
+    session_id: UUID,
+    request: Request,
+    db: DB,
+    user: AuthenticatedUser,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = Query(default=300, ge=2, le=500),
+):
+    session, control = await owned_session(db, user.id, session_id)
+    now, clock = await utc_reference(request)
+    period = period_for(session, start, end, now)
+    return {
+        **await series(db, session.id, period, limit),
+        "session_id": str(session.id),
+        "classification": control.classification,
+        "period": period.model_dump(mode="json"),
+        "clock": clock,
+    }
+
+
