@@ -161,3 +161,34 @@ CODED_TABLES = {
 }
 
 
+class FullArchive:
+    def __init__(self, path, progress, *, analysis=False):
+        self.path, self.progress = Path(path), progress
+        self.zip = zipfile.ZipFile(
+            path, "w", zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True
+        )
+        self.files = []
+        self.bytes = 0
+        self.last_check = 0.0
+        self.store = EvidenceStore(self.path.with_suffix(".evidence.sqlite"))
+        self.selection = AnalysisSelection(self.store) if analysis else None
+        self.temp_peak = self.store.path.stat().st_size
+
+    def check(self):
+        if self.path.with_suffix(".cancel").exists():
+            raise ExportCancelled("Export cancelled by owner")
+        if self.bytes > MAX_OUTPUT_BYTES:
+            raise ExportBudgetExceeded("OUTPUT_SAFETY_LIMIT: bounded export output exhausted")
+        if self.zip.fp.tell() > MAX_ZIP_BYTES - 131072:
+            raise ExportBudgetExceeded(
+                "ZIP_BUDGET: measured compressed size requires analysis fallback"
+            )
+        usage = self.store.path.stat().st_size + self.path.stat().st_size
+        self.temp_peak = max(self.temp_peak, usage)
+        if usage > MAX_TEMP_BYTES:
+            raise ExportBudgetExceeded("TEMP_BUDGET: scratch storage requires analysis fallback")
+        if time.monotonic() - self.last_check > 2:
+            self.last_check = time.monotonic()
+            if shutil.disk_usage(self.path.parent).free < MIN_FREE_BYTES:
+                raise RuntimeError("DISK_RESERVE: export stopped to preserve6GiB")
+
