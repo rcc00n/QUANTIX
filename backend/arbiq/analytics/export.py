@@ -86,3 +86,34 @@ def exact(value):
     return value
 
 
+@lru_cache(maxsize=2048)
+def secret_key(key):
+    normalized = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", key.replace("-", "_"))
+    normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", normalized)
+    return bool(SECRET_KEYS.search(normalized))
+
+
+def sanitize(value):
+    """Retain reproducible public evidence, redact credential-bearing arbitrary metadata."""
+    # Normalize each node exactly once. Calling recursive exact() here used to
+    # recopy every descendant at every nesting level of large retained evidence.
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, (datetime, UUID)):
+        return exact(value)
+    if isinstance(value, dict):
+        return {
+            str(k): "[REDACTED]" if secret_key(str(k)) else sanitize(v) for k, v in value.items()
+        }
+    if isinstance(value, (tuple, list)):
+        return [sanitize(x) for x in value]
+    if isinstance(value, str):
+        value = SECRET_QUERY.sub(r"\1=[REDACTED]", value)
+        return URL_USERINFO.sub(r"\1[REDACTED]@", value)
+    return value
+
+
+def json_text(value):
+    return json.dumps(sanitize(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
