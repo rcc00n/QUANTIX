@@ -139,3 +139,25 @@ def scope_for(table, owner, seen=frozenset()):
     return None
 
 
+def dataset_query(table, owner):
+    columns = [c for c in table.c if c.name not in PRIVATE_COLUMNS]
+    query = select(*columns)
+    scope = scope_for(table, owner)
+    if scope is not None:
+        query = query.where(scope)
+    # PK ordering uses existing indexes and permits a bounded server-side cursor.
+    return columns, query.order_by(*table.primary_key.columns), scope is not None
+
+
+CODED_TABLES = {
+    "arbitrage_evaluations",
+    "arbitrage_routes",
+    "portfolio_checkpoints",
+    "market_quality_events",
+    "market_data_samples",
+    "market_observations",
+    "order_book_snapshots",
+    "latest_market_books",
+}
+
+
