@@ -120,3 +120,22 @@ def public_record(value):
     return public_value(value)
 
 
+def scope_for(table, owner, seen=frozenset()):
+    """Follow financial ownership joins; public scanner/registry evidence is shared."""
+    if table.name in seen:
+        return None
+    if "user_id" in table.c:
+        return table.c.user_id == owner
+    if table.name == "system_events":
+        return or_(table.c.actor_user_id == owner, table.c.actor_user_id.is_(None))
+    for column in table.c:
+        for fk in column.foreign_keys:
+            parent = fk.column.table
+            if parent.name in EXCLUDED_TABLES:
+                continue
+            parent_scope = scope_for(parent, owner, seen | {table.name})
+            if parent_scope is not None:
+                return column.in_(select(fk.column).where(parent_scope))
+    return None
+
+
