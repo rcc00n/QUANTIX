@@ -337,3 +337,12 @@ class FullArchive:
             self.store.path.unlink(missing_ok=True)
 
 
+async def stream_rows(db, query):
+    result = await db.stream(query.execution_options(yield_per=BATCH))
+    try:
+        async for row in result.mappings():
+            yield dict(row)
+    finally:
+        await result.close()
+
+
