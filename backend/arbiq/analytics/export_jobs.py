@@ -122,3 +122,59 @@ class ExportJobs:
         for path in self.root.glob(".status-*"):
             path.unlink(missing_ok=True)
 
+    async def start(self, owner, clock, options=None):
+        descriptor = self.lock()
+        if descriptor is None:
+            for path in self.root.glob("*.json"):
+                job = json.loads(path.read_text())
+                if job["owner"] == str(owner) and job["status"] in ACTIVE:
+                    return self.public(job)
+            raise HTTPException(
+                429, "A complete export is already running", headers={"Retry-After": "5"}
+            )
+        gate_owned = False
+        try:
+            if _export_gate.locked():
+                raise HTTPException(
+                    429, "Another analytical export is running", headers={"Retry-After": "5"}
+                )
+            await _export_gate.acquire()
+            gate_owned = True
+            self.cleanup_and_recover()
+            if shutil.disk_usage(self.root).free < MIN_FREE_BYTES:
+                raise HTTPException(507, "Export cannot start:6GiB disk safety reserve required")
+            job = {
+                "id": str(uuid4()),
+                "owner": str(owner),
+                "status": "queued",
+                "created_at": utc_now(),
+                "schema_version": SCHEMA,
+                "scope": "ALL_RETAINED",
+                "clock": clock,
+                "completed_datasets": 0,
+                "total_datasets": len(TABLE_GROUP),
+                "dataset": None,
+                "dataset_rows": 0,
+                "uncompressed_bytes": 0,
+                "error": None,
+                "download_url": None,
+                "final_zip_limit_bytes": MAX_ZIP_BYTES,
+            }
+            if options and options.scope == "CUSTOM":
+                job.update(
+                    scope="CUSTOM",
+                    options=options.model_dump(mode="json"),
+                    schema_version="quantix-export-v1",
+                    total_datasets=None,
+                )
+            self.save(job)
+            self.task = asyncio.create_task(self.run(job, descriptor), name="quantix-full-export")
+            descriptor = None  # The running task owns the lock until file publication/audit.
+            gate_owned = False
+            return self.public(job)
+        finally:
+            if gate_owned:
+                _export_gate.release()
+            if descriptor is not None:
+                os.close(descriptor)
+
