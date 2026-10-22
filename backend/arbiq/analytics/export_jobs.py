@@ -372,3 +372,20 @@ async def create_export(request: Request, user: AuthenticatedUser, options: Expo
     return await manager(request).start(owner, {**clock, "reference_utc": now.isoformat()}, options)
 
 
+@router.get("/reports/exports/current")
+async def current_export(request: Request, user: AuthenticatedUser):
+    jobs = manager(request)
+    descriptor = jobs.lock()
+    if descriptor is not None:
+        try:
+            jobs.cleanup_and_recover()
+        finally:
+            os.close(descriptor)
+    found = []
+    for path in jobs.root.glob("*.json"):
+        job = json.loads(path.read_text())
+        if job["owner"] == str(user.id):
+            found.append(job)
+    return {"job": jobs.public(max(found, key=lambda j: j["created_at"])) if found else None}
+
+
