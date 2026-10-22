@@ -429,3 +429,15 @@ async def download_export(job_id: UUID, request: Request, user: AuthenticatedUse
     )
 
 
+@router.post("/reports/exports/{job_id}/cancel")
+async def cancel_export(job_id: UUID, request: Request, user: AuthenticatedUser):
+    jobs = manager(request)
+    job = jobs.load(job_id, user.id)
+    if job["status"] not in ACTIVE:
+        return jobs.public(job)
+    marker = jobs.root / f"{job_id}.cancel"
+    descriptor = os.open(marker, os.O_CREAT | os.O_WRONLY, 0o600)
+    os.close(descriptor)
+    if jobs.task is not None and not jobs.task.done():
+        jobs.task.cancel()
+    return {**jobs.public(job), "cancel_requested": True}
