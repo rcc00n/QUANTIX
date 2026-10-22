@@ -389,3 +389,15 @@ async def current_export(request: Request, user: AuthenticatedUser):
     return {"job": jobs.public(max(found, key=lambda j: j["created_at"])) if found else None}
 
 
+@router.get("/reports/exports/{job_id}")
+async def export_status(job_id: UUID, request: Request, user: AuthenticatedUser):
+    jobs = manager(request)
+    descriptor = jobs.lock()
+    if descriptor is not None:
+        try:
+            jobs.cleanup_and_recover()
+        finally:
+            os.close(descriptor)
+    return jobs.public(jobs.load(job_id, user.id))
+
+
