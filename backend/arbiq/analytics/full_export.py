@@ -346,3 +346,171 @@ async def stream_rows(db, query):
         await result.close()
 
 
+async def portfolio_metrics(db, owner):
+    """Exact all-history SQL reconciliation, independent portfolios never combined."""
+    from arbiq.db.models import Journal, LedgerEntry, PaperSession, PaperTrade, VirtualAccount
+    from arbiq.paper_trading.models import PaperControl
+    from arbiq.portfolio.analytics import performance
+    from arbiq.portfolio.models import AccountingMovement, PortfolioCheckpoint
+
+    summaries = []
+    query = (
+        select(PaperSession, PaperControl)
+        .outerjoin(PaperControl)
+        .where(PaperSession.user_id == owner)
+    )
+    result = await db.stream(query.execution_options(yield_per=BATCH))
+    async for session, control in result:
+        sid = session.id
+        balances = (
+            select(
+                LedgerEntry.journal_id,
+                VirtualAccount.asset_id,
+                func.sum(LedgerEntry.quantity).label("quantity"),
+            )
+            .join(VirtualAccount, VirtualAccount.id == LedgerEntry.account_id)
+            .join(Journal, Journal.id == LedgerEntry.journal_id)
+            .where(Journal.session_id == sid)
+            .group_by(LedgerEntry.journal_id, VirtualAccount.asset_id)
+            .subquery()
+        )
+        unbalanced = await db.scalar(
+            select(func.count()).select_from(balances).where(balances.c.quantity != 0)
+        )
+        inventory = (
+            select(VirtualAccount.id, func.sum(LedgerEntry.quantity).label("quantity"))
+            .join(LedgerEntry, LedgerEntry.account_id == VirtualAccount.id)
+            .where(
+                VirtualAccount.session_id == sid, VirtualAccount.role.in_(("available", "reserved"))
+            )
+            .group_by(VirtualAccount.id)
+            .subquery()
+        )
+        negative = await db.scalar(
+            select(func.count()).select_from(inventory).where(inventory.c.quantity < 0)
+        )
+        outcomes = dict(
+            (
+                await db.execute(
+                    select(PaperTrade.status, func.count())
+                    .where(PaperTrade.session_id == sid)
+                    .group_by(PaperTrade.status)
+                )
+            ).all()
+        )
+        latest = await db.scalar(
+            select(PortfolioCheckpoint)
+            .where(PortfolioCheckpoint.session_id == sid)
+            .order_by(PortfolioCheckpoint.as_of.desc(), PortfolioCheckpoint.id.desc())
+            .limit(1)
+        )
+        sums = (
+            (
+                await db.execute(
+                    select(
+                        *[
+                            func.sum(getattr(AccountingMovement, k)).label(k)
+                            for k in (
+                                "realized_trading_cad",
+                                "realized_fx_cad",
+                                "fees_cad",
+                                "expenses_cad",
+                                "external_flow_cad",
+                            )
+                        ]
+                    ).where(AccountingMovement.session_id == sid)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        # SUM ignores NULL; disclose unknown counts alongside each known subtotal.
+        unknowns = (
+            (
+                await db.execute(
+                    select(
+                        *[
+                            func.count().filter(getattr(AccountingMovement, k).is_(None)).label(k)
+                            for k in sums
+                        ]
+                    ).where(AccountingMovement.session_id == sid)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        payload = latest.payload if latest else {}
+        measured = await performance(
+            db, sid, research_only=control is not None and control.classification == "RESEARCH"
+        )
+        summaries.append(
+            {
+                "session_id": str(sid),
+                "name": session.name,
+                "classification": control.classification if control else "UNAVAILABLE",
+                "initial_equity_cad": exact(session.initial_equity_cad),
+                "started_at": exact(session.started_at),
+                "outcomes": outcomes,
+                "accounting_known_subtotals": exact(dict(sums)),
+                "unknown_movement_counts": dict(unknowns),
+                "ledger_reconciliation": {
+                    "unbalanced_journal_assets": unbalanced,
+                    "negative_inventory_accounts": negative,
+                    "balanced": unbalanced == 0 and negative == 0,
+                },
+                "latest_checkpoint_at": exact(latest.as_of) if latest else None,
+                "latest_checkpoint": {
+                    k: payload.get(k)
+                    for k in (
+                        "equity_cad",
+                        "realized_trading_pnl_cad",
+                        "realized_fx_pnl_cad",
+                        "unrealized_pnl_cad",
+                        "no_trading_benchmark_cad",
+                        "strategy_excess_cad",
+                        "reconciliation_delta_cad",
+                        "fees_cad",
+                        "expenses_cad",
+                        "drawdown_pct",
+                        "limitations",
+                    )
+                },
+                "win_rate": measured.get("win_rate_pct"),
+                "performance": measured,
+                "win_rate_limitation": (
+                    "Recalculate matched known-CAD completed trades from fills; "
+                    "holding gains are not arbitrage profit."
+                ),
+            }
+        )
+    await result.close()
+    return summaries
+
+
+LIMITATIONS = [
+    "All available RETAINED rows in one PostgreSQL repeatable-read "
+    "snapshot; no date, asset, strategy or portfolio filter.",
+    "Deleted/retention-expired observations cannot be recovered; their "
+    "exact number is unknown. Retention events are included if retained.",
+    "Transient collector memory, unsaved observations, host Docker metrics "
+    "and proxy/application log files are not database history. Only "
+    "retained telemetry is available.",
+    "Current mutable registry, balances and statuses describe snapshot "
+    "state; immutable events/evaluations establish historical decisions.",
+    "Validated and research portfolios are independently funded. Never add "
+    "their equity or hypothetical profits together.",
+    "Unverified fees, eligibility, clock, depth or funding prevent "
+    "actionability. Positive projected spread never proves executable real "
+    "profit.",
+    "Actual trades, if explicitly owner recorded, remain separate from all "
+    "paper statistics. QUANTIX submits no real orders.",
+    "Authentication, private Telegram identities/destinations/messages, "
+    "personal identifiers and credential-bearing metadata are "
+    "excluded/redacted intentionally.",
+    "Null/empty values mean unavailable; measured zero remains zero. JSON "
+    "financial values and SQL NUMERIC are exact decimal strings.",
+    "All retained budget/size results are in evaluation/result evidence. "
+    "Uncomputed budgets and missing post-delay books are not invented.",
+]
+
+
