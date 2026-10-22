@@ -805,3 +805,22 @@ async def _build_full_attempt(db, owner, path, progress, clock, *, analysis=Fals
             manifest["intermediate_disk_peak_bytes"] = archive.temp_peak
 
 
+async def build_full_export(db, owner, path, progress, clock):
+    """At most two attempts in the SAME snapshot. No oversized ZIP is published."""
+    path = Path(path)
+    for analysis in (False, True):
+        try:
+            manifest = await _build_full_attempt(
+                db, owner, path, progress, clock, analysis=analysis
+            )
+            if path.stat().st_size > MAX_ZIP_BYTES:
+                raise ExportBudgetExceeded("ZIP_BUDGET: final central directory exceeds budget")
+            return manifest
+        except ExportBudgetExceeded:
+            path.unlink(missing_ok=True)
+            if analysis:
+                raise RuntimeError(
+                    "ESSENTIAL_DATA_EXCEEDS_BUDGET: no complete financial export fits512000000bytes"
+                ) from None
+            await progress("Budget fallback: compact analysis snapshot", 0, 0, restart=True)
+    raise AssertionError("Unreachable export state")
