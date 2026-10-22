@@ -401,3 +401,31 @@ async def export_status(job_id: UUID, request: Request, user: AuthenticatedUser)
     return jobs.public(jobs.load(job_id, user.id))
 
 
+@router.get("/reports/exports/{job_id}/download")
+async def download_export(job_id: UUID, request: Request, user: AuthenticatedUser):
+    jobs = manager(request)
+    job = jobs.load(job_id, user.id)
+    if job["status"] != "completed":
+        raise HTTPException(409, "Export is not complete; check its status")
+    if datetime.now(UTC) >= datetime.fromisoformat(job["expires_at"]):
+        raise HTTPException(410, "Export expired; create another complete export")
+    path = jobs.root / f"{job_id}.zip"
+    if not path.is_file():
+        raise HTTPException(410, "Export expired; create another complete export")
+    if path.stat().st_size > MAX_ZIP_BYTES:
+        raise HTTPException(
+            413, "Previous export exceeds512000000bytes; create a new size-bounded export"
+        )
+    prefix = "quantix-everything" if job["scope"] == "ALL_RETAINED" else "quantix-analysis"
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=f"{prefix}-{job_id}.zip",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-SHA256": job["sha256"],
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
