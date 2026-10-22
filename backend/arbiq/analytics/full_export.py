@@ -514,3 +514,294 @@ LIMITATIONS = [
 ]
 
 
+async def _build_full_attempt(db, owner, path, progress, clock, *, analysis=False):
+    unknown = set(Base.metadata.tables) - TABLE_GROUP.keys() - EXCLUDED_TABLES.keys()
+    if unknown:
+        raise RuntimeError(
+            "UNCLASSIFIED_SCHEMA: export policy needed for " + ",".join(sorted(unknown))
+        )
+    snapshot_time = await db.scalar(select(func.clock_timestamp()))
+    snapshot = await db.scalar(text("SELECT txid_current_snapshot()::text"))
+    portfolios = await portfolio_metrics(db, owner)
+    archive = FullArchive(path, progress, analysis=analysis)
+    dictionary = [
+        "# Data dictionary\n",
+        "Exact decimals: base10 strings; dates: UTC ISO8601; percentages: "
+        "percentage points; fees: fractions. Empty CSV cells mean SQL NULL; "
+        "JSON empty strings remain strings in JSON fields. CSV formula-leading "
+        "text is escaped with a single quote.\n",
+        "Join UUID primary/foreign keys. user IDs and private notification "
+        "bindings are deliberately removed. Primary-key ordering is not causal "
+        "ordering: use source/ingestion/availability timestamps.\n",
+    ]
+    try:
+        if analysis:
+            # Preserve complete evidence for every owned paper/alert-linked evaluation.
+            from arbiq.db.models import PaperSession, PaperTrade
+            from arbiq.notifications.models import AlertDecision
+
+            important = (
+                select(PaperTrade.evaluation_id)
+                .join(PaperSession)
+                .where(PaperSession.user_id == owner)
+                .union(select(AlertDecision.evaluation_id).where(AlertDecision.user_id == owner))
+            )
+            result = await db.stream_scalars(important.execution_options(yield_per=BATCH))
+            async for identifier in result:
+                if identifier is not None:
+                    await sequential_thread(archive.selection.important, identifier)
+            await result.close()
+        for name, group in TABLE_GROUP.items():
+            table = Base.metadata.tables[name]
+            columns, query, owned = dataset_query(table, owner)
+            expected_count = await db.scalar(
+                select(func.count()).select_from(query.order_by(None).subquery())
+            )
+            removed = [c.name for c in table.c if c.name in PRIVATE_COLUMNS]
+            entry = await archive.csv(
+                f"{group}/{name}.csv",
+                [c.name for c in columns],
+                stream_rows(db, query),
+                source_table=name,
+                scope="authenticated owner and dependencies"
+                if owned
+                else "shared public market/system evidence",
+                excluded_columns=removed,
+                source_snapshot_rows=expected_count,
+                json_columns=[c.name for c in columns if isinstance(c.type, JSON)],
+            )
+            if entry["rows"] != expected_count:
+                raise RuntimeError("ROW_COUNT_MISMATCH: complete snapshot cannot be published")
+            dictionary.append(
+                f"\n## {group}/{name}.csv\n{entry['rows']} retained rows; {entry['scope']}.\n"
+            )
+            for c in columns:
+                references = ", ".join(fk.target_fullname for fk in c.foreign_keys)
+                dictionary.append(
+                    f"- `{c.name}`: {c.type}; nullable={c.nullable}"
+                    + (f"; references {references}" if references else "")
+                    + ".\n"
+                )
+        counts = {f["source_table"]: f["rows"] for f in archive.files if "source_table" in f}
+        metrics = {
+            "schema_version": SCHEMA,
+            "coverage_level": "analysis_snapshot" if analysis else "lossless_retained_history",
+            "lossless_raw_history": not analysis,
+            "snapshot_at": exact(snapshot_time),
+            "paper_only": True,
+            "scope": "all retained owner portfolios and shared market evidence",
+            "counts": counts,
+            "portfolios": portfolios,
+            "combined_portfolio_equity": None,
+            "limitations": LIMITATIONS,
+            "clock": clock,
+        }
+        await progress("Packing shared evidence", 0, archive.bytes)
+        for view_name, columns in (
+            ("opportunities/analysis.csv", OPPORTUNITY_COLUMNS),
+            ("analytics/portfolio_history.csv", PORTFOLIO_COLUMNS),
+        ):
+
+            def iterator(name=view_name):
+                return archive.store.projected_rows(name)
+
+            # Fetch one bounded projection batch off the event loop; SQLite is scratch only.
+            source = iterator()
+
+            async def projected(source=source):
+                while True:
+                    batch = await sequential_thread(lambda: list(itertools.islice(source, BATCH)))
+                    if not batch:
+                        break
+                    for row in batch:
+                        yield row
+
+            await archive.csv(
+                view_name,
+                columns,
+                projected(),
+                auxiliary=True,
+                derived_from="all retained source rows",
+                scope="readable financial projection",
+            )
+        await write_coverage(db, archive, snapshot_time)
+        await archive.evidence()
+        await archive.text(
+            "load_export.py", Path(__file__).with_name("export_loader.py").read_text()
+        )
+        await archive.json("analytics/metrics.json", metrics)
+        await archive.text(
+            "START_HERE.md",
+            "# QUANTIX — Export Everything for ChatGPT\n\n"
+            + (
+                "ANALYSIS SNAPSHOT: raw payload reductions are explicit in manifest.json. "
+                if analysis
+                else "LOSSLESS RETAINED HISTORY: shared evidence is exactly reconstructable. "
+            )
+            + "Not a profitability guarantee. Start with "
+            "SUMMARY.md, analytics/metrics.json and manifest.json. "
+            "Compare independently funded VALIDATED and RESEARCH portfolios "
+            "separately. Inspect evaluation inputs/results, actual bid/ask depth, "
+            "costs, clock, eligibility, "
+            "post-delay execution evidence and ledger before concluding any "
+            "arbitrage is executable.\n\n"
+            "Coverage: all retained dates, portfolios, strategies, assets and "
+            "exchanges. Empty datasets have headers and explicit manifest entries. "
+            "Unavailable/deleted data is not invented. All limitations appear in "
+            "manifest.json.\n",
+        )
+        lines = [
+            "# QUANTIX numerical summary\n",
+            "ANALYSIS SNAPSHOT: raw reductions are disclosed in manifest.json.\n"
+            if analysis
+            else "LOSSLESS RETAINED HISTORY: shared evidence is fully reconstructable.\n",
+            f"Snapshot UTC: {snapshot_time.isoformat()}; envelope: {SCHEMA}.\n",
+            f"Portfolios: {len(portfolios)}; routes: {counts.get('arbitrage_routes')}; "
+            f"evaluations: {counts.get('arbitrage_evaluations')}; "
+            f"paper attempts: {counts.get('paper_trades')}; "
+            f"paper fills: {counts.get('paper_fills')}.\n",
+            "No aggregate equity/profit is produced across independent capital. "
+            "Known movement subtotals are incomplete wherever unknown counts are "
+            "nonzero.\n",
+        ]
+        for p in portfolios:
+            lines.append(
+                f"\n- Portfolio `{p['session_id']}` ({p['classification']}), "
+                f"starting CAD {p['initial_equity_cad']}; "
+                f"outcomes {json.dumps(p['outcomes'], sort_keys=True)}; "
+                f"ledger balanced={p['ledger_reconciliation']['balanced']}. "
+                "Equity, benchmark and movement subtotals: analytics/metrics.json; "
+                "complete historical checkpoints and journals: analytics/ and "
+                "executions/.\n"
+            )
+            checkpoint = p["latest_checkpoint"]
+            lines.append(
+                f"  Latest retained equity CAD: {checkpoint.get('equity_cad')}; "
+                f"realized disposal P&L: {checkpoint.get('realized_trading_pnl_cad')}; "
+                f"unrealized inventory P&L: {checkpoint.get('unrealized_pnl_cad')}; "
+                f"no-trading benchmark: {checkpoint.get('no_trading_benchmark_cad')}; "
+                f"strategy excess: {checkpoint.get('strategy_excess_cad')}. "
+                "None means unavailable, never zero.\n"
+            )
+        lines += ["\n## Limitations\n"] + [f"- {item}\n" for item in LIMITATIONS]
+        await archive.text("SUMMARY.md", "".join(lines))
+        await archive.text("data_dictionary.md", "".join(dictionary))
+        await archive.text(
+            "README.md",
+            "# Independent analysis\n\n"
+            "Start with analytics/metrics.json, opportunities/analysis.csv, "
+            "analytics/portfolio_history.csv and exchanges/market_coverage.csv. "
+            "These are readable without the shared-evidence decoder. For detailed "
+            "JSON cells use load_export.py and EVIDENCE_FORMAT.md.\n\n"
+            "1. Verify checksums.sha256 with `sha256sum -c checksums.sha256` after "
+            "extracting into a private directory.\n"
+            "2. Read START_HERE.md, SUMMARY.md, manifest.json and "
+            "data_dictionary.md. Do not infer missing data as zero.\n"
+            "3. Use Python Decimal (not float) for financial fields; CSV JSON cells "
+            "preserve source records. Set `csv.field_size_limit(256*1024*1024)` for "
+            "wide retained evidence.\n"
+            "4. Join paper_sessions to paper_controls, trades/orders/fills and "
+            "immutable journals/ledger_entries/virtual_accounts. Sum journal "
+            "quantities per asset to zero; sum account quantities for balances.\n"
+            "5. Compare equity and initial-holdings benchmarks at the same retained "
+            "checkpoint. Fees already affect cashflows/basis; do not subtract "
+            "twice. Separate holding gains from matched-leg arbitrage.\n"
+            "6. Join evaluations/routes to markets/exchanges/assets, snapshots, fee "
+            "versions and FX. Review all reasons, lifecycle events, depth, budgets "
+            "and required sell inventory. Never assume stablecoin parity or "
+            "Canadian eligibility.\n"
+            "7. Review full market universe and actually monitored books "
+            "separately, SOL/ETH/BTC and other assets via markets→assets. Freshness "
+            "and latency need timestamp and health evidence.\n"
+            "8. Alert decisions, lifecycle, outbox status/attempts/events represent "
+            "actual retained delivery history; message bodies/destinations are "
+            "intentionally absent.\n"
+            "9. Prioritize findings with exact source IDs/timestamps and "
+            "confidence; state evidence gaps. No external AI conclusion is "
+            "included.\n\n"
+            "manifest.json lists every member except itself and checksums.sha256 to "
+            "avoid circular hashes. checksums.sha256 covers every other file "
+            "including manifest.json. "
+            "Schema-column decimal strings, record counts and timestamp ranges "
+            "support independent reconciliation. No record-count/date window cap is "
+            "applied.\n" + TIMING_EXPORT_NOTES,
+        )
+        await archive.text(
+            "EVIDENCE_FORMAT.md",
+            (
+                "# Lossless shared evidence\n\n"
+                "Selected large JSON cells use quantix-json-dag-v1 envelopes. "
+                "evidence/objects.jsonl contains [id, typed node]. Its full member SHA256 "
+                "and each CSV's decoded JSON semantic SHA256 validate all content. "
+                "m is a source map, a is an array, r is a shared node reference; all original "
+                "containers are typed, so literal source keys cannot collide with markers. "
+                "Financial decimals remain original strings. No numeric precision is lost.\n\n"
+                "Use only Python standard library: `from load_export import ExportReader`; "
+                "`reader=ExportReader('archive.zip')`; `for row in reader.rows('opportunities/"
+                "arbitrage_evaluations.csv'): ...`; `reader.close()`. JSON columns decode "
+                "automatically. The disk-backed index uses bounded memory. To recover readable "
+                "CSV: `python load_export.py archive.zip --dataset NAME --output restored.csv`.\n\n"
+                "Every CSV lists json_columns and a canonical decoded JSON-cell semantic SHA256 "
+                "(one compact sorted-key JSON object plus LF per row). Essential financial tables "
+                "remain plain CSV/JSON; analytics metrics are readable without decoding. "
+                "In analysis fallback, omitted raw wrappers carry original hashes; stratified "
+                "samples keep the lowest-PK row per UTC hour/market/state/code plus unusual "
+                "divergence/crossed records. All row scalars, accounting, decision outcomes, "
+                "calculation inputs and execution/order-book evidence remain; "
+                "PostgreSQL is unchanged.\n"
+            ),
+        )
+        manifest = {
+            "schema_version": SCHEMA,
+            "complete": True,
+            "coverage_level": "analysis_snapshot" if analysis else "lossless_retained_history",
+            "lossless_raw_history": not analysis,
+            "final_zip_limit_bytes": MAX_ZIP_BYTES,
+            "codec": CODEC,
+            "deduplication": {
+                "unique_nodes": archive.store.nodes,
+                "reused_nodes": archive.store.hits,
+            },
+            "raw_payload_reduced_rows": sum(
+                f.get("raw_payload_reduced_rows", 0) for f in archive.files
+            ),
+            "source_rows_omitted": 0,
+            "sampling_method": (
+                "lowest PK per UTC-hour/market/state/code plus extreme/crossed/divergence"
+            )
+            if analysis
+            else None,
+            "intermediate_disk_peak_bytes": archive.temp_peak,
+            "snapshot_at": exact(snapshot_time),
+            "database_snapshot": snapshot,
+            "scope": "ALL_RETAINED",
+            "filters": None,
+            "portfolio_ids": [p["session_id"] for p in portfolios],
+            "files": list(archive.files),
+            "counts": counts,
+            "total_dataset_rows": sum(counts.values()),
+            "limitations": LIMITATIONS,
+            "excluded_sources": EXCLUDED_TABLES,
+            "clock": clock,
+            "financial_reconciliation": [
+                dict(session_id=p["session_id"], **p["ledger_reconciliation"]) for p in portfolios
+            ],
+            "null_convention": "empty CSV / JSON null = unavailable; never replace with zero",
+            "retention_expired_count": None,
+            "retention_expired_reason": (
+                "Unrecoverable deleted rows are not counted by current storage."
+            ),
+            "integrity": "manifest lists all preceding members; checksums.sha256 covers all "
+            "members except itself, including manifest.json",
+        }
+        await archive.json("manifest.json", manifest)
+        await archive.text(
+            "checksums.sha256", "".join(f"{f['sha256']}  {f['name']}\n" for f in archive.files)
+        )
+        return manifest
+    finally:
+        await sequential_thread(archive.close)
+        if "manifest" in locals():
+            manifest["intermediate_disk_peak_bytes"] = archive.temp_peak
+
+
