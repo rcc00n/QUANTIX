@@ -178,3 +178,34 @@ class ExportJobs:
             if descriptor is not None:
                 os.close(descriptor)
 
+    async def audit(self, job, status, manifest=None):
+        async with self.app.state.sessions() as db:
+            db.add(
+                ReportExport(
+                    user_id=UUID(job["owner"]),
+                    schema_version=job["schema_version"],
+                    period_start=datetime(1970, 1, 1, tzinfo=UTC),
+                    period_end=datetime.now(UTC),
+                    status=status,
+                    content_sha256=job.get("sha256"),
+                    provenance={
+                        "job_id": job["id"],
+                        "scope": job["scope"],
+                        "status": status,
+                        "bytes": job.get("bytes"),
+                        "error": job.get("error"),
+                        "dataset_rows": manifest.get("total_dataset_rows") if manifest else None,
+                    },
+                )
+            )
+            db.add(
+                SystemEvent(
+                    actor_user_id=UUID(job["owner"]),
+                    event_type=f"report.full_export_{status}",
+                    severity="error" if status == "failed" else "info",
+                    message="Authenticated complete retained-data export",
+                    details={"job_id": job["id"], "status": status},
+                )
+            )
+            await db.commit()
+
