@@ -353,3 +353,22 @@ class ExportJobs:
                 await self.task
 
 
+def manager(request):
+    if not hasattr(request.app.state, "export_jobs"):
+        request.app.state.export_jobs = ExportJobs(request.app)
+    return request.app.state.export_jobs
+
+
+@router.post("/reports/exports", status_code=202)
+async def create_export(request: Request, user: AuthenticatedUser, options: ExportRequest):
+    owner = user.id
+    if options.scope == "CUSTOM" and options.session_id is None:
+        raise HTTPException(422, "Custom export requires a paper portfolio")
+    if options.scope == "ALL_RETAINED" and any(
+        (options.session_id, options.start, options.end, options.strategy_version_id)
+    ):
+        raise HTTPException(422, "Full export does not accept filters")
+    now, clock = await utc_reference(request)
+    return await manager(request).start(owner, {**clock, "reference_utc": now.isoformat()}, options)
+
+
