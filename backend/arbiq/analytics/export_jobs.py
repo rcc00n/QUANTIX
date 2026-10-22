@@ -48,3 +48,77 @@ class ExportRequest(BaseModel):
     strategy_version_id: UUID | None = None
 
 
+def utc_now():
+    return datetime.now(UTC).isoformat()
+
+
+class ExportJobs:
+    def __init__(self, app, root=None):
+        self.app = app
+        self.root = Path(root or Path(tempfile.gettempdir()) / "quantix-full-exports")
+        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.root.chmod(0o700)
+        self.task = None
+
+    def save(self, job):
+        target = self.root / f"{job['id']}.json"
+        handle, name = tempfile.mkstemp(dir=self.root, prefix=".status-")
+        try:
+            with os.fdopen(handle, "w") as stream:
+                json.dump(job, stream, separators=(",", ":"))
+                stream.flush()
+                if job["status"] != "running":
+                    os.fsync(stream.fileno())
+            os.replace(name, target)
+        finally:
+            Path(name).unlink(missing_ok=True)
+
+    def load(self, job_id, owner):
+        try:
+            job = json.loads((self.root / f"{job_id}.json").read_text())
+        except FileNotFoundError:
+            raise HTTPException(404, "Export job not found") from None
+        if job["owner"] != str(owner):
+            raise HTTPException(404, "Export job not found")
+        return job
+
+    def public(self, job):
+        result = {k: v for k, v in job.items() if k not in {"owner", "clock"}}
+        if job["status"] == "completed" and job.get("bytes", 0) > MAX_ZIP_BYTES:
+            result.update(
+                status="failed",
+                download_url=None,
+                error="Previous archive exceeds the new512000000byte limit. Create a new export.",
+            )
+        return result
+
+    def lock(self):
+        descriptor = os.open(self.root / ".worker.lock", os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(descriptor)
+            return None
+        return descriptor
+
+    def cleanup_and_recover(self):
+        """Caller holds process-independent volume lock: no worker can be live."""
+        for path in self.root.glob("*.json"):
+            job = json.loads(path.read_text())
+            if job["status"] in ACTIVE:
+                job.update(
+                    status="failed",
+                    error="EXPORT_INTERRUPTED: restart detected; click Export Everything to retry",
+                    finished_at=utc_now(),
+                )
+                self.save(job)
+                (self.root / f"{job['id']}.zip").unlink(missing_ok=True)
+                (self.root / f"{job['id']}.partial").unlink(missing_ok=True)
+                (self.root / f"{job['id']}.evidence.sqlite").unlink(missing_ok=True)
+                (self.root / f"{job['id']}.cancel").unlink(missing_ok=True)
+            if time.time() - path.stat().st_mtime > TTL_SECONDS:
+                (self.root / f"{job['id']}.zip").unlink(missing_ok=True)
+                path.unlink(missing_ok=True)
+        for path in self.root.glob(".status-*"):
+            path.unlink(missing_ok=True)
+
