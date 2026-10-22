@@ -209,3 +209,147 @@ class ExportJobs:
             )
             await db.commit()
 
+    async def run(self, job, descriptor):
+        partial = self.root / f"{job['id']}.partial"
+        target = self.root / f"{job['id']}.zip"
+        started, last_save = time.monotonic(), 0.0
+        engine = None
+
+        async def progress(dataset, rows, byte_count, completed=False, restart=False):
+            nonlocal last_save
+            if restart:
+                job.update(completed_datasets=0, coverage_level="analysis_snapshot")
+            job.update(
+                dataset=dataset,
+                dataset_rows=rows,
+                uncompressed_bytes=byte_count,
+                elapsed_seconds=round(time.monotonic() - started, 1),
+            )
+            if completed:
+                job["completed_datasets"] += 1
+            if completed or time.monotonic() - last_save > 1:
+                await sequential_thread(self.save, job.copy())
+                last_save = time.monotonic()
+
+        try:
+            job.update(status="running", started_at=utc_now())
+            self.save(job)
+            await self.audit(job, "running")
+            handle = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            os.close(handle)
+            # One dedicated DB connection; no auth/dashboard pool slot is retained.
+            engine = create_async_engine(
+                self.app.state.settings.database_url.get_secret_value(),
+                pool_size=1,
+                max_overflow=0,
+                hide_parameters=True,
+                connect_args={
+                    "server_settings": {
+                        "application_name": "quantix-full-export",
+                        "work_mem": "2MB",
+                    }
+                },
+            )
+            async with asyncio.timeout(MAX_SECONDS):
+                async with async_sessionmaker(engine)() as db:
+                    await db.execute(
+                        text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                    )
+                    await db.execute(text("SET LOCAL statement_timeout = '120s'"))
+                    if job["scope"] == "CUSTOM":
+                        options = ExportRequest.model_validate(job["options"])
+                        session, control = await owned_session(
+                            db, UUID(job["owner"]), options.session_id, options.strategy_version_id
+                        )
+                        now = datetime.fromisoformat(job["clock"]["reference_utc"])
+                        period = period_for(session, options.start, options.end, now)
+                        async with asyncio.timeout(MAX_GENERATION_SECONDS):
+                            custom_path, manifest = await make_export(
+                                db,
+                                session,
+                                control,
+                                period,
+                                now,
+                                job["clock"],
+                                options.strategy_version_id,
+                            )
+                        os.replace(custom_path, partial)
+                    else:
+                        manifest = await build_full_export(
+                            db, UUID(job["owner"]), partial, progress, job["clock"]
+                        )
+            await sequential_thread(verify_archive, partial)
+            job.update(
+                sha256=await sequential_thread(file_hash, partial),
+                bytes=partial.stat().st_size,
+                file_count=len(manifest["files"]) + (2 if job["scope"] == "ALL_RETAINED" else 1),
+                dataset_rows=manifest.get("total_dataset_rows"),
+                portfolio_count=len(
+                    manifest.get("portfolio_ids", [job.get("options", {}).get("session_id")])
+                ),
+                counts=manifest.get("counts"),
+                coverage_level=manifest.get("coverage_level"),
+                lossless_raw_history=manifest.get("lossless_raw_history"),
+                raw_payload_reduced_rows=manifest.get("raw_payload_reduced_rows", 0),
+                intermediate_disk_peak_bytes=manifest.get("intermediate_disk_peak_bytes"),
+            )
+            await self.audit(job, "completed", manifest)
+            os.replace(partial, target)
+            job.update(
+                status="completed",
+                finished_at=utc_now(),
+                expires_at=(datetime.now(UTC) + timedelta(seconds=TTL_SECONDS)).isoformat(),
+                download_url=f"/api/reports/exports/{job['id']}/download",
+                elapsed_seconds=round(time.monotonic() - started, 2),
+            )
+            self.save(job)
+        except BaseException as error:
+            partial.unlink(missing_ok=True)
+            target.unlink(missing_ok=True)
+            cancelled = (
+                isinstance(error, ExportCancelled) or partial.with_suffix(".cancel").exists()
+            )
+            if cancelled:
+                reason = "EXPORT_CANCELLED: owner cancelled this export"
+            elif isinstance(error, asyncio.CancelledError):
+                reason = "EXPORT_INTERRUPTED: service shutdown; retry the complete export"
+            elif isinstance(error, TimeoutError):
+                reason = "EXPORT_TIME_LIMIT: safety deadline reached; no partial data published"
+            elif isinstance(error, HTTPException):
+                reason = "EXPORT_REJECTED: " + str(error.detail)
+            elif isinstance(error, RuntimeError) and str(error).split(":")[0] in {
+                "DISK_RESERVE",
+                "OUTPUT_SAFETY_LIMIT",
+                "UNCLASSIFIED_SCHEMA",
+                "ESSENTIAL_DATA_EXCEEDS_BUDGET",
+            }:
+                reason = str(error)
+            else:
+                reason = (
+                    "EXPORT_FAILED: generation could not finish; no partial ZIP published ("
+                    + type(error).__name__
+                    + ")"
+                )
+            job.update(
+                status="cancelled" if cancelled else "failed", error=reason, finished_at=utc_now()
+            )
+            self.save(job)
+            with suppress(Exception):
+                await self.audit(job, "cancelled" if cancelled else "failed")
+        finally:
+            partial.with_suffix(".evidence.sqlite").unlink(missing_ok=True)
+            partial.with_suffix(".cancel").unlink(missing_ok=True)
+            try:
+                if engine is not None:
+                    await engine.dispose()
+            finally:
+                _export_gate.release()
+                os.close(descriptor)
+
+    async def close(self):
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.task
+
+
