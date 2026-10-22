@@ -278,3 +278,62 @@ class FullArchive:
         await self.progress(name, count, self.bytes, completed=not metadata.get("auxiliary", False))
         return entry
 
+    async def evidence(self):
+        digest, size, count = hashlib.sha256(), 0, 0
+        with self.zip.open("evidence/objects.jsonl", "w", force_zip64=True) as target:
+
+            def write():
+                nonlocal size, count
+                for identifier, _node_hash, body in self.store.objects():
+                    data = (f"[{identifier}," + body + "]\n").encode("utf-8")
+                    target.write(data)
+                    digest.update(data)
+                    size += len(data)
+                    self.bytes += len(data)
+                    count += 1
+                    if count % 512 == 0:
+                        self.check()
+                self.check()
+
+            await sequential_thread(write)
+        self.files.append(
+            {
+                "name": "evidence/objects.jsonl",
+                "sha256": digest.hexdigest(),
+                "bytes": size,
+                "rows": count,
+                "format": CODEC,
+            }
+        )
+
+    async def text(self, name, content):
+        def write():
+            data = content.encode("utf-8")
+            self.zip.writestr(name, data)
+            self.bytes += len(data)
+            self.check()
+            self.files.append(
+                {
+                    "name": name,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "bytes": len(data),
+                    "rows": None,
+                }
+            )
+
+        await sequential_thread(write)
+
+    async def json(self, name, value):
+        await self.text(name, json.dumps(public_record(value), ensure_ascii=False, indent=2))
+
+    def close(self):
+        try:
+            self.zip.close()
+        finally:
+            self.temp_peak = max(
+                self.temp_peak, self.store.path.stat().st_size + self.path.stat().st_size
+            )
+            self.store.close()
+            self.store.path.unlink(missing_ok=True)
+
+
