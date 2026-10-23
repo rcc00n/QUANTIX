@@ -95,6 +95,20 @@ async def test_capital_allocation_preserves_every_cent_and_depth(
         assert stored(D(item["quantity"]) * D(item["cad_rate"])) == D(item["cad_value"])
 
 
+async def test_tiny_rounding_stays_cash_without_free_crypto():
+    ex, asset = uuid4(), uuid4()
+    key = str(ex), str(asset)
+    allocations = await allocate_weighted(
+        D("0.000000000000000001"),
+        {key: D(1)},
+        {key: D("99999999999999999999")},
+        {},
+        {ex: SimpleNamespace(slug="synthetic")},
+        {asset: SimpleNamespace(canonical_key="synthetic:expensive")},
+        SimpleNamespace(slug="synthetic"),
+    )
+    assert len(allocations) == 1 and allocations[0]["asset"] == "fiat:CAD"
+    assert D(allocations[0]["cad_value"]) == D("1e-18")
 
 
 
