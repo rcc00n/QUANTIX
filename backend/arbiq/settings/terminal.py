@@ -36,3 +36,56 @@ class MarketPreferences(Contract):
         return self
 
 
+class NotificationPreferences(Contract):
+    telegram_enabled: bool = False
+    minimum_buy_capital_cad: NonNegativeDecimal = "50"
+    minimum_liquidity_cad: NonNegativeDecimal = "50"
+    maximum_quote_age_seconds: int = Field(default=10, ge=1, le=30)
+    minimum_confidence: Literal["HEALTHY"] = "HEALTHY"
+    nighttime_minimum_confidence: Literal["HEALTHY"] = "HEALTHY"
+    minimum_persistence_seconds: int = Field(default=0, ge=0, le=300)
+    research_enabled: bool = False
+    quiet_delivery: Literal["SUPPRESS", "SILENT"] = "SUPPRESS"
+    minimum_profit_cad: NonNegativeDecimal = "5"
+    minimum_return_pct: NonNegativeDecimal = "0.5"
+    normal_alerts: bool = True
+    emergency_alerts: bool = False
+    timezone: Literal["America/Edmonton"] = "America/Edmonton"
+    quiet_hours_enabled: bool = True
+    quiet_start: LocalClock = "23:00"
+    quiet_end: LocalClock = "07:00"
+    nighttime_minimum_profit_cad: NonNegativeDecimal = "25"
+    nighttime_minimum_return_pct: NonNegativeDecimal = "1"
+    nighttime_minimum_buy_capital_cad: NonNegativeDecimal = "250"
+    nighttime_minimum_liquidity_cad: NonNegativeDecimal = "500"
+    nighttime_maximum_quote_age_seconds: int = Field(default=3, ge=1, le=10)
+    nighttime_minimum_persistence_seconds: int = Field(default=10, ge=2, le=300)
+    daily_emergency_cap: int = Field(default=5, ge=1, le=20)
+    daily_report_enabled: bool = True
+    daily_report_time: LocalClock = "09:00"
+    weekly_report_enabled: bool = False
+    weekly_report_day: int = Field(default=0, ge=0, le=6)
+    cooldown_seconds: int = Field(default=300, ge=30, le=86400)
+    repeat_until_acknowledged: bool = False
+    repeat_interval_seconds: int = Field(default=60, ge=30, le=3600)
+    maximum_repeats: int = Field(default=5, ge=0, le=20)
+    escalation_cooldown_seconds: int = Field(default=600, ge=60, le=86400)
+    push_requested: bool = False
+    voice_requested: bool = False
+    cancel_on_expiry: Literal[True] = True
+    require_manual_acknowledgment: Literal[True] = True
+
+    @model_validator(mode="after")
+    def sleep_thresholds(self):
+        if (
+            self.nighttime_minimum_profit_cad < self.minimum_profit_cad
+            or self.nighttime_minimum_return_pct < self.minimum_return_pct
+            or self.nighttime_minimum_buy_capital_cad < self.minimum_buy_capital_cad
+            or self.nighttime_minimum_liquidity_cad < self.minimum_liquidity_cad
+            or self.nighttime_maximum_quote_age_seconds > self.maximum_quote_age_seconds
+            or self.nighttime_minimum_persistence_seconds < self.minimum_persistence_seconds
+        ):
+            raise ValueError("Nighttime emergency thresholds cannot be below normal thresholds")
+        return self
+
+
