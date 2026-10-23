@@ -59,6 +59,40 @@ def test_exact_insufficient_inventory_is_in_own_asset_units():
     assert D(value[1]["missing_quantity"]) == D("0.012345678901234567")
 
 
+@pytest.mark.parametrize(
+    "missing,price,expected_assets",
+    [(False, "100", 1), (True, "100", 1), (False, "101", 1), (False, "0", 1)],
+)
+async def test_capital_allocation_preserves_every_cent_and_depth(
+    missing, price, expected_assets
+):
+    ex, asset = uuid4(), uuid4()
+    exchanges = {ex: SimpleNamespace(slug="synthetic-venue")}
+    assets = {asset: SimpleNamespace(canonical_key="synthetic:BTC")}
+    key = str(ex), str(asset)
+    marks = (
+        {}
+        if missing
+        else {
+            key: {
+                "cad_per_unit": price,
+                "received_at": NOW.isoformat(),
+                "quantity": "10",
+                "verified": False,
+            }
+        }
+    )
+    allocations = await allocate_weighted(
+        D("1000"), {key: D(1)}, {key: D(100)}, marks, exchanges, assets, exchanges[ex]
+    )
+    assert len(allocations) == expected_assets
+    assert (allocations[0]["asset"] == "synthetic:BTC") == (
+        not missing and price == "100"
+    )
+    assert sum(D(x["cad_value"]) for x in allocations) == 1000
+    for item in allocations:
+        assert D(item["quantity"]) > 0 and D(item["cad_value"]) > 0
+        assert stored(D(item["quantity"]) * D(item["cad_rate"])) == D(item["cad_value"])
 
 
 
