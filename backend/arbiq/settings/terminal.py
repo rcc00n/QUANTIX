@@ -89,3 +89,21 @@ class NotificationPreferences(Contract):
         return self
 
 
+class TerminalSettings(Contract):
+    schema_version: Literal["terminal-v1"] = "terminal-v1"
+    market: MarketPreferences = Field(default_factory=MarketPreferences)
+    notifications: NotificationPreferences = Field(default_factory=NotificationPreferences)
+
+
+async def read_effective_terminal(db, user_id=None):
+    query = select(TerminalSettingsVersion)
+    if user_id is not None:
+        query = query.where(TerminalSettingsVersion.user_id == user_id)
+    row = await db.scalar(
+        query.order_by(
+            TerminalSettingsVersion.version.desc(), TerminalSettingsVersion.effective_at.desc()
+        ).limit(1)
+    )
+    return row, TerminalSettings.model_validate(row.settings) if row else TerminalSettings()
+
+
