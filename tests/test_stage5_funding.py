@@ -313,6 +313,87 @@ def test_default_nonzero_slippage_budget_is_storable_and_depth_sized():
     assert quote.as_tuple().exponent >= -18
 
 
+def test_funding_requirements_match_ceil_rounded_long_unit_execution_debits():
+    from arbiq.market_data.contracts import BookLevel
+    from arbiq.opportunities.analysis import dump_input
+    from arbiq.opportunities.contracts import (
+        Fee,
+        MarketInput,
+        MarketRules,
+        identity_cad,
+    )
+    from arbiq.paper_trading.execution import simulate_leg
+    from arbiq.paper_trading.funding import required_quantities
+    from arbiq.settings.strategy import PaperStrategy
+
+    quantity = D("0.012345678901234567")
+    rules = MarketRules(amount_step=D("1e-18"), price_tick=D("1e-8"), verified=True)
+    fee = D("0.006")
+    buy_input = MarketInput(
+        str(uuid4()),
+        "synthetic-buy",
+        "asset:BTC",
+        "CAD",
+        (BookLevel(price="83.12345678", quantity=quantity),),
+        (BookLevel(price="82.12345678", quantity=quantity),),
+        Fee(fee),
+        rules,
+        identity_cad(),
+    )
+    sell_input = MarketInput(
+        str(uuid4()),
+        "synthetic-sell",
+        "asset:BTC",
+        "CAD",
+        (BookLevel(price="91.12345678", quantity=quantity),),
+        (BookLevel(price="90.12345678", quantity=quantity),),
+        Fee(fee, "base"),
+        rules,
+        identity_cad(),
+    )
+    evaluation = SimpleNamespace(
+        evidence={
+            "calculation_inputs": {
+                "buy": dump_input(buy_input),
+                "sell": dump_input(sell_input),
+            }
+        },
+        evaluated_at=execution_fixtures.NOW,
+    )
+    settings = PaperStrategy(
+        mode="RESEARCH_SHADOW",
+        trade_amount_cad="250",
+        taker_fee_rate="0.006",
+        slippage_bps="10",
+        sell_fee_currency="base",
+    )
+    best, quote, base = required_quantities(evaluation, settings)
+    assert quote.as_tuple().exponent == base.as_tuple().exponent == -18
+    buy_book = execution_fixtures.book(
+        uuid4(),
+        "synthetic-buy",
+        execution_fixtures.NOW,
+        bid="82.12345678",
+        ask="83.12345678",
+        qty=str(quantity),
+    )
+    sell_book = execution_fixtures.book(
+        uuid4(),
+        "synthetic-sell",
+        execution_fixtures.NOW,
+        bid="90.12345678",
+        ask="91.12345678",
+        qty=str(quantity),
+    )
+    bought = simulate_leg(
+        buy_book, "buy", best.buy_quantity, quote, Fee(fee), rules, D(10)
+    )
+    sold = simulate_leg(
+        sell_book, "sell", best.sell_quantity, base, Fee(fee, "base"), rules, D(10)
+    )
+    assert bought.quantity == best.buy_quantity and sold.quantity == best.sell_quantity
+    assert bought.quote_notional + bought.fee_quantity == quote
+    assert sold.quantity + sold.fee_quantity == base
 
 
 @pytest.fixture
