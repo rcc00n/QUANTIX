@@ -158,6 +158,49 @@ async def test_complete_route_policy_funds_paired_legs_instead_of_thin_cells():
     assert len(allocations) == 36
 
 
+async def test_complete_route_missing_one_mark_preserves_all_capital_as_cash():
+    ex, a, b = uuid4(), uuid4(), uuid4()
+    assets = {
+        a: SimpleNamespace(canonical_key="synthetic:quote"),
+        b: SimpleNamespace(canonical_key="synthetic:base"),
+    }
+    route = {
+        "route_id": "synthetic",
+        "required": [
+            {
+                "exchange_id": str(ex),
+                "exchange": "synthetic",
+                "asset_id": str(asset),
+                "canonical_key": assets[asset].canonical_key,
+                "required_quantity": "2.5",
+            }
+            for asset in (a, b)
+        ],
+        "reasons": [],
+    }
+
+    async def missing(items):
+        x = items[0]
+        return {
+            (x["exchange_id"], x["asset_id"]): {
+                **x,
+                "cad_per_unit": "100",
+                "received_at": NOW.isoformat(),
+            }
+        }
+
+    allocations = await allocate_complete_routes(
+        D(1000),
+        [route],
+        missing,
+        {ex: SimpleNamespace(slug="synthetic")},
+        assets,
+        SimpleNamespace(slug="synthetic"),
+    )
+    assert len(allocations) == 1 and allocations[0]["asset"] == "fiat:CAD"
+    assert D(allocations[0]["cad_value"]) == 1000
+    assert classify_funded_requirements([route], allocations) == 0
+    assert "FULL_SIZE_CAD_MARK_UNAVAILABLE" in route["reasons"]
 
 
 
