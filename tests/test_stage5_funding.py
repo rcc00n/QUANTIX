@@ -111,6 +111,51 @@ async def test_tiny_rounding_stays_cash_without_free_crypto():
     assert D(allocations[0]["cad_value"]) == D("1e-18")
 
 
+async def test_complete_route_policy_funds_paired_legs_instead_of_thin_cells():
+    exchange = uuid4()
+    assets = {
+        uuid4(): SimpleNamespace(canonical_key="synthetic:" + str(i)) for i in range(40)
+    }
+    keys = list(assets)
+    routes = []
+    for index in range(20):
+        required = [
+            {
+                "exchange_id": str(exchange),
+                "exchange": "synthetic",
+                "asset_id": str(asset),
+                "canonical_key": assets[asset].canonical_key,
+                "required_quantity": "2.5",
+            }
+            for asset in keys[2 * index : 2 * index + 2]
+        ]
+        routes.append({"route_id": str(index), "required": required, "reasons": []})
+
+    async def marks(items):
+        return {
+            (x["exchange_id"], x["asset_id"]): {
+                **x,
+                "cad_per_unit": "100",
+                "received_at": NOW.isoformat(),
+                "source": "SYNTHETIC_DEPTH",
+            }
+            for x in items
+        }
+
+    allocations = await allocate_complete_routes(
+        D(9000),
+        routes,
+        marks,
+        {exchange: SimpleNamespace(slug="synthetic")},
+        assets,
+        SimpleNamespace(slug="synthetic"),
+    )
+    assert sum(D(x["cad_value"]) for x in allocations) == 9000
+    assert classify_funded_requirements(routes, allocations) == 18
+    assert all(routes[i]["funded"] for i in range(18))
+    assert not routes[18]["funded"] and not routes[19]["funded"]
+    # No one-sided funding: each admitted pair has both original-unit requirements.
+    assert len(allocations) == 36
 
 
 
