@@ -203,6 +203,60 @@ async def test_complete_route_missing_one_mark_preserves_all_capital_as_cash():
     assert "FULL_SIZE_CAD_MARK_UNAVAILABLE" in route["reasons"]
 
 
+async def test_complete_routes_share_maximum_units_not_free_or_concurrent_inventory():
+    buy, sell, cad, coin = uuid4(), uuid4(), uuid4(), uuid4()
+    exchanges = {
+        buy: SimpleNamespace(slug="synthetic-buy"),
+        sell: SimpleNamespace(slug="synthetic-sell"),
+    }
+    assets = {
+        cad: SimpleNamespace(canonical_key="fiat:CAD"),
+        coin: SimpleNamespace(canonical_key="synthetic:BTC"),
+    }
+    routes = []
+    for quantity in ("1", "2"):
+        routes.append(
+            {
+                "route_id": quantity,
+                "reasons": [],
+                "required": [
+                    {
+                        "exchange_id": str(buy),
+                        "exchange": "synthetic-buy",
+                        "asset_id": str(cad),
+                        "canonical_key": "fiat:CAD",
+                        "required_quantity": "250",
+                    },
+                    {
+                        "exchange_id": str(sell),
+                        "exchange": "synthetic-sell",
+                        "asset_id": str(coin),
+                        "canonical_key": "synthetic:BTC",
+                        "required_quantity": quantity,
+                    },
+                ],
+            }
+        )
+
+    async def marks(items):
+        return {
+            (x["exchange_id"], x["asset_id"]): {
+                **x,
+                "cad_per_unit": "100",
+                "received_at": NOW.isoformat(),
+            }
+            for x in items
+        }
+
+    allocations = await allocate_complete_routes(
+        D(500), routes, marks, exchanges, assets, exchanges[buy]
+    )
+    assert sum(D(x["cad_value"]) for x in allocations) == 500
+    assert (
+        next(D(x["quantity"]) for x in allocations if x["asset"] == "synthetic:BTC")
+        == 2
+    )
+    assert classify_funded_requirements(routes, allocations) == 2
 
 
 
