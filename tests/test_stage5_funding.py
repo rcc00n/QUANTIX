@@ -259,6 +259,27 @@ async def test_complete_routes_share_maximum_units_not_free_or_concurrent_invent
     assert classify_funded_requirements(routes, allocations) == 2
 
 
+def test_persistent_preferences_validate_night_thresholds_and_decimal_inputs():
+    with pytest.raises(ValidationError):
+        TerminalSettings.model_validate(
+            {"notifications": {"minimum_profit_cad": "100"}}
+        )
+    with pytest.raises(ValidationError):
+        TerminalSettings.model_validate({"market": {"minimum_liquidity": 0.5}})
+    with pytest.raises(ValidationError):
+        TerminalSettings.model_validate({"market": {"maximum_age_seconds": 61}})
+    with pytest.raises(ValidationError):
+        TerminalSettings.model_validate({"notifications": {"timezone": "UTC"}})
+    value = TerminalSettings.model_validate(
+        {
+            "notifications": {
+                "telegram_enabled": True,
+                "push_requested": True,
+                "voice_requested": True,
+            }
+        }
+    )
+    assert value.notifications.telegram_enabled and value.notifications.voice_requested
 
 
 
