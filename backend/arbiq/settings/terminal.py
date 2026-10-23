@@ -107,3 +107,18 @@ async def read_effective_terminal(db, user_id=None):
     return row, TerminalSettings.model_validate(row.settings) if row else TerminalSettings()
 
 
+async def save_terminal(db, user_id, settings, now, expected_version=None):
+    await db.scalar(select(User).where(User.id == user_id).with_for_update())
+    prior, _ = await read_effective_terminal(db, user_id)
+    version = prior.version if prior else 0
+    if expected_version is not None and expected_version != version:
+        raise ValueError("SETTINGS_VERSION_CONFLICT")
+    row = TerminalSettingsVersion(
+        user_id=user_id,
+        version=version + 1,
+        settings=settings.model_dump(mode="json"),
+        effective_at=now,
+    )
+    db.add(row)
+    await db.flush()
+    return row
