@@ -282,6 +282,10 @@ def test_persistent_preferences_validate_night_thresholds_and_decimal_inputs():
     assert value.notifications.telegram_enabled and value.notifications.voice_requested
 
 
+def test_unstorable_or_zero_quantities_remain_cash():
+    assert quantity_for_budget(D("10000"), D("1e-18")) is None
+    assert quantity_for_budget(D("1e-18"), D("1e19")) is None
+    assert quantity_for_budget(D("1000"), D("0")) is None
 
 
 
