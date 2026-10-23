@@ -41,3 +41,35 @@ def cad(v):
     return display_value(v, places=2, minimum_places=2, currency="C$")
 
 
+def alert_message(result, now, app_url, *, emergency=False):
+    costs = result.get("costs", {})
+    label = "ACTIONABLE ESTIMATE" if result.get("actionable") is True else "RESEARCH ONLY"
+    source = timestamp(result.get("supporting_source_at"))
+    age = (
+        f"{(now - source).total_seconds():.1f}s"
+        if source and source <= now
+        else "unknown / future timestamp"
+        if source
+        else "unknown"
+    )
+    buy_symbol = result.get("buy_symbol", "unknown quote")
+    sell_symbol = result.get("sell_symbol", "unknown quote")
+    text = (
+        f"QUANTIX — {'URGENT ' if emergency else ''}{label}\n"
+        f"{result.get('base_asset', 'Unknown asset')}\n"
+        f"BUY: {result.get('buy_exchange', 'unknown')} — {display_value(result.get('buy_price'))} "
+        f"({buy_symbol})\n"
+        f"SELL: {result.get('sell_exchange', 'unknown')} — "
+        f"{display_value(result.get('sell_price'))} ({sell_symbol})\n"
+        f"Buy Capital: {cad(result.get('acquisition_cost_cad'))}\n"
+        f"Sell inventory: {display_value(costs.get('sell_base_required'))} "
+        f"{result.get('base_asset', '')}\n"
+        f"Estimated Net: {cad(result.get('net_profit_cad'))} "
+        f"({display_value(result.get('net_return_pct'), places=4, minimum_places=2)}%)\n"
+        f"Quote age: {age} • {now.isoformat()}\n"
+        "Observed estimate; historical prices may no longer be executable. PAPER ONLY."
+    )
+    if label == "RESEARCH ONLY":
+        text += "\nMissing confirmations: " + ", ".join(result.get("reasons", [])[:5])
+    detail_url = f"{app_url.rstrip('/')}/opportunities?opportunity={result.get('id', '')}"
+    return text + f"\nExact values / recheck: {detail_url}"
