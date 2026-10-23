@@ -288,6 +288,29 @@ def test_unstorable_or_zero_quantities_remain_cash():
     assert quantity_for_budget(D("1000"), D("0")) is None
 
 
+def test_default_nonzero_slippage_budget_is_storable_and_depth_sized():
+    from arbiq.opportunities.analysis import dump_input
+    from arbiq.paper_trading.funding import required_quantities
+    from arbiq.settings.strategy import presets
+
+    buy = execution_fixtures.book(uuid4(), "synthetic-buy", execution_fixtures.NOW)
+    sell = execution_fixtures.book(
+        uuid4(), "synthetic-sell", execution_fixtures.NOW, bid="110", ask="111"
+    )
+    evaluation = SimpleNamespace(
+        evidence={
+            "calculation_inputs": {
+                "buy": dump_input(execution_fixtures.inputs(buy, "synthetic-buy")),
+                "sell": dump_input(execution_fixtures.inputs(sell, "synthetic-sell")),
+            }
+        },
+        evaluated_at=execution_fixtures.NOW,
+    )
+    best, quote, base = required_quantities(
+        evaluation, presets()["Aggressive Research"]
+    )
+    assert best.buy_quantity > 0 and quote <= 250 and base > 0
+    assert quote.as_tuple().exponent >= -18
 
 
 
