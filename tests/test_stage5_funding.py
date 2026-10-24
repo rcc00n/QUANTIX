@@ -467,6 +467,46 @@ def test_replay_concurrency_is_bounded_without_pending_queue(funding_api):
     assert response.status_code == 429
 
 
+async def test_cash_proposal_experiment_idempotency_and_preserved_reset(funding_api):
+    c, sessions, _ = funding_api
+    response = c.post(
+        "/api/v1/paper/funding/proposal",
+        json={"capital_cad": "10000", "exchange_slugs": ["kraken"]},
+    )
+    assert response.status_code == 200, response.text
+    proposal = response.json()
+    assert D(proposal["total_cad"]) == 10000
+    assert all(a["asset"] == "fiat:CAD" for a in proposal["allocations"])
+    body = {
+        "proposal_id": proposal["id"],
+        "capital_cad": "10000",
+        "idempotency_key": "SYNTHETIC-" + uuid4().hex,
+    }
+    created = c.post("/api/v1/paper/funding/experiments", json=body)
+    assert created.status_code == 201, created.text
+    a = created.json()
+    retried = c.post("/api/v1/paper/funding/experiments", json=body).json()
+    assert retried["id"] == a["id"] and retried["reused"]
+    assert (
+        c.post(
+            "/api/v1/paper/funding/experiments", json={**body, "name": "different"}
+        ).status_code
+        == 409
+    )
+    reset = c.post(
+        "/api/v1/paper/funding/experiments",
+        json={
+            **body,
+            "idempotency_key": "SYNTHETIC-RESET-" + uuid4().hex,
+            "reset_from_session_id": a["id"],
+        },
+    )
+    assert reset.status_code == 201 and reset.json()["id"] != a["id"]
+    listing = c.get("/api/v1/paper/sessions").json()
+    assert len(listing["items"]) == 2
+    async with sessions() as db:
+        assert await reconcile(db, UUID(a["id"]))
+        assert await reconcile(db, UUID(reset.json()["id"]))
 
 
 
