@@ -574,3 +574,64 @@ async def test_missing_inventory_coverage_and_causal_replay(funding_api, environ
     assert str(route.id) not in {x["route_id"] for x in expired_view["routes"]}
 
 
+async def test_proposal_with_observed_full_size_marks_keeps_equal_capital(
+    funding_api, environment, monkeypatch
+):
+    c, _, _ = funding_api
+
+    async def marks(request, quantities):
+        return {
+            (q["exchange_id"], q["asset_id"]): {
+                **q,
+                "cad_per_unit": "100",
+                "received_at": NOW.isoformat(),
+                "source": "SYNTHETIC_PUBLIC_DEPTH",
+                "verified": False,
+            }
+            for q in quantities
+        }
+
+    monkeypatch.setattr("arbiq.paper_trading.funding.quote_marks", marks)
+    async with environment.sessions() as db:
+        exchanges = list(
+            await db.scalars(
+                select(Exchange).where(
+                    Exchange.id.in_([environment.ids["bx"], environment.ids["sx"]])
+                )
+            )
+        )
+        for exchange in exchanges:
+            exchange.enabled = True
+        await db.commit()
+    outputs = []
+    for policy in ("COVERAGE", "EQUAL_VENUES"):
+        response = c.post(
+            "/api/v1/paper/funding/proposal",
+            json={
+                "capital_cad": "10000",
+                "exchange_slugs": [x.slug for x in exchanges],
+                "policy": policy,
+                "trade_amount_cad": "500",
+            },
+        )
+        assert response.status_code == 200, response.text
+        proposal = response.json()
+        with localcontext() as ctx:
+            ctx.prec = 78
+            assert sum(D(x["cad_value"]) for x in proposal["allocations"]) == 10000
+        assert any(x["asset"] != "fiat:CAD" for x in proposal["allocations"])
+        assert proposal["funded_route_count"] >= 1
+        assert proposal["trade_amount_cad"] == "500"
+        if policy == "COVERAGE":
+            created = c.post(
+                "/api/v1/paper/funding/experiments",
+                json={
+                    "proposal_id": proposal["id"],
+                    "capital_cad": "10000",
+                    "idempotency_key": "SYNTHETIC-TARGET-" + uuid4().hex,
+                },
+            )
+            assert created.status_code == 201, created.text
+            assert D(created.json()["settings"]["trade_amount_cad"]) == 500
+        outputs.append(proposal)
+    assert outputs[0]["capital_cad"] == outputs[1]["capital_cad"]
