@@ -41,3 +41,73 @@ async def binding_for(db, user_id):
     )
 
 
+async def delivery_status(db, user_id, now=None):
+    now = now or datetime.now(UTC)
+    binding = await binding_for(db, user_id)
+    state = await db.get(NotificationWorkerState, "telegram")
+    _, config = await read_effective_terminal(db, user_id)
+    worker_recent = bool(state and 0 <= (now - state.heartbeat_at).total_seconds() <= 90)
+    health = bool(worker_recent and state.healthy)
+    pending = list(
+        await db.scalars(
+            select(TelegramChallenge)
+            .where(
+                TelegramChallenge.user_id == user_id,
+                TelegramChallenge.expires_at > now,
+                TelegramChallenge.consumed_at.is_(None),
+            )
+            .order_by(TelegramChallenge.created_at.desc())
+            .limit(5)
+        )
+    )
+    counts = dict(
+        (
+            await db.execute(
+                select(NotificationOutbox.status, func.count())
+                .where(NotificationOutbox.user_id == user_id)
+                .group_by(NotificationOutbox.status)
+            )
+        ).all()
+    )
+    return {
+        "paired": binding is not None,
+        "pairing": {
+            "id": str(binding.id),
+            "username": binding.telegram_username,
+            "approved_at": binding.approved_at.isoformat(),
+            "paused": binding.paused,
+        }
+        if binding
+        else None,
+        "pending_challenges": [
+            {
+                "id": str(x.id),
+                "expires_at": x.expires_at.isoformat(),
+                "requested": x.requested_at is not None,
+                "telegram_username": x.telegram_username,
+                "requested_at": x.requested_at.isoformat() if x.requested_at else None,
+            }
+            for x in pending
+        ],
+        "worker": {
+            "heartbeat_at": state.heartbeat_at.isoformat(),
+            "healthy": health,
+            **state.details,
+        }
+        if state
+        else None,
+        "telegram_enabled": config.notifications.telegram_enabled,
+        "delivery_active": bool(
+            binding and not binding.paused and health and config.notifications.telegram_enabled
+        ),
+        "providers": {
+            "telegram": {"available": health},
+            "push": {"enabled": False, "reason": "PAID_PROVIDER_NOT_AUTHORIZED"},
+            "voice": {"enabled": False, "reason": "PAID_PROVIDER_NOT_AUTHORIZED"},
+        },
+        "queue_counts": counts,
+        "delivery_semantics": "Durable retries for explicit rejection; uncertain sends "
+        "require review",
+    }
+
+
