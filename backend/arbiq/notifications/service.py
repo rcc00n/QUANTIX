@@ -167,3 +167,41 @@ async def request_pairing(db, token, chat, sender, now):
     return True
 
 
+async def approve_pairing(db, user_id, challenge_id, now):
+    await db.scalar(select(User).where(User.id == user_id).with_for_update())
+    challenge = await db.scalar(
+        select(TelegramChallenge)
+        .where(
+            TelegramChallenge.id == challenge_id,
+            TelegramChallenge.user_id == user_id,
+            TelegramChallenge.expires_at > now,
+            TelegramChallenge.consumed_at.is_(None),
+            TelegramChallenge.requested_at.is_not(None),
+        )
+        .with_for_update()
+    )
+    if not challenge or challenge.chat_id is None:
+        raise ValueError("PAIRING_CHALLENGE_UNAVAILABLE")
+    row = await db.scalar(select(TelegramBinding).where(TelegramBinding.user_id == user_id))
+    other = await db.scalar(
+        select(TelegramBinding).where(
+            TelegramBinding.user_id != user_id,
+            (TelegramBinding.chat_id == challenge.chat_id)
+            | (TelegramBinding.telegram_user_id == challenge.telegram_user_id),
+        )
+    )
+    if other:
+        raise ValueError("TELEGRAM_ACCOUNT_ALREADY_BOUND")
+    if row is not None and row.revoked_at is None:
+        raise ValueError("ALREADY_PAIRED")
+    if row is None:
+        row = TelegramBinding(user_id=user_id)
+        db.add(row)
+    row.chat_id, row.telegram_user_id = challenge.chat_id, challenge.telegram_user_id
+    row.telegram_username, row.approved_at = challenge.telegram_username, now
+    row.paused, row.revoked_at, challenge.consumed_at = False, None, now
+    audit(db, "pairing.approved", user_id=user_id)
+    await db.flush()
+    return row
+
+
