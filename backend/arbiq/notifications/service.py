@@ -138,3 +138,32 @@ async def create_challenge(db, user_id, now):
     }
 
 
+async def request_pairing(db, token, chat, sender, now):
+    if chat.get("type") != "private" or chat.get("id") != sender.get("id"):
+        return False
+    row = await db.scalar(
+        select(TelegramChallenge)
+        .where(
+            TelegramChallenge.token_hash == hash_token(token),
+            TelegramChallenge.expires_at > now,
+            TelegramChallenge.consumed_at.is_(None),
+        )
+        .with_for_update()
+    )
+    if not row or row.requested_at is not None:
+        return False
+    existing = await db.scalar(
+        select(TelegramBinding).where(
+            (TelegramBinding.chat_id == chat["id"])
+            | (TelegramBinding.telegram_user_id == sender["id"])
+        )
+    )
+    if existing and existing.revoked_at is None:
+        return False
+    row.chat_id, row.telegram_user_id = chat["id"], sender["id"]
+    row.telegram_username = str(sender["username"])[:100] if sender.get("username") else None
+    row.requested_at = now
+    audit(db, "pairing.approval_requested", user_id=row.user_id)
+    return True
+
+
