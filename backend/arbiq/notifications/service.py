@@ -33,3 +33,11 @@ def audit(db, event, *, user_id=None, outbox_id=None, alert_id=None, details=Non
     )
 
 
+async def binding_for(db, user_id):
+    return await db.scalar(
+        select(TelegramBinding).where(
+            TelegramBinding.user_id == user_id, TelegramBinding.revoked_at.is_(None)
+        )
+    )
+
+
