@@ -111,3 +111,30 @@ async def delivery_status(db, user_id, now=None):
     }
 
 
+async def create_challenge(db, user_id, now):
+    await db.scalar(select(User).where(User.id == user_id).with_for_update())
+    if await binding_for(db, user_id):
+        raise ValueError("ALREADY_PAIRED")
+    # One current enrollment per authenticated owner. Invalidated challenges cannot replay.
+    await db.execute(
+        update(TelegramChallenge)
+        .where(TelegramChallenge.user_id == user_id, TelegramChallenge.consumed_at.is_(None))
+        .values(consumed_at=now)
+    )
+    token = secrets.token_urlsafe(24)
+    challenge = TelegramChallenge(
+        user_id=user_id, token_hash=hash_token(token), expires_at=now + timedelta(minutes=10)
+    )
+    db.add(challenge)
+    await db.flush()
+    audit(db, "pairing.challenge_created", user_id=user_id)
+    state = await db.get(NotificationWorkerState, "telegram")
+    username = state.details.get("bot_username") if state else None
+    return {
+        "challenge_id": str(challenge.id),
+        "challenge": token,
+        "start_url": f"https://t.me/{username}?start={token}" if username else None,
+        "expires_at": challenge.expires_at.isoformat(),
+    }
+
+
