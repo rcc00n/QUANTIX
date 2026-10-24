@@ -433,6 +433,31 @@ def test_new_interfaces_require_authentication(client):
     )
 
 
+async def test_settings_versions_conflict_and_notifications_stay_inactive(funding_api):
+    c, _, _ = funding_api
+    original = c.get("/api/v1/settings/terminal").json()
+    assert original["version"] == 0 and not original["delivery_active"]
+    settings = original["settings"]
+    settings["market"]["enabled_exchanges"] = ["kraken"]
+    settings["market"]["maximum_markets_per_exchange"] = 12
+    settings["notifications"]["telegram_enabled"] = True
+    response = c.put(
+        "/api/v1/settings/terminal", json={"settings": settings, "expected_version": 0}
+    )
+    assert response.status_code == 200, response.text
+    value = response.json()
+    assert value["version"] == 1 and not value["delivery_active"]
+    assert value["settings"]["notifications"]["telegram_enabled"]
+    assert c.get("/api/v1/settings/terminal").json()["settings"] == settings
+    assert (
+        c.put(
+            "/api/v1/settings/terminal",
+            json={"settings": settings, "expected_version": 0},
+        ).status_code
+        == 409
+    )
+    history = c.get("/api/v1/settings/terminal/history").json()
+    assert len(history["items"]) == 1
 
 
 
