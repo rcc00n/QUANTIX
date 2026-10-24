@@ -417,6 +417,20 @@ async def funding_api(private_api, monkeypatch):
     return private_api
 
 
+def test_new_interfaces_require_authentication(client):
+    client.cookies.clear()
+    for path in (
+        "/settings/terminal",
+        "/settings/terminal/history",
+        "/paper/funding/catalog",
+    ):
+        assert client.get("/api/v1" + path).status_code == 401
+    assert (
+        client.post(
+            "/api/v1/paper/replay", json={"evaluation_id": str(uuid4())}
+        ).status_code
+        == 401
+    )
 
 
 
