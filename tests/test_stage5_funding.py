@@ -527,5 +527,50 @@ async def test_custom_funding_cannot_create_free_crypto_or_reset_validated(fundi
     assert response.status_code == 409
 
 
+async def test_missing_inventory_coverage_and_causal_replay(funding_api, environment):
+    c, _, _ = funding_api
+    p = c.post("/api/v1/paper/sessions", json={"classification": "RESEARCH"}).json()
+    async with environment.sessions() as db:
+        route = await db.scalar(
+            select(ArbitrageRoute).where(
+                ArbitrageRoute.buy_market_id == environment.ids["bm"]
+            )
+        )
+        evaluation = await db.scalar(
+            select(ArbitrageEvaluation).where(ArbitrageEvaluation.route_id == route.id)
+        )
+        route.updated_at = NOW
+        route.expires_at = NOW + timedelta(minutes=2)
+        await db.commit()
+        count_before = await db.scalar(select(func.count()).select_from(PaperFill))
+    response = c.get(
+        "/api/v1/paper/funding/coverage", params={"session_id": p["id"], "limit": 50}
+    )
+    assert response.status_code == 200, response.text
+    record = next(
+        x for x in response.json()["routes"] if x["route_id"] == str(route.id)
+    )
+    assert not record["inventory_sufficient"]
+    assert any(D(x["missing_quantity"]) > 0 for x in record["required"])
+    replay = c.post(
+        "/api/v1/paper/replay",
+        json={"evaluation_id": str(evaluation.id), "reaction_delay_seconds": 30},
+    )
+    assert replay.status_code == 200, replay.text
+    value = replay.json()
+    assert value["original_projection"] is not None
+    assert value["delayed_projection"] is None
+    assert "DELAYED_BOOK_EVIDENCE_INSUFFICIENT" in value["limitations"]
+    async with environment.sessions() as db:
+        assert (
+            await db.scalar(select(func.count()).select_from(PaperFill)) == count_before
+        )
+        expired = await db.get(ArbitrageRoute, route.id)
+        expired.expires_at = NOW - timedelta(seconds=1)
+        await db.commit()
+    expired_view = c.get(
+        "/api/v1/paper/funding/coverage", params={"session_id": p["id"], "limit": 50}
+    ).json()
+    assert str(route.id) not in {x["route_id"] for x in expired_view["routes"]}
 
 
