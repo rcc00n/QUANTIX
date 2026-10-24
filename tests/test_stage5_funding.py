@@ -509,6 +509,22 @@ async def test_cash_proposal_experiment_idempotency_and_preserved_reset(funding_
         assert await reconcile(db, UUID(reset.json()["id"]))
 
 
+async def test_custom_funding_cannot_create_free_crypto_or_reset_validated(funding_api):
+    c, _, asset = funding_api
+    bad = {
+        "capital_cad": "10000",
+        "idempotency_key": "SYNTHETIC-" + uuid4().hex,
+        "allocations": [
+            {"exchange": "kraken", "asset": asset, "quantity": "1", "cad_rate": "100"}
+        ],
+    }
+    assert c.post("/api/v1/paper/funding/experiments", json=bad).status_code == 422
+    primary = c.post("/api/v1/paper/sessions", json={}).json()
+    response = c.post(
+        "/api/v1/paper/funding/experiments",
+        json={**bad, "reset_from_session_id": primary["id"]},
+    )
+    assert response.status_code == 409
 
 
 
