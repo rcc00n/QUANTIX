@@ -460,6 +460,11 @@ async def test_settings_versions_conflict_and_notifications_stay_inactive(fundin
     assert len(history["items"]) == 1
 
 
+def test_replay_concurrency_is_bounded_without_pending_queue(funding_api):
+    c, _, _ = funding_api
+    c.app.state.paper_replay_gate = asyncio.Semaphore(0)
+    response = c.post("/api/v1/paper/replay", json={"evaluation_id": str(uuid4())})
+    assert response.status_code == 429
 
 
 
