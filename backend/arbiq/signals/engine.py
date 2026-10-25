@@ -277,3 +277,78 @@ async def revalidate_delivery(db, outbox, now, clock_trusted):
     return None
 
 
+async def schedule_repeats(db, now, *, clock_trusted, app_url):
+    states = list(
+        await db.scalars(
+            select(AlertLifecycle)
+            .where(
+                AlertLifecycle.acknowledged_at.is_(None),
+                AlertLifecycle.cancelled_at.is_(None),
+                AlertLifecycle.next_repeat_at <= now,
+            )
+            .order_by(AlertLifecycle.next_repeat_at)
+            .limit(10)
+        )
+    )
+    for state in states:
+        decision = await db.get(AlertDecision, state.decision_id)
+        binding = await db.scalar(
+            select(TelegramBinding).where(
+                TelegramBinding.user_id == decision.user_id, TelegramBinding.revoked_at.is_(None)
+            )
+        )
+        _, terminal = await read_effective_terminal(db, decision.user_id)
+        policy = terminal.notifications
+        if (
+            not binding
+            or binding.paused
+            or decision.expires_at <= now
+            or not decision.emergency
+            or not policy.repeat_until_acknowledged
+            or state.repeat_count >= policy.maximum_repeats
+        ):
+            state.next_repeat_at = None
+            continue
+        source = await db.scalar(
+            select(ArbitrageEvaluation)
+            .where(ArbitrageEvaluation.route_id == UUID(decision.evidence["route_id"]))
+            .order_by(ArbitrageEvaluation.revision.desc())
+            .limit(1)
+        )
+        gate = await evaluate_source(db, source, policy, now, clock_trusted)
+        if not gate.eligible or not gate.emergency:
+            state.next_repeat_at = None
+            audit(
+                db,
+                "alert.escalation_cancelled",
+                user_id=decision.user_id,
+                alert_id=decision.id,
+                details={"reason": "FRESH_CONFIRMATION_FAILED"},
+            )
+            continue
+        local_start = now.astimezone(EDMONTON).replace(hour=0, minute=0, second=0, microsecond=0)
+        count = await db.scalar(
+            select(func.count())
+            .select_from(NotificationOutbox)
+            .where(
+                NotificationOutbox.user_id == binding.user_id,
+                NotificationOutbox.kind == "emergency",
+                NotificationOutbox.created_at >= local_start,
+            )
+        )
+        if count >= policy.daily_emergency_cap:
+            state.next_repeat_at = None
+            continue
+        state.repeat_count += 1
+        await enqueue(
+            db,
+            binding,
+            key=f"alert:{decision.id}:{state.repeat_count}:{source.id}",
+            kind="emergency",
+            message=alert_message(source.result, now, app_url, emergency=True),
+            now=now,
+            expires_at=decision.expires_at,
+            alert_id=decision.id,
+        )
+        # The next repeat is scheduled only after successful delivery.
+        state.next_repeat_at = None
