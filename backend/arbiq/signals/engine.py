@@ -212,3 +212,68 @@ async def scan(db, now, *, clock_trusted, app_url):
             )
 
 
+async def revalidate_delivery(db, outbox, now, clock_trusted):
+    if outbox.alert_id is None:
+        return None
+    decision = await db.get(AlertDecision, outbox.alert_id)
+    lifecycle = await db.scalar(
+        select(AlertLifecycle).where(AlertLifecycle.decision_id == decision.id)
+    )
+    if lifecycle and (lifecycle.acknowledged_at or lifecycle.cancelled_at):
+        return "ALERT_ACKNOWLEDGED_OR_CANCELLED"
+    route = await db.get(ArbitrageRoute, UUID(decision.evidence["route_id"]))
+    if (
+        not route
+        or route.status not in ("VERIFIED_MARKET", "RESEARCH_ONLY")
+        or route.expires_at <= now
+    ):
+        return "ROUTE_NO_LONGER_CURRENT"
+    # Each repeated send must use the newly confirmed current evaluation, not stale original prices.
+    source = await db.scalar(
+        select(ArbitrageEvaluation)
+        .where(ArbitrageEvaluation.route_id == route.id)
+        .order_by(ArbitrageEvaluation.revision.desc())
+        .limit(1)
+    )
+    _, settings = await read_effective_terminal(db, outbox.user_id)
+    gate = await evaluate_source(db, source, settings.notifications, now, clock_trusted)
+    if not gate.eligible or (decision.emergency and not gate.emergency):
+        return ",".join(gate.reasons)[:80] or "EMERGENCY_NO_LONGER_ELIGIBLE"
+    if gate.classification != decision.classification:
+        return "CLASSIFICATION_CHANGED"
+    # Require the original message evidence to remain fresh; never replace provenance.
+    original = await db.get(ArbitrageEvaluation, decision.evaluation_id)
+    if outbox.deduplication_key.endswith(":0"):
+        original_gate = await evaluate_source(
+            db, original, settings.notifications, now, clock_trusted
+        )
+        if not original_gate.eligible:
+            return "ORIGINAL_EVIDENCE_EXPIRED"
+    else:
+        try:
+            message_source_id = UUID(outbox.deduplication_key.rsplit(":", 1)[-1])
+        except ValueError:
+            return "REPEAT_MESSAGE_SOURCE_UNAVAILABLE"
+        message_source = await db.get(ArbitrageEvaluation, message_source_id)
+        if message_source is None or message_source.route_id != route.id:
+            return "REPEAT_MESSAGE_SOURCE_UNAVAILABLE"
+        message_gate = await evaluate_source(
+            db, message_source, settings.notifications, now, clock_trusted
+        )
+        if not message_gate.eligible or not message_gate.emergency:
+            return "REPEAT_MESSAGE_EVIDENCE_EXPIRED"
+        audit(
+            db,
+            "alert.repeat_reconfirmed",
+            user_id=outbox.user_id,
+            alert_id=decision.id,
+            outbox_id=outbox.id,
+            details={
+                "evaluation_id": str(source.id),
+                "message_evaluation_id": str(message_source.id),
+                "revision": source.revision,
+            },
+        )
+    return None
+
+
