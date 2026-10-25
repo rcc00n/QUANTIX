@@ -83,3 +83,36 @@ async def evaluate_source(db, source, policy, now, clock_trusted):
     )
 
 
+async def cooldown_reason(db, user_id, source, policy, now, emergency):
+    seconds = policy.escalation_cooldown_seconds if emergency else policy.cooldown_seconds
+    prior = await db.scalar(
+        select(AlertDecision.id)
+        .join(ArbitrageEvaluation, AlertDecision.evaluation_id == ArbitrageEvaluation.id)
+        .where(
+            AlertDecision.user_id == user_id,
+            AlertDecision.eligible.is_(True),
+            ArbitrageEvaluation.route_id == source.route_id,
+            AlertDecision.evaluated_at >= now - timedelta(seconds=seconds),
+        )
+        .limit(1)
+    )
+    if prior:
+        return "ROUTE_COOLDOWN"
+    if emergency:
+        local = now.astimezone(EDMONTON)
+        start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+        count = await db.scalar(
+            select(func.count())
+            .select_from(NotificationOutbox)
+            .where(
+                NotificationOutbox.user_id == user_id,
+                NotificationOutbox.kind == "emergency",
+                NotificationOutbox.created_at >= start,
+                NotificationOutbox.status.not_in(("cancelled", "expired", "failed")),
+            )
+        )
+        if count >= policy.daily_emergency_cap:
+            return "DAILY_EMERGENCY_CAP"
+    return None
+
+
