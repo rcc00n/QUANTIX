@@ -225,3 +225,11 @@ async def revoke_pairing(db, user_id, now):
     )
 
 
+async def set_paused(db, user_id, paused):
+    binding = await binding_for(db, user_id)
+    if binding is None:
+        raise ValueError("TELEGRAM_NOT_PAIRED")
+    binding.paused = paused
+    audit(db, "notifications.paused" if paused else "notifications.resumed", user_id=user_id)
+
+
