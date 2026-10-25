@@ -66,3 +66,20 @@ async def persistence(db, evaluation, policy, now, clock_trusted):
     return max(0, (evaluation.evaluated_at - earliest).total_seconds())
 
 
+async def evaluate_source(db, source, policy, now, clock_trusted):
+    duration = await persistence(db, source, policy, now, clock_trusted)
+    clock = getattr(db, "info", {}).get("notification_clock")
+    if clock is not None:
+        now = clock.utcnow()
+        clock_trusted = bool(clock_trusted and clock.snapshot().get("trusted"))
+        db.info["last_alert_checked_at"] = now
+    return evaluate(
+        source.result,
+        source.evidence,
+        policy,
+        now,
+        clock_trusted=clock_trusted,
+        persistence_seconds=duration,
+    )
+
+
