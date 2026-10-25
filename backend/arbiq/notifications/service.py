@@ -233,3 +233,65 @@ async def set_paused(db, user_id, paused):
     audit(db, "notifications.paused" if paused else "notifications.resumed", user_id=user_id)
 
 
+async def enqueue(
+    db,
+    binding,
+    *,
+    key,
+    kind,
+    message,
+    now,
+    expires_at,
+    alert_id=None,
+    silent=False,
+    generation_ms=None,
+):
+    prior = await db.scalar(
+        select(NotificationOutbox).where(NotificationOutbox.deduplication_key == key)
+    )
+    if prior:
+        return prior
+    # Bound active work without dropping financial history or silently accepting a lost request.
+    active = await db.scalar(
+        select(func.count())
+        .select_from(NotificationOutbox)
+        .where(NotificationOutbox.status.in_(("pending", "retry", "sending")))
+    )
+    if active >= 1000:
+        raise ValueError("NOTIFICATION_QUEUE_FULL")
+    clock = db.info.get("notification_clock")
+    inserted_at = clock.utcnow() if clock and clock.snapshot().get("trusted") else None
+    row = NotificationOutbox(
+        user_id=binding.user_id,
+        binding_id=binding.id,
+        alert_id=alert_id,
+        deduplication_key=key,
+        kind=kind,
+        message=message[:4000],
+        silent=silent,
+        available_at=now,
+        expires_at=expires_at,
+        status="pending",
+        attempts=0,
+        created_at=inserted_at or now,
+    )
+    db.add(row)
+    await db.flush()
+    audit(
+        db,
+        "delivery.queued",
+        user_id=binding.user_id,
+        outbox_id=row.id,
+        alert_id=alert_id,
+        details={
+            "queue_requested_at": now.isoformat(),
+            "queue_insert_observed_at": inserted_at.isoformat() if inserted_at else None,
+            "timestamp_basis": "enqueue_statement_observation_not_commit"
+            if inserted_at
+            else "caller_reference_only",
+            "generation_ms": generation_ms,
+        },
+    )
+    return row
+
+
