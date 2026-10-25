@@ -116,3 +116,99 @@ async def cooldown_reason(db, user_id, source, policy, now, emergency):
     return None
 
 
+async def scan(db, now, *, clock_trusted, app_url):
+    bindings = list(
+        await db.scalars(
+            select(TelegramBinding)
+            .where(TelegramBinding.revoked_at.is_(None), TelegramBinding.paused.is_(False))
+            .limit(10)
+        )
+    )
+    if not bindings:
+        return
+    # One current immutable source per route, with explicit work bounds.
+    recent = (
+        select(ArbitrageEvaluation)
+        .distinct(ArbitrageEvaluation.route_id)
+        .where(ArbitrageEvaluation.evaluated_at >= now - timedelta(seconds=30))
+    )
+    recent = recent.order_by(
+        ArbitrageEvaluation.route_id, ArbitrageEvaluation.revision.desc()
+    ).subquery()
+    sources = list(
+        await db.scalars(
+            select(ArbitrageEvaluation)
+            .join(recent, recent.c.id == ArbitrageEvaluation.id)
+            .order_by(ArbitrageEvaluation.evaluated_at.desc())
+            .limit(32)
+        )
+    )
+    for binding in bindings:
+        settings_row, terminal = await read_effective_terminal(db, binding.user_id)
+        policy = terminal.notifications
+        if not policy.telegram_enabled:
+            continue
+        for source in sources:
+            version = settings_row.version if settings_row else 0
+            key = f"evaluation:{binding.user_id}:{source.id}:{version}"
+            if await db.scalar(
+                select(AlertDecision.id).where(AlertDecision.deduplication_key == key)
+            ):
+                continue
+            gate = await evaluate_source(db, source, policy, now, clock_trusted)
+            decision_at = db.info.get("last_alert_checked_at", now)
+            reasons = list(gate.reasons)
+            if gate.eligible:
+                cooldown = await cooldown_reason(
+                    db, binding.user_id, source, policy, now, gate.emergency
+                )
+                if cooldown:
+                    reasons.append(cooldown)
+            expiry = timestamp(source.result.get("expires_at")) or now
+            decision = AlertDecision(
+                user_id=binding.user_id,
+                evaluation_id=source.id,
+                settings_version_id=settings_row.id if settings_row else None,
+                deduplication_key=key,
+                evaluated_at=decision_at,
+                expires_at=expiry,
+                classification=gate.classification,
+                eligible=not reasons,
+                emergency=gate.emergency,
+                reasons=reasons,
+                rules=policy.model_dump(mode="json"),
+                evidence={
+                    "alert_eligibility_decided_at": decision_at.isoformat(),
+                    "batch_reference_at": now.isoformat(),
+                    "source_evaluated_at": source.evaluated_at.isoformat(),
+                    "calculation_version": source.calculation_version,
+                    "route_id": str(source.route_id),
+                    "revision": source.revision,
+                    "buy_snapshot_id": str(source.buy_snapshot_id),
+                    "sell_snapshot_id": str(source.sell_snapshot_id),
+                    "buy_fee_version_id": str(source.buy_fee_version_id),
+                    "sell_fee_version_id": str(source.sell_fee_version_id),
+                },
+            )
+            db.add(decision)
+            await db.flush()
+            if reasons:
+                continue
+            db.add(AlertLifecycle(decision_id=decision.id, repeat_count=0))
+            await enqueue(
+                db,
+                binding,
+                key=f"alert:{decision.id}:0",
+                kind="emergency"
+                if gate.emergency
+                else "research"
+                if gate.classification == "RESEARCH_ONLY"
+                else "alert",
+                message=alert_message(source.result, now, app_url, emergency=gate.emergency),
+                now=now,
+                expires_at=expiry,
+                alert_id=decision.id,
+                silent=gate.silent,
+            )
+
+
