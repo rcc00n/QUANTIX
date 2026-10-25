@@ -295,3 +295,33 @@ async def enqueue(
     return row
 
 
+async def acknowledge(db, user_id, alert_id: UUID, now, *, cancel=False):
+    decision = await db.scalar(
+        select(AlertDecision).where(AlertDecision.id == alert_id, AlertDecision.user_id == user_id)
+    )
+    if decision is None:
+        raise ValueError("ALERT_NOT_FOUND")
+    lifecycle = await db.scalar(
+        select(AlertLifecycle).where(AlertLifecycle.decision_id == alert_id).with_for_update()
+    )
+    if lifecycle:
+        if cancel:
+            lifecycle.cancelled_at = lifecycle.cancelled_at or now
+        else:
+            lifecycle.acknowledged_at = lifecycle.acknowledged_at or now
+            lifecycle.acknowledged_by = user_id
+        lifecycle.next_repeat_at = None
+    await db.execute(
+        update(NotificationOutbox)
+        .where(
+            NotificationOutbox.alert_id == alert_id,
+            NotificationOutbox.status.in_(("pending", "retry")),
+        )
+        .values(status="cancelled", error_code="OWNER_CANCELLED" if cancel else "ACKNOWLEDGED")
+    )
+    audit(
+        db,
+        "alert.cancelled" if cancel else "alert.acknowledged",
+        user_id=user_id,
+        alert_id=alert_id,
+    )
