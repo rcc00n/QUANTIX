@@ -64,3 +64,22 @@ async def system_status(request: Request, db: DB, user: AuthenticatedUser) -> di
     }
 
 
+@router.get("/system/events")
+async def events(db: DB, user: AuthenticatedUser) -> list[dict]:
+    rows = (
+        await db.scalars(
+            select(SystemEvent).order_by(SystemEvent.created_at.desc(), SystemEvent.id).limit(30)
+        )
+    ).all()
+    return [
+        {
+            "id": str(row.id),
+            "created_at": row.created_at,
+            "event_type": row.event_type,
+            "severity": row.severity,
+            "message": row.message,
+        }
+        for row in rows
+    ]
+
+
