@@ -81,3 +81,23 @@ async def update_terminal(body: UpdateTerminal, request: Request, db: DB, user: 
     return settings_dto(row, body.settings, await delivery_status(db, user.id, now))
 
 
+@router.get("/terminal/history")
+async def terminal_history(db: DB, user: AuthenticatedUser):
+    rows = await db.scalars(
+        select(TerminalSettingsVersion)
+        .where(TerminalSettingsVersion.user_id == user.id)
+        .order_by(TerminalSettingsVersion.version.desc())
+        .limit(50)
+    )
+    return {
+        "items": [
+            {
+                "id": str(x.id),
+                "version": x.version,
+                "effective_at": x.effective_at.isoformat(),
+                "settings": x.settings,
+            }
+            for x in rows
+        ],
+        "limit": 50,
+    }
