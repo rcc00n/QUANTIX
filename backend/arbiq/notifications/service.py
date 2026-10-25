@@ -205,3 +205,23 @@ async def approve_pairing(db, user_id, challenge_id, now):
     return row
 
 
+async def revoke_pairing(db, user_id, now):
+    binding = await binding_for(db, user_id)
+    if binding:
+        binding.revoked_at = now
+        await db.execute(
+            update(NotificationOutbox)
+            .where(
+                NotificationOutbox.user_id == user_id,
+                NotificationOutbox.status.in_(("pending", "retry")),
+            )
+            .values(status="cancelled", error_code="PAIRING_REVOKED")
+        )
+        audit(db, "pairing.revoked", user_id=user_id)
+    await db.execute(
+        update(TelegramChallenge)
+        .where(TelegramChallenge.user_id == user_id, TelegramChallenge.consumed_at.is_(None))
+        .values(consumed_at=now)
+    )
+
+
