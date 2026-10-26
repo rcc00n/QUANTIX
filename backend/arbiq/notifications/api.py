@@ -198,3 +198,31 @@ async def cancel_alert(alert_id: UUID, request: Request, db: DB, user: Authentic
     return {"cancelled": True}
 
 
+@router.get("/decisions")
+async def decisions(db: DB, user: AuthenticatedUser, limit: int = Query(default=30, ge=1, le=100)):
+    rows = list(
+        await db.scalars(
+            select(AlertDecision)
+            .where(AlertDecision.user_id == user.id)
+            .order_by(AlertDecision.evaluated_at.desc())
+            .limit(limit)
+        )
+    )
+    return {
+        "items": [
+            {
+                "id": str(x.id),
+                "evaluation_id": str(x.evaluation_id),
+                "evaluated_at": x.evaluated_at,
+                "expires_at": x.expires_at,
+                "eligible": x.eligible,
+                "classification": x.classification,
+                "emergency": x.emergency,
+                "reasons": x.reasons,
+            }
+            for x in rows
+        ],
+        "limit": limit,
+    }
+
+
