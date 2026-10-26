@@ -226,3 +226,27 @@ async def decisions(db: DB, user: AuthenticatedUser, limit: int = Query(default=
     }
 
 
+@router.get("/events")
+async def events(db: DB, user: AuthenticatedUser, limit: int = Query(default=30, ge=1, le=100)):
+    rows = list(
+        await db.scalars(
+            select(NotificationEvent)
+            .where(NotificationEvent.user_id == user.id)
+            .order_by(NotificationEvent.created_at.desc())
+            .limit(limit)
+        )
+    )
+    return {
+        "items": [
+            {
+                "id": str(x.id),
+                "created_at": x.created_at,
+                "outbox_id": str(x.outbox_id) if x.outbox_id else None,
+                "alert_id": str(x.alert_id) if x.alert_id else None,
+                "event_type": x.event_type,
+                "details": x.details,
+            }
+            for x in rows
+        ],
+        "limit": limit,
+    }
