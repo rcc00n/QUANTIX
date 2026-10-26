@@ -187,3 +187,14 @@ async def acknowledge_alert(alert_id: UUID, request: Request, db: DB, user: Auth
     return {"acknowledged": True}
 
 
+@router.post("/{alert_id}/cancel")
+async def cancel_alert(alert_id: UUID, request: Request, db: DB, user: AuthenticatedUser):
+    now = await now_checked(request)
+    try:
+        await acknowledge(db, user.id, alert_id, now, cancel=True)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from None
+    await db.commit()
+    return {"cancelled": True}
+
+
