@@ -92,3 +92,15 @@ async def settings_defaults(user: AuthenticatedUser) -> dict:
     }
 
 
+@router.get("/reports/contract")
+async def report_contract(user: AuthenticatedUser) -> dict:
+    return {
+        "schema_version": "1.0",
+        "status": "implemented",
+        "export_available": True,
+        "files": EXPORT_FILES,
+        "csv_columns": CSV_COLUMNS,
+        "metrics_schema": AnalyticsExportMetrics.model_json_schema(),
+        "manifest_schema": AnalyticsExportManifest.model_json_schema(),
+        "legacy_daily_summary_schema": DailySummary.model_json_schema(),
+    }
