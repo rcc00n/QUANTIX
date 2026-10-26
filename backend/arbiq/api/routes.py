@@ -83,3 +83,12 @@ async def events(db: DB, user: AuthenticatedUser) -> list[dict]:
     ]
 
 
+@router.get("/settings/defaults")
+async def settings_defaults(user: AuthenticatedUser) -> dict:
+    return {
+        "status": "defaults_only",
+        "persisted": False,
+        "settings": StrategySettings().model_dump(mode="json"),
+    }
+
+
