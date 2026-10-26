@@ -168,3 +168,33 @@ async def report(db, user_id, start, end, *, weekly=False):
     return text
 
 
+async def schedule_reports(db, binding, policy, now):
+    if not policy.telegram_enabled or binding.paused:
+        return
+    for weekly, enabled in (
+        (False, policy.daily_report_enabled),
+        (True, policy.weekly_report_enabled),
+    ):
+        if not enabled:
+            continue
+        period = scheduled_period(now, policy, weekly=weekly)
+        if period is None:
+            continue
+        start, end, day = period
+        key = f"{'weekly' if weekly else 'daily'}:{binding.user_id}:{day}"
+        if await db.scalar(
+            select(NotificationOutbox.id).where(NotificationOutbox.deduplication_key == key)
+        ):
+            continue
+        generation_started = elapsed_seconds()
+        message = await report(db, binding.user_id, start, end, weekly=weekly)
+        await enqueue(
+            db,
+            binding,
+            key=key,
+            kind="weekly_report" if weekly else "daily_report",
+            message=message,
+            now=now,
+            expires_at=end + timedelta(hours=6),
+            generation_ms=(elapsed_seconds() - generation_started) * 1000,
+        )
