@@ -65,3 +65,11 @@ async def pairing_approve(body: ApprovePairing, request: Request, db: DB, user: 
     return await status(db, user, now)
 
 
+@router.post("/pairing/revoke")
+async def pairing_revoke(request: Request, db: DB, user: AuthenticatedUser):
+    now = await now_checked(request)
+    await revoke_pairing(db, user.id, now)
+    await db.commit()
+    return await status(db, user, now)
+
+
