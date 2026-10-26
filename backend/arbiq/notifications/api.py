@@ -123,3 +123,31 @@ async def history(db: DB, user: AuthenticatedUser, limit: int = Query(default=30
     }
 
 
+@router.get("/preview")
+async def preview(request: Request, db: DB, user: AuthenticatedUser):
+    # Preview is immutable retained evidence, never a send or a fresh executable promise.
+    now, clock = await utc_reference(request)
+    source = await db.scalar(
+        select(ArbitrageEvaluation).order_by(ArbitrageEvaluation.evaluated_at.desc()).limit(1)
+    )
+    if source is None:
+        return {
+            "message": None,
+            "eligible": False,
+            "reasons": ["NO_EVALUATION"],
+            "classification": None,
+            "evaluation_id": None,
+        }
+    _, terminal = await read_effective_terminal(db, user.id)
+    gate = await evaluate_source(db, source, terminal.notifications, now, clock["trusted"])
+    return {
+        "message": alert_message(
+            source.result, now, request.app.state.settings.public_app_url, emergency=gate.emergency
+        ),
+        "eligible": gate.eligible,
+        "reasons": gate.reasons,
+        "classification": gate.classification,
+        "evaluation_id": str(source.id),
+    }
+
+
