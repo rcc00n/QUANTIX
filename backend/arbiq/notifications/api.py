@@ -151,3 +151,28 @@ async def preview(request: Request, db: DB, user: AuthenticatedUser):
     }
 
 
+@router.post("/test")
+async def test_notification(request: Request, db: DB, user: AuthenticatedUser):
+    now = await now_checked(request)
+    binding = await binding_for(db, user.id)
+    if not binding:
+        raise HTTPException(409, "TELEGRAM_NOT_PAIRED")
+    try:
+        row = await enqueue(
+            db,
+            binding,
+            key=f"test:{user.id}:{uuid4()}",
+            kind="test",
+            now=now,
+            expires_at=now + timedelta(minutes=5),
+            message=(
+                "QUANTIX — OWNER TEST\nTelegram delivery test. PAPER ONLY. No market opportunity, "
+                "profit or execution is implied.\n" + now.isoformat()
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    await db.commit()
+    return {"id": str(row.id), "status": row.status}
+
+
