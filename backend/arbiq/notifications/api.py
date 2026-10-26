@@ -93,3 +93,33 @@ async def resume(request: Request, db: DB, user: AuthenticatedUser):
     return await status(db, user)
 
 
+@router.get("/history")
+async def history(db: DB, user: AuthenticatedUser, limit: int = Query(default=30, ge=1, le=100)):
+    rows = list(
+        await db.scalars(
+            select(NotificationOutbox)
+            .where(NotificationOutbox.user_id == user.id)
+            .order_by(NotificationOutbox.created_at.desc())
+            .limit(limit)
+        )
+    )
+    return {
+        "items": [
+            {
+                "id": str(x.id),
+                "kind": x.kind,
+                "status": x.status,
+                "created_at": x.created_at,
+                "expires_at": x.expires_at,
+                "delivered_at": x.delivered_at,
+                "error_code": x.error_code,
+                "attempts": x.attempts,
+                "message": x.message,
+                "alert_id": str(x.alert_id) if x.alert_id else None,
+            }
+            for x in rows
+        ],
+        "limit": limit,
+    }
+
+
