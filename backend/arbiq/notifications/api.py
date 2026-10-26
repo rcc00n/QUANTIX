@@ -73,3 +73,13 @@ async def pairing_revoke(request: Request, db: DB, user: AuthenticatedUser):
     return await status(db, user, now)
 
 
+@router.post("/pause")
+async def pause(request: Request, db: DB, user: AuthenticatedUser):
+    try:
+        await set_paused(db, user.id, True)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    await db.commit()
+    return await status(db, user)
+
+
