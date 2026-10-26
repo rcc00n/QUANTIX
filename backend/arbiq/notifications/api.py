@@ -83,3 +83,13 @@ async def pause(request: Request, db: DB, user: AuthenticatedUser):
     return await status(db, user)
 
 
+@router.post("/resume")
+async def resume(request: Request, db: DB, user: AuthenticatedUser):
+    try:
+        await set_paused(db, user.id, False)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    await db.commit()
+    return await status(db, user)
+
+
