@@ -43,6 +43,17 @@ async def get_status(request: Request, db: DB, user: AuthenticatedUser):
     return await status(db, user, now)
 
 
+@router.post("/pairing/challenge")
+async def pairing_challenge(request: Request, db: DB, user: AuthenticatedUser):
+    now = await now_checked(request)
+    try:
+        result = await create_challenge(db, user.id, now)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    await db.commit()
+    return result
+
+
 @router.post("/pairing/approve")
 async def pairing_approve(body: ApprovePairing, request: Request, db: DB, user: AuthenticatedUser):
     now = await now_checked(request)
