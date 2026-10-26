@@ -176,3 +176,14 @@ async def test_notification(request: Request, db: DB, user: AuthenticatedUser):
     return {"id": str(row.id), "status": row.status}
 
 
+@router.post("/{alert_id}/acknowledge")
+async def acknowledge_alert(alert_id: UUID, request: Request, db: DB, user: AuthenticatedUser):
+    now = await now_checked(request)
+    try:
+        await acknowledge(db, user.id, alert_id, now)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from None
+    await db.commit()
+    return {"acknowledged": True}
+
+
