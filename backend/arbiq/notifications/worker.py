@@ -272,3 +272,44 @@ class NotificationWorker:
             await db.commit()
         return True
 
+    async def incoming_loop(self):
+        while not self.stop.is_set():
+            if not self.healthy:
+                await asyncio.sleep(2)
+                continue
+            try:
+                async with self.session() as db:
+                    state = await db.get(NotificationWorkerState, "telegram")
+                    offset = state.update_offset if state else 0
+                updates = await self.client.updates(offset)
+                for item in updates:
+                    async with self.session() as db:
+                        state = await db.get(
+                            NotificationWorkerState, "telegram", with_for_update=True
+                        )
+                        if item["update_id"] < state.update_offset:
+                            continue
+                        await handle_update(
+                            db,
+                            item,
+                            self.clock.utcnow(),
+                            clock_trusted=self.clock.snapshot()["trusted"],
+                            app_url=self.settings.public_app_url,
+                        )
+                        state.update_offset = item["update_id"] + 1
+                        await (
+                            db.commit()
+                        )  # Command and offset commit together; no replay after restart.
+            except TelegramError as exc:
+                self.details["error_code"] = exc.code
+                if exc.code in ("TELEGRAM_409", "TELEGRAM_401", "WEBHOOK_CONFLICT"):
+                    self.healthy = False
+                    self.details["consumer_conflict"] = exc.code == "TELEGRAM_409"
+                    # 409 indicates another consumer: stop polling, require operator review/restart.
+                    self.details["polling_blocked"] = True
+                await asyncio.sleep(min(exc.retry_after or 10, 30))
+            except Exception as exc:
+                log.warning("notification_incoming_failed", error_type=type(exc).__name__)
+                self.details["error_code"] = "INCOMING_DATABASE_OR_COMMAND_ERROR"
+                await asyncio.sleep(5)
+
