@@ -148,6 +148,12 @@ def test_capability_and_eligibility_detection_never_infers_manual_eligibility():
     assert not caps["public_market_data_verified"]
 
 
+def test_healthy_book_is_exact_and_never_an_opportunity():
+    book = synthetic_capture()
+    assert book.state == DataState.HEALTHY
+    assert book.normalized.bids[0].price == Decimal(100)
+    assert book.actionable is False
+    assert isinstance(book.model_dump(mode="json")["normalized"]["bids"][0]["price"], str)
 
 
 
