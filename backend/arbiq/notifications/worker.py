@@ -52,3 +52,21 @@ def failure_state(error, attempt):
     return "failed"
 
 
+async def recover_sending(db):
+    rows = list(
+        await db.scalars(
+            select(NotificationOutbox).where(NotificationOutbox.status == "sending").limit(1000)
+        )
+    )
+    for row in rows:
+        row.status, row.error_code = "ambiguous", "RESTART_DURING_SEND"
+        audit(
+            db,
+            "delivery.ambiguous",
+            user_id=row.user_id,
+            outbox_id=row.id,
+            alert_id=row.alert_id,
+            details={"reason": "RESTART_DURING_SEND"},
+        )
+
+
