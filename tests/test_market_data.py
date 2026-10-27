@@ -156,6 +156,57 @@ def test_healthy_book_is_exact_and_never_an_opportunity():
     assert isinstance(book.model_dump(mode="json")["normalized"]["bids"][0]["price"], str)
 
 
+@pytest.mark.parametrize(
+    "case,expected",
+    [
+        ("crossed", DataState.SUSPICIOUS),
+        ("unordered", DataState.SUSPICIOUS),
+        ("negative", DataState.SUSPICIOUS),
+        ("float", DataState.SUSPICIOUS),
+        ("empty", DataState.UNAVAILABLE),
+        ("malformed", DataState.UNAVAILABLE),
+        ("shallow", DataState.DEGRADED),
+        ("timestamp_missing", DataState.DEGRADED),
+        ("timestamp_future", DataState.SUSPICIOUS),
+        ("timestamp_naive", DataState.SUSPICIOUS),
+        ("stale", DataState.STALE),
+        ("symbol_mismatch", DataState.SUSPICIOUS),
+        ("nan", DataState.SUSPICIOUS),
+    ],
+)
+def test_quality_flags_and_preserves_evidence(case, expected):
+    now = datetime.now(UTC)
+    raw = synthetic_raw(now)
+    if case == "crossed":
+        raw["asks"][0][0] = "99"
+    if case == "unordered":
+        raw["bids"][0], raw["bids"][1] = raw["bids"][1], raw["bids"][0]
+    if case == "negative":
+        raw["bids"][0][1] = "-1"
+    if case == "float":
+        raw["bids"][0][0] = 100.1
+    if case == "empty":
+        raw["asks"] = []
+    if case == "malformed":
+        raw = "synthetic-invalid-payload"
+    if case == "shallow":
+        raw["asks"] = raw["asks"][:1]
+    if case == "timestamp_missing":
+        raw["timestamp"] = None
+    if case == "timestamp_future":
+        raw["timestamp"] = int((now + timedelta(seconds=20)).timestamp() * 1000)
+    if case == "timestamp_naive":
+        raw["timestamp"] = "2026-11-21T12:00:00"
+    if case == "stale":
+        raw["timestamp"] = int((now - timedelta(minutes=10)).timestamp() * 1000)
+    if case == "symbol_mismatch":
+        raw["symbol"] = "ETH/USD"
+    if case == "nan":
+        raw["bids"][0][1] = "NaN"
+    book = synthetic_capture(raw, received_at=now)
+    assert book.state == expected
+    assert book.reasons and book.raw_evidence
+    assert book.actionable is False
 
 
 
