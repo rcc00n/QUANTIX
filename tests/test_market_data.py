@@ -78,6 +78,20 @@ def test_identity_does_not_merge_wrappers_unknowns_or_stablecoins():
     assert asset_identity("synthetic-a", "USDC").kind == "stablecoin"
 
 
+def test_discovery_shares_identities_only_within_its_snapshot():
+    identity_by_symbol = {}
+    normal = normalize_market(
+        "synthetic", synthetic_market(), {}, identity_by_symbol=identity_by_symbol
+    )
+    same_base = normalize_market(
+        "synthetic", synthetic_market(quote="CAD"), {}, identity_by_symbol=identity_by_symbol
+    )
+    rediscovered = normalize_market(
+        "synthetic", synthetic_market(), {"BTC": {"name": "Wrapped Bitcoin"}}, identity_by_symbol={}
+    )
+    assert normal.base is same_base.base
+    assert normal.base.verified and not rediscovered.base.verified
+    assert normal.base.key != rediscovered.base.key
 
 
 
