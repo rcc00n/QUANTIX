@@ -313,3 +313,78 @@ class NotificationWorker:
                 self.details["error_code"] = "INCOMING_DATABASE_OR_COMMAND_ERROR"
                 await asyncio.sleep(5)
 
+    async def run(self):
+        async with self.session() as db:
+            await recover_sending(db)
+            await db.commit()
+        incoming = asyncio.create_task(self.incoming_loop())
+        next_ready, next_scan = 0.0, 0.0
+        try:
+            while not self.stop.is_set():
+                if self.singleton:
+                    connection, original_pid = self.singleton
+                    if await connection.scalar(text("SELECT pg_backend_pid()")) != original_pid:
+                        raise RuntimeError("Notification singleton connection changed")
+                try:
+                    elapsed = elapsed_seconds()
+                    if elapsed >= next_ready:
+                        if self.client and not self.details.get("polling_blocked"):
+                            self.details.update(await self.client.readiness())
+                            self.healthy = True
+                            self.details["error_code"] = None
+                            self.details["webhook_conflict"] = False
+                        next_ready = elapsed + 60
+                    if self.healthy and elapsed >= next_scan:
+                        async with self.session() as db:
+                            now = self.clock.utcnow()
+                            trusted = self.clock.snapshot()["trusted"]
+                            await scan(
+                                db, now, clock_trusted=trusted, app_url=self.settings.public_app_url
+                            )
+                            await schedule_repeats(
+                                db, now, clock_trusted=trusted, app_url=self.settings.public_app_url
+                            )
+                            if trusted:
+                                bindings = list(
+                                    await db.scalars(
+                                        select(TelegramBinding)
+                                        .where(TelegramBinding.revoked_at.is_(None))
+                                        .limit(10)
+                                    )
+                                )
+                                for binding in bindings:
+                                    _, terminal = await read_effective_terminal(db, binding.user_id)
+                                    await schedule_reports(db, binding, terminal.notifications, now)
+                            await db.commit()
+                        next_scan = elapsed + 10
+                    await self.heartbeat()
+                    if self.healthy:
+                        for _ in range(3):
+                            if not await self.dispatch_one():
+                                break
+                except TelegramError as exc:
+                    self.healthy = False
+                    self.details["error_code"] = exc.code
+                    self.details["webhook_conflict"] = exc.code == "WEBHOOK_CONFLICT"
+                    next_ready = elapsed_seconds() + 30
+                    await self.heartbeat()
+                except Exception as exc:
+                    log.warning(
+                        "notification_worker_iteration_failed", error_type=type(exc).__name__
+                    )
+                    self.details["error_code"] = "WORKER_DATABASE_OR_POLICY_ERROR"
+                    with contextlib.suppress(Exception):
+                        await self.heartbeat()
+                try:
+                    await asyncio.wait_for(self.stop.wait(), timeout=2)
+                except TimeoutError:
+                    pass
+        finally:
+            incoming.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await incoming
+            self.healthy = False
+            with contextlib.suppress(Exception):
+                await self.heartbeat()
+
+
