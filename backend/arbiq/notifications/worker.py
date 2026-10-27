@@ -40,3 +40,15 @@ def retry_delay(attempt, retry_after=None):
     return max(min(2 ** min(attempt, 10), 900), min(retry_after or 0, 86400))
 
 
+def failure_state(error, attempt):
+    if error.ambiguous:
+        return "ambiguous"
+    if (
+        error.code == "TELEGRAM_429"
+        or error.code == "TELEGRAM_NETWORK"
+        or error.code.startswith("TELEGRAM_5")
+    ):
+        return "retry" if attempt < 8 else "failed"
+    return "failed"
+
+
