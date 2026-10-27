@@ -388,3 +388,64 @@ class NotificationWorker:
                 await self.heartbeat()
 
 
+async def main():
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    engine = create_async_engine(
+        settings.database_url.get_secret_value(),
+        pool_size=2,
+        max_overflow=1,
+        pool_pre_ping=True,
+        hide_parameters=True,
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    clock = TrustedClock()
+    async with engine.connect() as lock:
+        await lock.execution_options(isolation_level="AUTOCOMMIT")
+        lock_pid = await lock.scalar(text("SELECT pg_backend_pid()"))
+        if not await lock.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": LOCK_KEY}):
+            raise RuntimeError("Another notification worker holds the singleton lock")
+        if (
+            await lock.scalar(text("SELECT version_num FROM alembic_version"))
+            != EXPECTED_SCHEMA_REVISION
+        ):
+            raise RuntimeError("Run migrations before notification worker")
+        async with aiohttp.ClientSession(
+            connector=aiohttp.TCPConnector(limit=4), trust_env=False
+        ) as http:
+            client = None
+            initial_error = None
+            try:
+                if not settings.notification_worker_enabled:
+                    raise TelegramError("WORKER_DISABLED")
+                client = TelegramClient(http, read_bot_token(settings.telegram_token_file))
+            except TelegramError as exc:
+                initial_error = exc.code
+            worker = NotificationWorker(
+                settings, sessions, client, clock, singleton=(lock, lock_pid)
+            )
+            worker.details["error_code"] = initial_error
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                asyncio.get_running_loop().add_signal_handler(sig, worker.stop.set)
+
+            async def synchronize():
+                while not worker.stop.is_set():
+                    await clock.synchronize(http)
+                    try:
+                        await asyncio.wait_for(worker.stop.wait(), 30)
+                    except TimeoutError:
+                        pass
+
+            clock_task = asyncio.create_task(synchronize())
+            try:
+                await worker.run()
+            finally:
+                clock_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await clock_task
+        await lock.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": LOCK_KEY})
+    await engine.dispose()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
