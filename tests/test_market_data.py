@@ -94,6 +94,42 @@ def test_discovery_shares_identities_only_within_its_snapshot():
     assert normal.base.key != rediscovered.base.key
 
 
+def test_dynamic_discovery_precision_filtering_and_base_diversity():
+    markets = [
+        normalize_market(
+            "synthetic", synthetic_market(base, quote), {}, {"quoteVolume": "200000"}, 4
+        )
+        for base in ("BTC", "ETH", "SOL", "OTHER")
+        for quote in ("CAD", "USD")
+    ]
+    assert all(m.price_tick == Decimal("0.01") for m in markets)
+    config = CollectorConfig(max_markets_per_exchange=4)
+    selected = selected_markets(markets, config)
+    assert len({m.base.key for m in selected}) == 4
+    assert all(m.quote.symbol == "CAD" for m in selected)
+    assert any(m.base.symbol == "OTHER" for m in selected)  # Not a fixed seven-asset universe.
+    filtered = selected_markets(markets, CollectorConfig(base_assets=["ETH"], quote_assets=["USD"]))
+    assert [m.native_symbol for m in filtered] == ["ETH/USD"]
+    assert not selected_markets(markets, CollectorConfig(minimum_quote_volume="999999"))
+    assert not selected_markets(
+        [replace(markets[0], active=None)], CollectorConfig(allow_unknown_active=False)
+    )
+    assert selected_markets(
+        [replace(markets[0], active=None)], CollectorConfig(allow_unknown_active=True)
+    )
+    with pytest.raises(ValueError):
+        normalize_market("synthetic", synthetic_market(spot=False), {})
+    with pytest.raises(ValueError):
+        normalize_market("synthetic", synthetic_market(contract=True), {})
+    with pytest.raises(ValueError):
+        normalize_market("synthetic", synthetic_market(base=None), {})
+    places = normalize_market(
+        "synthetic",
+        synthetic_market(precision={"amount": 8, "price": 2}),
+        {},
+        precision_mode=2,
+    )
+    assert places.amount_step == Decimal("0.00000001")
 
 
 
