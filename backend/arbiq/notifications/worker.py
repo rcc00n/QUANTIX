@@ -107,3 +107,168 @@ class NotificationWorker:
         )
         await asyncio.to_thread(HEALTH_PATH.chmod, 0o600)
 
+    async def dispatch_one(self):
+        if elapsed_seconds() - self.last_send < 1.1:
+            return False
+        now = self.clock.utcnow()
+        async with self.session() as db:
+            row = await db.scalar(
+                select(NotificationOutbox)
+                .where(
+                    NotificationOutbox.status.in_(("pending", "retry")),
+                    or_(
+                        NotificationOutbox.available_at <= now, NotificationOutbox.expires_at <= now
+                    ),
+                )
+                .order_by(NotificationOutbox.available_at, NotificationOutbox.created_at)
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
+            if row is None:
+                return False
+            binding = await db.get(TelegramBinding, row.binding_id)
+            reason = None
+            if row.expires_at <= now:
+                row.status, reason = "expired", "MESSAGE_EXPIRED_BEFORE_DELIVERY"
+            elif binding is None or binding.revoked_at is not None:
+                row.status, reason = "cancelled", "PAIRING_REVOKED"
+            elif row.kind not in ("command", "test", "completion"):
+                _, terminal = await read_effective_terminal(db, row.user_id)
+                if binding.paused or not terminal.notifications.telegram_enabled:
+                    row.status, reason = "cancelled", "NOTIFICATIONS_PAUSED_OR_DISABLED"
+            if reason is None:
+                reason = await revalidate_delivery(db, row, now, self.clock.snapshot()["trusted"])
+                if reason:
+                    row.status = (
+                        "expired"
+                        if any(code in reason for code in ("EXPIRED", "CURRENT", "STALE"))
+                        else "cancelled"
+                    )
+            if reason:
+                row.error_code = reason
+                audit(
+                    db,
+                    f"delivery.{row.status}",
+                    user_id=row.user_id,
+                    outbox_id=row.id,
+                    alert_id=row.alert_id,
+                    details={"reason": reason},
+                )
+                await db.commit()
+                return True
+            queued_details = await db.scalar(
+                select(NotificationEvent.details)
+                .where(
+                    NotificationEvent.outbox_id == row.id,
+                    NotificationEvent.event_type == "delivery.queued",
+                )
+                .order_by(NotificationEvent.created_at)
+                .limit(1)
+            )
+            queued_at = (queued_details or {}).get("queue_insert_observed_at")
+            row.attempts += 1
+            row.status = "sending"
+            audit(
+                db,
+                "delivery.sending",
+                user_id=row.user_id,
+                outbox_id=row.id,
+                alert_id=row.alert_id,
+                details={"attempt": row.attempts},
+            )
+            await db.commit()  # Durable before network. Crash here is explicitly ambiguous.
+            row_id, chat_id, message, silent = row.id, binding.chat_id, row.message, row.silent
+        gap = 1.1 - (elapsed_seconds() - self.last_send)
+        if gap > 0:
+            await asyncio.sleep(gap)
+        self.last_send = elapsed_seconds()
+        send_started = elapsed_seconds()
+        send_started_at = self.clock.utcnow()
+        try:
+            result = await self.client.send(chat_id, message, silent=silent)
+            failure = None
+        except TelegramError as exc:
+            result, failure = None, exc
+        request_duration_ms = (elapsed_seconds() - send_started) * 1000
+        provider_acknowledged_at = self.clock.utcnow()
+        queue_ack_ms = None
+        if queued_at and self.clock.snapshot().get("trusted"):
+            try:
+                queued_timestamp = datetime.fromisoformat(queued_at)
+                if provider_acknowledged_at >= queued_timestamp:
+                    queue_ack_ms = (
+                        provider_acknowledged_at - queued_timestamp
+                    ).total_seconds() * 1000
+            except (TypeError, ValueError):
+                pass  # Unavailable historical timing never becomes a zero-duration claim.
+        async with self.session() as db:
+            row = await db.get(NotificationOutbox, row_id)
+            finished = self.clock.utcnow()
+            if failure:
+                row.status = failure_state(failure, row.attempts)
+                row.error_code = failure.code
+                row.available_at = finished + timedelta(
+                    seconds=retry_delay(row.attempts, failure.retry_after)
+                )
+                audit(
+                    db,
+                    f"delivery.{row.status}",
+                    user_id=row.user_id,
+                    outbox_id=row.id,
+                    alert_id=row.alert_id,
+                    details={"code": failure.code, "attempt": row.attempts},
+                )
+                if failure.code == "TELEGRAM_429":
+                    # Global worker backoff, not merely rescheduling one row.
+                    self.last_send = elapsed_seconds() + retry_delay(
+                        row.attempts, failure.retry_after
+                    )
+            else:
+                row.status, row.error_code, row.delivered_at = "delivered", None, finished
+                row.provider_message_id = str(result["message_id"])
+                audit(
+                    db,
+                    "delivery.delivered",
+                    user_id=row.user_id,
+                    outbox_id=row.id,
+                    alert_id=row.alert_id,
+                    details={
+                        "attempt": row.attempts,
+                        "latency_ms": int((finished - row.created_at).total_seconds() * 1000)
+                        if finished >= row.created_at and self.clock.snapshot().get("trusted")
+                        else None,
+                        "request_duration_ms": request_duration_ms,
+                        "send_attempt_started_at": send_started_at.isoformat(),
+                        "provider_acknowledged_at": provider_acknowledged_at.isoformat(),
+                        "queue_to_provider_ack_ms": queue_ack_ms,
+                        "queue_timestamp_basis": "enqueue_statement_observation_not_commit"
+                        if queued_at
+                        else "unavailable",
+                        "acknowledgment_semantics": (
+                            "Telegram accepted sendMessage; device receipt unverified"
+                        ),
+                    },
+                )
+                if row.alert_id:
+                    decision = await db.get(AlertDecision, row.alert_id)
+                    lifecycle = await db.scalar(
+                        select(AlertLifecycle)
+                        .where(AlertLifecycle.decision_id == row.alert_id)
+                        .with_for_update()
+                    )
+                    _, terminal = await read_effective_terminal(db, row.user_id)
+                    policy = terminal.notifications
+                    if (
+                        decision.emergency
+                        and policy.repeat_until_acknowledged
+                        and lifecycle
+                        and not lifecycle.acknowledged_at
+                        and not lifecycle.cancelled_at
+                        and lifecycle.repeat_count < policy.maximum_repeats
+                    ):
+                        lifecycle.next_repeat_at = finished + timedelta(
+                            seconds=policy.repeat_interval_seconds
+                        )
+            await db.commit()
+        return True
+
