@@ -132,6 +132,20 @@ def test_dynamic_discovery_precision_filtering_and_base_diversity():
     assert places.amount_step == Decimal("0.00000001")
 
 
+def test_capability_and_eligibility_detection_never_infers_manual_eligibility():
+    supported, missing = available_candidates(["kraken", "synthetic-absent", "ndax"], ["ndax"])
+    assert supported == ["kraken"] and missing == ["synthetic-absent"]
+    assert eligibility("kraken")["classification"] == "REGISTERED_ENTITY"
+    assert eligibility("synthetic-venue")["classification"] == "UNVERIFIED"
+    assert not eligibility("kraken")["manual_trading_eligible"]
+    adapter = type(
+        "SyntheticAdapter",
+        (),
+        {"id": "synthetic-venue", "has": {"spot": True, "fetchOrderBook": True}},
+    )()
+    caps = capabilities(adapter, [synthetic_market(quote="CAD")])
+    assert caps["cad_market_available"] and caps["order_book_rest"]
+    assert not caps["public_market_data_verified"]
 
 
 
