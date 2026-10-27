@@ -70,3 +70,40 @@ async def recover_sending(db):
         )
 
 
+class NotificationWorker:
+    def __init__(self, settings, sessions, client, clock, singleton=None):
+        self.settings, self.sessions, self.client, self.clock = settings, sessions, client, clock
+        self.singleton = singleton
+        self.stop = asyncio.Event()
+        self.details = {}
+        self.healthy = False
+        self.last_send = float("-inf")
+
+    @contextlib.asynccontextmanager
+    async def session(self):
+        async with self.sessions() as db:
+            db.info["notification_clock"] = self.clock
+            yield db
+
+    async def heartbeat(self):
+        now = self.clock.utcnow()
+        async with self.session() as db:
+            state = await db.get(NotificationWorkerState, "telegram")
+            if state is None:
+                state = NotificationWorkerState(key="telegram", update_offset=0)
+                db.add(state)
+            state.heartbeat_at, state.healthy = now, self.healthy
+            state.details = {**self.details, "clock_trusted": self.clock.snapshot()["trusted"]}
+            await db.commit()
+        await asyncio.to_thread(
+            HEALTH_PATH.write_text,
+            json.dumps(
+                {
+                    "heartbeat_monotonic": elapsed_seconds(),
+                    "healthy": self.healthy,
+                    "error_code": self.details.get("error_code"),
+                }
+            ),
+        )
+        await asyncio.to_thread(HEALTH_PATH.chmod, 0o600)
+
