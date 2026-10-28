@@ -378,3 +378,12 @@ async def test_public_request_serialization_timeout_and_pool_cleanup():
     assert connector._session is None
 
 
+def test_urgent_alert_contracts_default_off_paid_disabled_and_nighttime_stricter():
+    policy = UrgencyPolicy()
+    assert not policy.enabled and not policy.voice_enabled
+    assert policy.timezone == "America/Edmonton"
+    with pytest.raises(ValidationError):
+        UrgencyPolicy(nighttime_minimum_cad="1")
+    assert UrgencyPolicy(enabled=True).enabled  # Stage6 Telegram-only opt-in is implemented.
+    with pytest.raises(ValidationError):
+        UrgencyPolicy(voice_enabled=True)
