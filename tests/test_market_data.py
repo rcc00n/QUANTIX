@@ -250,6 +250,29 @@ def test_reference_confirmation_keeps_quote_units_and_independent_venues():
     assert not pair.references(synthetic_capture(exchange="coinbase"), datetime.now(UTC))
 
 
+def test_cache_is_bounded_and_delayed_records_do_not_replace_newer_books():
+    cache = BookCache(CollectorConfig(exchange_ids=["synthetic"], max_markets_per_exchange=2))
+    for _ in range(3):
+        cache.put(synthetic_capture())
+    assert len(cache.books) == 2
+    book = synthetic_capture()
+    cache.put(book)
+    older = synthetic_capture(
+        market_id=book.market_id, received_at=book.received_at - timedelta(seconds=1)
+    )
+    assert cache.put(older).received_at == book.received_at
+    sequenced = book.model_copy(update={"ingestion_index": 1})
+    cache.put(sequenced)
+    clock_jump = older.model_copy(
+        update={
+            "ingestion_index": 2,
+            "state": DataState.SUSPICIOUS,
+            "reasons": ("collector_clock_jump",),
+        }
+    )
+    # A later ingestion counter never authorizes replacing newer UTC evidence.
+    assert cache.put(clock_jump).ingestion_index == 1
+    assert cache.rejected_updates["OUT_OF_ORDER_RECEIPT"] == 2
 
 
 
