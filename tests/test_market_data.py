@@ -293,6 +293,23 @@ def test_exchange_error_classification(error, code):
     assert classify_error(error) == code
 
 
+def test_backoff_rate_limits_and_clock_recovery():
+    config = CollectorConfig()
+    delays = [retry_delay(n, config, jitter=0) for n in range(1, 15)]
+    assert delays == sorted(delays)
+    assert max(delays) <= config.retry_cap_seconds
+    assert retry_delay(1, config, rate_limited=True, jitter=0) >= 30
+    schedule = Schedule()
+    schedule.failure(config, "RATE_LIMIT")
+    assert schedule.failures == 1
+    schedule.success(1)
+    assert schedule.failures == 0
+    clock = ClockGuard()
+    wall, mono = clock.last_wall, clock.last_monotonic
+    assert not clock.check(wall + timedelta(seconds=60), mono + 1)
+    for index in range(1, 6):
+        clock.check(wall + timedelta(seconds=60 + index), mono + 1 + index)
+    assert clock.healthy
 
 
 
