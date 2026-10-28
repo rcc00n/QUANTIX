@@ -223,6 +223,31 @@ def test_ingestion_freshness_identity_clock_and_liquidity_gates():
     )
 
 
+def test_reference_confirmation_keeps_quote_units_and_independent_venues():
+    cache = BookCache(CollectorConfig())
+    for exchange in ("synthetic-a", "synthetic-b"):
+        cache.put(synthetic_capture(exchange=exchange))
+    raw = synthetic_raw()
+    raw["bids"] = [[str(200 - i), "1"] for i in range(10)]
+    raw["asks"] = [[str(201 + i), "1"] for i in range(10)]
+    candidate = synthetic_capture(raw, exchange="synthetic-c")
+    suspect = cache.put(candidate)
+    assert suspect.state == DataState.SUSPICIOUS
+    assert suspect.normalized.quality != "valid"
+    assert "extreme_reference_discrepancy" in suspect.reasons
+    repeated = cache.put(candidate, confirmation=True)
+    assert repeated.verification["status"] == "REPEATED_WITH_REFERENCE_DISAGREEMENT"
+    assert repeated.state == DataState.SUSPICIOUS
+    recovered = cache.put(
+        synthetic_capture(exchange="synthetic-c", market_id=candidate.market_id),
+        confirmation=True,
+    )
+    assert recovered.state == DataState.HEALTHY
+    assert recovered.verification["status"] == "CONFIRMED"
+    assert not cache.references(synthetic_capture(quote_key="asset:USDT"), datetime.now(UTC))
+    pair = BookCache(CollectorConfig())
+    pair.put(synthetic_capture(exchange="coinbaseexchange"))
+    assert not pair.references(synthetic_capture(exchange="coinbase"), datetime.now(UTC))
 
 
 
