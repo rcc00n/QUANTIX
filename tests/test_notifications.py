@@ -282,6 +282,47 @@ async def synthetic_pair(db, user, now=NOW):
 from uuid import UUID
 
 
+async def test_pairing_approval_requires_owner_private_chat_expiry_and_one_use(
+    database_url,
+):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            user, other = await synthetic_owner(db), await synthetic_owner(db)
+            result = await create_challenge(db, user.id, NOW)
+            challenge_id = UUID(result["challenge_id"])
+            challenge = await db.get(TelegramChallenge, challenge_id)
+            assert challenge.token_hash == hash_token(result["challenge"])
+            assert result["challenge"] not in repr(challenge.__dict__)
+            with pytest.raises(ValueError):
+                await approve_pairing(db, user.id, challenge_id, NOW)
+            assert not await request_pairing(
+                db, result["challenge"], {"type": "group", "id": 12}, {"id": 12}, NOW
+            )
+            assert not await request_pairing(
+                db, result["challenge"], {"type": "private", "id": 12}, {"id": 13}, NOW
+            )
+            identity = int(uuid4().hex[:12], 16)
+            chat, sender = (
+                {"type": "private", "id": identity},
+                {"id": identity, "username": "synthetic"},
+            )
+            assert await request_pairing(db, result["challenge"], chat, sender, NOW)
+            assert not await request_pairing(db, result["challenge"], chat, sender, NOW)
+            with pytest.raises(ValueError):
+                await approve_pairing(db, other.id, challenge_id, NOW)
+            with pytest.raises(ValueError):
+                await approve_pairing(
+                    db, user.id, challenge_id, NOW + timedelta(minutes=11)
+                )
+            binding = await approve_pairing(db, user.id, challenge_id, NOW)
+            assert binding.user_id == user.id
+            with pytest.raises(ValueError):
+                await approve_pairing(db, user.id, challenge_id, NOW)
+            await db.rollback()
+    finally:
+        await engine.dispose()
 
 
 class SyntheticClock:
