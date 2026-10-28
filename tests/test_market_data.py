@@ -312,6 +312,45 @@ def test_backoff_rate_limits_and_clock_recovery():
     assert clock.healthy
 
 
+async def test_ccxt_l2_decimal_hook_and_discrete_depths_without_network():
+    connector = PublicConnector("kraken", CollectorConfig())
+    try:
+        values = connector.adapter.parse_order_book_bid_ask(
+            ["1.123456789123456789", "0.000000000000000001"]
+        )
+        assert values == [
+            Decimal("1.123456789123456789"),
+            Decimal("0.000000000000000001"),
+        ]
+        assert connector.adapter.safe_number(
+            {"precision": Decimal("0.0001")}, "precision"
+        ) == Decimal("0.0001")
+        assert connector.adapter.enableRateLimit
+    finally:
+        await connector.close()
+    connector = PublicConnector("kucoin", CollectorConfig())
+    assert connector.requested_depth(25) == (100, {})
+    await connector.close()
+    connector = PublicConnector("binance", CollectorConfig())
+    assert connector.adapter.options["fetchMarkets"]["types"] == ["spot"]
+    await connector.close()
+    connector = PublicConnector("htx", CollectorConfig())
+    assert connector.requested_depth(25) == (150, {})
+    await connector.close()
+    connector = PublicConnector("bitfinex", CollectorConfig())
+    assert connector.requested_depth(25) == (25, {"precision": "P0"})
+    from unittest.mock import AsyncMock
+
+    connector._call = AsyncMock(
+        return_value={
+            "timestamp": 123,
+            "datetime": "synthetic-local",
+            "bids": [],
+            "asks": [],
+        }
+    )
+    assert (await connector.fetch_raw_book("BTC/USD"))["timestamp"] is None
+    await connector.close()
 
 
 
