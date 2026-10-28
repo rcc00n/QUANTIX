@@ -211,6 +211,17 @@ def test_nighttime_requires_stricter_all_thresholds_and_persistence():
         ).eligible
 
 
+def test_edmonton_quiet_hours_dst_and_daily_weekly_idempotency_key():
+    p = NotificationPreferences()
+    for utc_hour in (7, 8):  # Both 01:30 during the fall DST fold.
+        assert quiet_hours(datetime(2025, 11, 2, utc_hour, 30, tzinfo=UTC), p)
+    assert scheduled_period(datetime(2025, 11, 3, 16, tzinfo=UTC), p)[2] == "2025-11-03"
+    period = scheduled_period(datetime(2025, 11, 2, 16, tzinfo=UTC), p)
+    assert (period[1] - period[0]).total_seconds() == 25 * 3600
+    assert scheduled_period(datetime(2025, 11, 3, 15, 59, tzinfo=UTC), p) is None
+    assert (
+        scheduled_period(datetime(2025, 11, 2, 16, tzinfo=UTC), p, weekly=True) is None
+    )
 
 
 
