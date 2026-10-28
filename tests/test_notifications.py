@@ -344,6 +344,97 @@ class SyntheticTelegram:
         return {"message_id": 12345}
 
 
+async def test_durable_outbox_retries_expiry_restart_dedup_and_revoke(database_url):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            user = await synthetic_owner(db)
+            binding = await synthetic_pair(db, user)
+            row = await enqueue(
+                db,
+                binding,
+                key=f"synthetic:{uuid4()}",
+                kind="test",
+                message="SYNTHETIC delivery",
+                now=NOW,
+                expires_at=NOW + timedelta(minutes=5),
+            )
+            again = await enqueue(
+                db,
+                binding,
+                key=row.deduplication_key,
+                kind="test",
+                message="SYNTHETIC ignored duplicate",
+                now=NOW,
+                expires_at=NOW + timedelta(minutes=5),
+            )
+            assert row.id == again.id
+            await db.commit()
+            row_id, user_id = row.id, user.id
+        client = SyntheticTelegram(TelegramError("TELEGRAM_503"))
+        worker = NotificationWorker(
+            SimpleNamespace(), sessions, client, SyntheticClock()
+        )
+        # Tests run in an isolated database; select only this synthetic row in a savepoint-independent setup.
+        assert await worker.dispatch_one()
+        async with sessions() as db:
+            row = await db.get(NotificationOutbox, row_id)
+            assert row.status == "retry" and row.attempts == 1
+            assert row.available_at > NOW
+            row.available_at = NOW
+            await db.commit()
+        worker.last_send = float("-inf")
+        client.failure = None
+        assert await worker.dispatch_one()
+        async with sessions() as db:
+            row = await db.get(NotificationOutbox, row_id)
+            assert row.status == "delivered" and row.provider_message_id == "12345"
+            assert row.attempts == 2
+            second = await enqueue(
+                db,
+                binding,
+                key=f"synthetic:{uuid4()}",
+                kind="test",
+                message="SYNTHETIC interrupted",
+                now=NOW,
+                expires_at=NOW + timedelta(minutes=5),
+            )
+            second.status = "sending"
+            third = await enqueue(
+                db,
+                binding,
+                key=f"synthetic:{uuid4()}",
+                kind="test",
+                message="SYNTHETIC expired",
+                now=NOW - timedelta(minutes=2),
+                expires_at=NOW,
+            )
+            await db.commit()
+            second_id, third_id = second.id, third.id
+        async with sessions() as db:
+            await recover_sending(db)
+            await db.commit()
+            assert (await db.get(NotificationOutbox, second_id)).status == "ambiguous"
+        worker.last_send = float("-inf")
+        assert await worker.dispatch_one()
+        async with sessions() as db:
+            assert (await db.get(NotificationOutbox, third_id)).status == "expired"
+            pending = await enqueue(
+                db,
+                binding,
+                key=f"synthetic:{uuid4()}",
+                kind="test",
+                message="SYNTHETIC revoked",
+                now=NOW,
+                expires_at=NOW + timedelta(minutes=5),
+            )
+            await revoke_pairing(db, user_id, NOW)
+            await db.commit()
+            assert pending.status == "cancelled"
+        assert len(client.calls) == 2
+    finally:
+        await engine.dispose()
 
 
 
