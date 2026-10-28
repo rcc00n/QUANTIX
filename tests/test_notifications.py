@@ -123,6 +123,15 @@ def test_minimum_actual_buy_capital_is_independent_and_thresholds_are_all_requir
     )
 
 
+def test_research_is_disabled_by_default_and_never_emergency_even_when_opted_in():
+    p = NotificationPreferences(telegram_enabled=True)
+    assert "RESEARCH_NOTIFICATIONS_DISABLED" in gate(settings=p).reasons
+    check = gate(settings=policy(emergency_alerts=True), persistence_seconds=100)
+    assert (
+        check.eligible
+        and not check.emergency
+        and check.classification == "RESEARCH_ONLY"
+    )
 
 
 
