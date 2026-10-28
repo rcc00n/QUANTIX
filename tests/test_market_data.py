@@ -353,5 +353,28 @@ async def test_ccxt_l2_decimal_hook_and_discrete_depths_without_network():
     await connector.close()
 
 
+async def test_public_request_serialization_timeout_and_pool_cleanup():
+    connector = PublicConnector("kraken", CollectorConfig(minimum_request_interval_seconds=0.1))
+    active = 0
+    maximum = 0
+
+    async def fake_public_request():
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return {"synthetic": True}
+
+    try:
+        values = await asyncio.gather(
+            connector._call(fake_public_request), connector._call(fake_public_request)
+        )
+        assert maximum == 1 and len(values) == 2
+        with pytest.raises(TimeoutError):
+            await connector._call(lambda: asyncio.sleep(10), deadline_seconds=0.01)
+    finally:
+        await connector.close()
+    assert connector._session is None
 
 
