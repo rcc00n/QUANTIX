@@ -250,6 +250,11 @@ def test_token_permissions_validation_and_repr_are_redacted(tmp_path):
     assert token not in str(TelegramError("TELEGRAM_401"))
 
 
+async def test_paid_providers_cannot_send():
+    for provider in (push_provider, voice_provider):
+        assert not provider.enabled
+        with pytest.raises(ProviderDisabled):
+            await provider.deliver(None)
 
 
 async def synthetic_owner(db):
