@@ -179,6 +179,36 @@ def test_freshness_expiry_and_clock_fail_closed():
     assert "UTC_CLOCK_UNTRUSTED" in check.reasons
 
 
+def test_nighttime_requires_stricter_all_thresholds_and_persistence():
+    now = NOW.replace(hour=7)  # Midnight Edmonton, November.
+    p = NotificationPreferences(telegram_enabled=True, emergency_alerts=True)
+    source = synthetic_result(
+        actionable=True,
+        status="VERIFIED_MARKET",
+        acquisition_cost_cad="500",
+        net_profit_cad="25",
+        net_return_pct="5",
+        expires_at=(now + timedelta(seconds=20)).isoformat(),
+        supporting_received_at=now.isoformat(),
+        supporting_source_at=now.isoformat(),
+    )
+    a = evaluate(
+        source, synthetic_evidence(), p, now, clock_trusted=True, persistence_seconds=9
+    )
+    assert not a.eligible and not a.emergency and "EMERGENCY_PERSISTENCE" in a.reasons
+    b = evaluate(
+        source, synthetic_evidence(), p, now, clock_trusted=True, persistence_seconds=10
+    )
+    assert b.eligible and b.emergency and not b.silent
+    for key, val in (("acquisition_cost_cad", "499.99"), ("net_profit_cad", "24.99")):
+        assert not evaluate(
+            {**source, key: val},
+            synthetic_evidence(),
+            p,
+            now,
+            clock_trusted=True,
+            persistence_seconds=20,
+        ).eligible
 
 
 
