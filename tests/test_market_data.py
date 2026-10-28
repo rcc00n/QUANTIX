@@ -209,6 +209,18 @@ def test_quality_flags_and_preserves_evidence(case, expected):
     assert book.actionable is False
 
 
+def test_ingestion_freshness_identity_clock_and_liquidity_gates():
+    now = datetime.now(UTC)
+    book = synthetic_capture(received_at=now)
+    assert fresh_view(book, now + timedelta(seconds=61), 60).state == DataState.STALE
+    assert fresh_view(book, now + timedelta(seconds=61), 60).normalized.quality == "stale"
+    assert fresh_view(book, now - timedelta(seconds=10), 60).state == DataState.SUSPICIOUS
+    assert "unverified_asset_identity" in synthetic_capture(identity_verified=False).reasons
+    assert "collector_clock_jump" in synthetic_capture(clock_healthy=False).reasons
+    assert (
+        "insufficient_quote_liquidity"
+        in synthetic_capture(config=CollectorConfig(minimum_book_notional="999999")).reasons
+    )
 
 
 
