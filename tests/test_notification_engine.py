@@ -165,3 +165,38 @@ async def test_small_research_is_retained_but_not_notified_then_eligible_dedup_c
         await engine.dispose()
 
 
+async def test_daily_report_has_actual_zero_counts_and_schedule_idempotency(
+    database_url,
+):
+    engine, sessions, _, _ = await synthetic_source(database_url)
+    user_id = None
+    try:
+        async with sessions() as db:
+            user = await synthetic_owner(db)
+            user_id = user.id
+            binding = await synthetic_pair(db, user, NOW)
+            message = await report(db, user_id, NOW - timedelta(days=1), NOW)
+            assert "Completed simulations: 0" in message
+            assert "No funded simulated portfolios" in message
+            assert "PAPER ONLY" in message
+            # Edmonton in January: 16:00 UTC is 09:00 local.
+            report_at = NOW.replace(hour=16)
+            p = NotificationPreferences(telegram_enabled=True)
+            await schedule_reports(db, binding, p, report_at)
+            await schedule_reports(db, binding, p, report_at)
+            await db.commit()
+            rows = list(
+                await db.scalars(
+                    select(NotificationOutbox).where(
+                        NotificationOutbox.user_id == user_id,
+                        NotificationOutbox.kind == "daily_report",
+                    )
+                )
+            )
+            assert len(rows) == 1
+    finally:
+        if user_id:
+            async with sessions() as db:
+                await revoke_pairing(db, user_id, NOW)
+                await db.commit()
+        await engine.dispose()
