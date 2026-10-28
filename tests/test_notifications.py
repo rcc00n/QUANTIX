@@ -134,6 +134,22 @@ def test_research_is_disabled_by_default_and_never_emergency_even_when_opted_in(
     )
 
 
+def test_actionability_requires_every_explicit_confirmation():
+    source = synthetic_result(actionable=True, status="VERIFIED_MARKET")
+    assert gate(source).eligible
+    missing = {**source, "actionability_confirmations": {}}
+    assert not gate(missing).eligible
+    assert all(
+        any(key.upper() in reason for reason in gate(missing).reasons)
+        for key in (
+            "eligibility",
+            "funding",
+            "fees",
+            "fx",
+            "market_limits",
+            "canonical_identity",
+        )
+    )
 
 
 
