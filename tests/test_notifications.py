@@ -224,6 +224,17 @@ def test_edmonton_quiet_hours_dst_and_daily_weekly_idempotency_key():
     )
 
 
+def test_backoff_rate_limits_and_delivery_ambiguity_are_explicit():
+    assert retry_delay(1) == 2 and retry_delay(50) == 900
+    assert retry_delay(2, 120) == 120
+    assert failure_state(TelegramError("TELEGRAM_429", retry_after=3), 1) == "retry"
+    assert failure_state(TelegramError("TELEGRAM_503"), 1) == "retry"
+    assert failure_state(TelegramError("TELEGRAM_403"), 1) == "failed"
+    assert failure_state(TelegramError("TELEGRAM_503"), 8) == "failed"
+    assert (
+        failure_state(TelegramError("TELEGRAM_NETWORK", ambiguous=True), 1)
+        == "ambiguous"
+    )
 
 
 
