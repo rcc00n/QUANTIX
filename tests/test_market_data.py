@@ -275,6 +275,22 @@ def test_cache_is_bounded_and_delayed_records_do_not_replace_newer_books():
     assert cache.rejected_updates["OUT_OF_ORDER_RECEIPT"] == 2
 
 
+@pytest.mark.parametrize(
+    "error,code",
+    [
+        (ccxt.RequestTimeout("synthetic"), "TIMEOUT"),
+        (TimeoutError(), "TIMEOUT"),
+        (ccxt.RateLimitExceeded("synthetic"), "RATE_LIMIT"),
+        (ccxt.AuthenticationError("synthetic"), "PUBLIC_ENDPOINT_REQUIRES_AUTH"),
+        (ccxt.PermissionDenied("synthetic"), "ACCESS_DENIED"),
+        (ccxt.BadSymbol("synthetic"), "MARKET_UNAVAILABLE"),
+        (ccxt.BadRequest("synthetic"), "UNSUPPORTED_REQUEST"),
+        (OSError("synthetic"), "NETWORK_UNAVAILABLE"),
+        (ValueError("synthetic"), "MALFORMED_RESPONSE"),
+    ],
+)
+def test_exchange_error_classification(error, code):
+    assert classify_error(error) == code
 
 
 
