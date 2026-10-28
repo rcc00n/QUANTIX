@@ -152,6 +152,31 @@ def test_actionability_requires_every_explicit_confirmation():
     )
 
 
+def test_freshness_expiry_and_clock_fail_closed():
+    assert (
+        "OPPORTUNITY_EXPIRED"
+        in gate(synthetic_result(expires_at=NOW.isoformat())).reasons
+    )
+    assert (
+        "QUOTE_STALE"
+        in gate(
+            synthetic_result(
+                supporting_source_at=(NOW - timedelta(seconds=10)).isoformat()
+            )
+        ).reasons
+    )
+    assert (
+        "QUOTE_TIME_UNAVAILABLE_OR_FUTURE"
+        in gate(
+            synthetic_result(
+                supporting_source_at=(NOW + timedelta(milliseconds=1)).isoformat()
+            )
+        ).reasons
+    )
+    check = evaluate(
+        synthetic_result(), synthetic_evidence(), policy(), NOW, clock_trusted=False
+    )
+    assert "UTC_CLOCK_UNTRUSTED" in check.reasons
 
 
 
