@@ -237,6 +237,17 @@ def test_backoff_rate_limits_and_delivery_ambiguity_are_explicit():
     )
 
 
+def test_token_permissions_validation_and_repr_are_redacted(tmp_path):
+    path = tmp_path / "synthetic-token"
+    token = "123456789:" + "SYNTHETIC_ONLY_" * 3
+    path.write_text(token)
+    path.chmod(0o644)
+    with pytest.raises(TelegramError, match="TOKEN_FILE_PERMISSIONS"):
+        read_bot_token(str(path))
+    path.chmod(0o600)
+    assert read_bot_token(str(path)) == token
+    assert token not in repr(TelegramClient(None, token))
+    assert token not in str(TelegramError("TELEGRAM_401"))
 
 
 
