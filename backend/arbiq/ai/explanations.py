@@ -67,3 +67,71 @@ def display_decimal(value: str) -> str:
     return fixed.rstrip("0").rstrip(".") if "." in fixed else fixed
 
 
+def deterministic_notes(report):
+    values = report.numeric_inputs
+    notes = {
+        "paper_only": (
+            "These are observed-data projections or virtual results. No real "
+            "exchange order or realized real-world profit is represented."
+        )
+    }
+    if report.source_type == "opportunity":
+        notes["historical"] = (
+            "This explanation uses retained evidence at its original evaluation "
+            "time. Recheck before interpreting current market conditions."
+        )
+        capital = values.get("buy_capital_cad")
+        if capital is not None:
+            budget = values.get("selected_budget_cad")
+            budget_label = f"C${display_decimal(budget)}" if budget is not None else "unavailable"
+            notes["capital"] = (
+                f"Executable projected buy capital is C${display_decimal(capital)}; "
+                "the selected maximum "
+                f"budget is {budget_label}. "
+                "Sell-side inventory is separate."
+            )
+        profit = values.get("net_profit_cad")
+        if profit is not None:
+            pct = values.get("net_return_pct")
+            pct_label = f"{display_decimal(pct)}%" if pct is not None else "unavailable"
+            notes["profit"] = (
+                f"Estimated net CAD profit is C${display_decimal(profit)}; estimated return is "
+                f"{pct_label}. This is not executed profit."
+            )
+        else:
+            notes["profit"] = (
+                "CAD profit is unavailable because required depth or conversion "
+                "evidence is incomplete."
+            )
+        if capital is not None and Decimal(capital) < Decimal(50):
+            notes["small_size"] = (
+                "This size is below the default C$50 minimum buy capital for "
+                "qualifying alerts; a high percentage alone does not establish "
+                "meaningful capacity."
+            )
+    else:
+        notes["completed"] = (
+            f"Completed simulations: {display_decimal(values.get('completed') or '0')}. "
+            "Partial, failed and missed attempts are separate outcomes."
+        )
+        for key, label in (
+            ("equity_cad", "Retained portfolio equity"),
+            ("realized_simulated_pnl_cad", "Realized simulated disposal/FX P&L"),
+            ("unrealized_pnl_cad", "Unrealized inventory P&L"),
+            ("no_trading_benchmark_cad", "Original-holdings benchmark"),
+        ):
+            value = values.get(key)
+            notes[key] = f"{label}: " + (
+                f"C${display_decimal(value)}."
+                if value is not None
+                else "unavailable; no value is invented."
+            )
+        if values.get("completed") in {None, "0"}:
+            notes["no_sample"] = (
+                "Zero completed simulations cannot establish a profitable strategy or a win rate."
+            )
+    for code in report.reasons:
+        notes[code] = REASON_TEXT[code]
+    return notes
+
+
