@@ -227,3 +227,17 @@ class NvidiaProvider:
             return value
 
 
+def get_provider(settings=None) -> AnalysisProvider:
+    return (
+        NvidiaProvider(settings) if getattr(settings, "ai_enabled", False) else DisabledProvider()
+    )
+
+
+def initialize_ai(app):
+    app.state.ai_provider = get_provider(app.state.settings)
+    app.state.ai_gate = asyncio.Semaphore(1)
+
+
+async def close_ai(app):
+    # Requests own short-lived clients; no background task or connection survives.
+    return None
