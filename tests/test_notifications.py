@@ -632,3 +632,16 @@ def test_alert_message_compacts_repeating_decimals_without_changing_exact_eviden
     )  # Exact evidence and quantitative inputs remain untouched.
 
 
+def test_display_formatter_preserves_tiny_nonzero_units_and_exact_values():
+    from arbiq.notifications.messages import cad, display_value, value
+
+    assert display_value("0.000000000000000001") == "1e-18"
+    assert display_value("0.00000000000000000123456789") == "≈1.23457e-18"
+    assert display_value("-0.000000000000000001") == "-1e-18"
+    assert display_value("0.00000001") == "0.00000001"
+    assert display_value("0") == "0"
+    assert cad("50") == "C$50.00"
+    assert cad("0.001") == "C$1e-3"
+    assert cad(None) == "unavailable"
+    assert display_value(float("nan")) == "unavailable"
+    assert value("0.123456789123456789123456789") == "0.123456789123456789123456789"
