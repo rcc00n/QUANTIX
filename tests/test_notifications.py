@@ -505,6 +505,42 @@ class SyntheticHttp:
         return next(self.responses)
 
 
+async def test_official_telegram_contract_redacts_errors_and_rejects_webhook_conflict():
+    token = "123456789:" + "SYNTHETIC_ONLY_" * 3
+    http = SyntheticHttp(
+        [
+            SyntheticResponse(
+                {
+                    "ok": False,
+                    "error_code": 429,
+                    "description": token,
+                    "parameters": {"retry_after": 15},
+                },
+                429,
+            )
+        ]
+    )
+    client = TelegramClient(http, token)
+    with pytest.raises(TelegramError) as exc:
+        await client.send(123, "SYNTHETIC")
+    assert exc.value.code == "TELEGRAM_429" and exc.value.retry_after == 15
+    assert token not in str(exc.value) and not exc.value.ambiguous
+    http = SyntheticHttp(
+        [
+            SyntheticResponse(
+                {"ok": True, "result": {"id": 123, "username": "synthetic"}}
+            ),
+            SyntheticResponse(
+                {"ok": True, "result": {"url": "https://synthetic.invalid"}}
+            ),
+        ]
+    )
+    with pytest.raises(TelegramError, match="WEBHOOK_CONFLICT"):
+        await TelegramClient(http, token).readiness()
+    assert http.methods == [
+        "getMe",
+        "getWebhookInfo",
+    ]  # Never delete someone else's webhook.
 
 
 
