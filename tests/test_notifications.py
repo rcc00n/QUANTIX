@@ -601,5 +601,34 @@ def test_real_clock_uncertainty_milliseconds_are_conserved_and_invalid_values_fa
     )
 
 
+def test_alert_message_compacts_repeating_decimals_without_changing_exact_evidence():
+    """SYNTHETIC long FX-derived decimals must fit a mobile message, not change sizing."""
+    from copy import deepcopy
+
+    from arbiq.notifications.messages import alert_message
+
+    source = synthetic_result(
+        base_asset="SYNTH",
+        buy_exchange="synthetic-buy",
+        sell_exchange="synthetic-sell",
+        buy_symbol="SYNTH/CAD",
+        sell_symbol="SYNTH/USDT",
+        buy_price="0.123456789" + "123456789" * 8,
+        sell_price="0.234567891" + "234567891" * 8,
+        acquisition_cost_cad="50.850392" + "850392" * 12,
+        net_profit_cad="5.126666" + "126666" * 12,
+        net_return_pct="10.246666" + "246666" * 12,
+    )
+    original = deepcopy(source)
+    message = alert_message(source, NOW, "https://synthetic.invalid")
+    assert "Buy Capital: ≈C$50.85" in message
+    assert "Estimated Net: ≈C$5.13 (≈10.2467%)" in message
+    assert "≈0.12345679 (SYNTH/CAD)" in message
+    assert "≈0.23456789 (SYNTH/USDT)" in message
+    assert "Exact values / recheck:" in message
+    assert "850392850392" not in message
+    assert (
+        source == original
+    )  # Exact evidence and quantitative inputs remain untouched.
 
 
