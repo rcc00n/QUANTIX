@@ -59,3 +59,29 @@ class DisabledProvider:
         return fallback(report)
 
 
+class NvidiaProvider:
+    def __init__(self, settings=None, *, transport=None, monotonic=time.monotonic):
+        self.settings = settings
+        self.transport = transport or self._request
+        self.monotonic = monotonic
+        self.lock = asyncio.Lock()
+        self.cache = OrderedDict()
+        self.last_attempt = None
+        self.daily_attempts = 0
+        self.attempt_date = None
+
+    def disabled_reason(self, now):
+        s = self.settings
+        if s is None or not getattr(s, "ai_enabled", False):
+            return "AI_DISABLED"
+        if not s.nvidia_api_key.get_secret_value() or not s.nvidia_model:
+            return "NVIDIA_CONFIGURATION_MISSING"
+        expiry = getattr(s, "ai_free_allowance_expires_at", None)
+        if not getattr(s, "ai_free_allowance_authorized", False) or expiry is None:
+            return "FREE_ALLOWANCE_NOT_AUTHORIZED"
+        if now is None or now.tzinfo is None:
+            return "TRUSTED_UTC_REQUIRED"
+        if now >= expiry:
+            return "FREE_ALLOWANCE_AUTHORIZATION_EXPIRED"
+        return None
+
