@@ -437,6 +437,46 @@ async def test_durable_outbox_retries_expiry_restart_dedup_and_revoke(database_u
         await engine.dispose()
 
 
+async def test_unauthorized_commands_never_queue_private_data_and_events_are_immutable(
+    database_url,
+):
+    engine = create_async_engine(database_url)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as db:
+            before = await db.scalar(
+                select(func.count()).select_from(NotificationOutbox)
+            )
+            update = {
+                "update_id": 42,
+                "message": {
+                    "text": "/portfolio",
+                    "chat": {"id": -999, "type": "private"},
+                    "from": {"id": -999},
+                },
+            }
+            await handle_update(
+                db, update, NOW, clock_trusted=True, app_url="http://synthetic.invalid"
+            )
+            assert (
+                await db.scalar(select(func.count()).select_from(NotificationOutbox))
+                == before
+            )
+            event = NotificationEvent(
+                event_type="synthetic.test", details={"synthetic": True}
+            )
+            db.add(event)
+            await db.commit()
+            with pytest.raises(DBAPIError, match="append-only"):
+                await db.execute(
+                    text(
+                        "UPDATE notification_events SET event_type='synthetic.invalid' WHERE id=:id"
+                    ),
+                    {"id": event.id},
+                )
+            await db.rollback()
+    finally:
+        await engine.dispose()
 
 
 class SyntheticResponse:
