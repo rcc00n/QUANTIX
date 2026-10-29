@@ -550,6 +550,35 @@ async def test_success_without_message_receipt_is_ambiguous_and_never_claimed_de
     assert exc.value.ambiguous and failure_state(exc.value, 1) == "ambiguous"
 
 
+def test_research_quiet_silent_never_escalates_and_unknown_units_never_qualify():
+    now = NOW.replace(hour=7)
+    source = synthetic_result(
+        expires_at=(now + timedelta(seconds=30)).isoformat(),
+        supporting_source_at=now.isoformat(),
+        supporting_received_at=now.isoformat(),
+    )
+    p = NotificationPreferences(
+        telegram_enabled=True,
+        research_enabled=True,
+        emergency_alerts=True,
+        quiet_delivery="SILENT",
+    )
+    check = evaluate(
+        source,
+        synthetic_evidence(),
+        p,
+        now,
+        clock_trusted=True,
+        persistence_seconds=100,
+    )
+    assert check.eligible and check.silent and not check.emergency
+    assert not gate(synthetic_result(quantity="0")).eligible
+    zero = policy(
+        minimum_buy_capital_cad="0", minimum_liquidity_cad="0", minimum_profit_cad="0"
+    )
+    assert not gate(
+        synthetic_result(acquisition_cost_cad="0", net_profit_cad="0"), zero
+    ).eligible
 
 
 
