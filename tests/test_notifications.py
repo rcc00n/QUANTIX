@@ -581,6 +581,24 @@ def test_research_quiet_silent_never_escalates_and_unknown_units_never_qualify()
     ).eligible
 
 
+def test_real_clock_uncertainty_milliseconds_are_conserved_and_invalid_values_fail():
+    evidence = synthetic_evidence(
+        clock={"trusted": True, "host_healthy": True, "uncertainty_ms": "250"}
+    )
+    source = synthetic_result(
+        supporting_source_at=(NOW - timedelta(seconds=8)).isoformat()
+    )
+    assert (
+        "QUOTE_STALE"
+        in evaluate(source, evidence, policy(), NOW, clock_trusted=True).reasons
+    )
+    evidence["clock"]["uncertainty_ms"] = "-100"
+    assert (
+        "SOURCE_CLOCK_UNCERTAINTY_INVALID"
+        in evaluate(
+            synthetic_result(), evidence, policy(), NOW, clock_trusted=True
+        ).reasons
+    )
 
 
 
