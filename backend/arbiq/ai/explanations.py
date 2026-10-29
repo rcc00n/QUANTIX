@@ -135,3 +135,57 @@ def deterministic_notes(report):
     return notes
 
 
+def build_report(source_type, payload):
+    from arbiq.ai.contracts import NumericReport
+
+    if source_type == "opportunity":
+        costs = payload.get("costs") or {}
+        fields = {
+            "buy_capital_cad": payload.get("acquisition_cost_cad"),
+            "net_profit_cad": payload.get("net_profit_cad"),
+            "net_return_pct": payload.get("net_return_pct"),
+            "selected_budget_cad": payload.get("selected_budget_cad"),
+            **{
+                k: costs.get(k)
+                for k in ("sell_base_required", "fees_cad", "expenses_cad", "residual_base")
+            },
+        }
+        reasons = payload.get("reasons") or []
+        classification = "UNVERIFIED"
+    else:
+        metrics = payload.get("metrics") or {}
+        portfolio = payload.get("portfolio") or {}
+        counts = metrics.get("counts") or {}
+        fields = {
+            k.lower(): counts.get(k, 0)
+            for k in ("COMPLETED", "PARTIAL", "FAILED", "MISSED", "EXPIRED")
+        }
+        fields.update(
+            {
+                k: portfolio.get(k)
+                for k in (
+                    "equity_cad",
+                    "realized_simulated_pnl_cad",
+                    "unrealized_pnl_cad",
+                    "no_trading_benchmark_cad",
+                    "strategy_excess_cad",
+                )
+            }
+        )
+        fields["net_completed_trade_pnl_cad"] = metrics.get("net_completed_trade_pnl_cad")
+        fields["detections"] = payload.get("opportunity_detection_count")
+        reasons = payload.get("limitations") or []
+        classification = payload.get("classification")
+        if classification not in {"RESEARCH", "VALIDATED"}:
+            classification = "UNVERIFIED"
+    # No market symbol, source text, user name, URL, identifier, key or config dump.
+    if any(isinstance(value, (float, bool)) for value in fields.values()):
+        raise ValueError("Binary floating point is not an explanation input")
+    return NumericReport(
+        source_type=source_type,
+        classification=classification,
+        numeric_inputs={k: str(v) if v is not None else None for k, v in fields.items()},
+        reasons=tuple(dict.fromkeys(r for r in reasons if isinstance(r, str) and r in REASON_TEXT))[
+            :32
+        ],
+    )
