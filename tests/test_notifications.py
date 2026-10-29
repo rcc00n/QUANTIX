@@ -543,6 +543,11 @@ async def test_official_telegram_contract_redacts_errors_and_rejects_webhook_con
     ]  # Never delete someone else's webhook.
 
 
+async def test_success_without_message_receipt_is_ambiguous_and_never_claimed_delivered():
+    http = SyntheticHttp([SyntheticResponse({"ok": True, "result": {}})])
+    with pytest.raises(TelegramError) as exc:
+        await TelegramClient(http, "synthetic-token-not-real").send(123, "SYNTHETIC")
+    assert exc.value.ambiguous and failure_state(exc.value, 1) == "ambiguous"
 
 
 
