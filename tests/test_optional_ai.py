@@ -67,6 +67,25 @@ async def test_disabled_provider_still_explains_actual_values():
     assert "not executed profit" in value.text
 
 
+async def test_human_explanation_trims_storage_zeroes_without_changing_numeric_inputs():
+    source = NumericReport(
+        source_type="paper_report",
+        classification="RESEARCH",
+        numeric_inputs={
+            "completed": "0",
+            "equity_cad": "10000.000000000000000000",
+            "realized_simulated_pnl_cad": "0E-18",
+            "unrealized_pnl_cad": "-0E-18",
+        },
+    )
+    value = await DisabledProvider().explain(source)
+    assert "equity: C$10000." in value.text
+    assert "P&L: C$0." in value.text
+    assert "0E-18" not in value.text and "10000.000000" not in value.text
+    assert value.numeric_inputs == source.numeric_inputs
+    assert value.numeric_inputs["realized_simulated_pnl_cad"] == "0E-18"
+    assert display_decimal("1.234567890123456789000") == "1.234567890123456789"
+    assert display_decimal("1E-999999") == "1E-999999"
 
 
 
