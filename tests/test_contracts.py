@@ -82,6 +82,20 @@ def synthetic_book(**changes):
     }
 
 
+def test_orderbook_quality_and_ordering():
+    assert NormalizedOrderBook(**synthetic_book()).quality == "valid"
+    for changes in [
+        {"bids": []},
+        {"bids": [{"price": "101", "quantity": "1"}]},
+        {
+            "asks": [
+                {"price": "102", "quantity": "1"},
+                {"price": "101", "quantity": "1"},
+            ]
+        },
+    ]:
+        with pytest.raises(ValidationError):
+            NormalizedOrderBook(**synthetic_book(**changes))
 
 
 
