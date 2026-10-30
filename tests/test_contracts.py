@@ -120,6 +120,9 @@ def test_real_trading_and_external_ai_are_rejected():
         Settings(**values, ai_enabled=True)
 
 
+async def test_ai_unavailability_has_no_external_dependency():
+    assert (await DisabledProvider().explain({})).status == "disabled"
+    assert (await NvidiaProvider().explain({})).status == "unavailable"
 
 
 
