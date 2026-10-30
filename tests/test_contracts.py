@@ -98,6 +98,13 @@ def test_orderbook_quality_and_ordering():
             NormalizedOrderBook(**synthetic_book(**changes))
 
 
+def test_password_hashes_salted_and_constant_time_verification():
+    one, two = hash_password("synthetic secret"), hash_password("synthetic secret")
+    assert one != two
+    assert verify_password("synthetic secret", one)
+    assert not verify_password("incorrect", one)
+    assert not verify_password("incorrect", "malformed")
+    assert len(hash_token("synthetic_session")) == 64
 
 
 
