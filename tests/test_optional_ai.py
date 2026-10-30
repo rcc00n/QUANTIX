@@ -88,6 +88,22 @@ async def test_human_explanation_trims_storage_zeroes_without_changing_numeric_i
     assert display_decimal("1E-999999") == "1E-999999"
 
 
+@pytest.mark.parametrize(
+    "changes,expected",
+    [
+        ({"ai_enabled": False}, "AI_DISABLED"),
+        ({"nvidia_api_key": SecretStr("")}, "NVIDIA_CONFIGURATION_MISSING"),
+        ({"ai_free_allowance_authorized": False}, "FREE_ALLOWANCE_NOT_AUTHORIZED"),
+        ({"ai_free_allowance_expires_at": NOW}, "FREE_ALLOWANCE_AUTHORIZATION_EXPIRED"),
+    ],
+)
+async def test_configuration_gates_prevent_any_network_call(changes, expected):
+    transport = AsyncMock()
+    value = await NvidiaProvider(settings(**changes), transport=transport).explain(
+        report(), now=NOW
+    )
+    assert value.reason == expected
+    transport.assert_not_called()
 
 
 
