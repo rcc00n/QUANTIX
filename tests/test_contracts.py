@@ -107,6 +107,17 @@ def test_password_hashes_salted_and_constant_time_verification():
     assert len(hash_token("synthetic_session")) == 64
 
 
+def test_real_trading_and_external_ai_are_rejected():
+    values = {
+        "database_url": "postgresql+asyncpg://synthetic:synthetic@localhost/arbiq_test",
+        "admin_password_hash": hash_password("synthetic secret"),
+        "_env_file": None,
+    }
+    assert Settings(**values).trading_mode == "paper"
+    with pytest.raises(ValidationError):
+        Settings(**values, trading_mode="live")
+    with pytest.raises(ValidationError):
+        Settings(**values, ai_enabled=True)
 
 
 
