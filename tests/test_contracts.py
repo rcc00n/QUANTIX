@@ -125,5 +125,15 @@ async def test_ai_unavailability_has_no_external_dependency():
     assert (await NvidiaProvider().explain({})).status == "unavailable"
 
 
+def test_export_manifest_cannot_silently_omit_evidence():
+    with pytest.raises(ValidationError, match="complete ordered"):
+        ExportManifest(
+            generated_at=datetime.now(UTC),
+            period=ReportPeriod(
+                start="2026-01-01T00:00:00Z", end="2026-01-02T00:00:00Z"
+            ),
+            session_ids=(uuid4(),),
+            files=("SUMMARY.md",),
+        )
 
 
