@@ -137,3 +137,12 @@ def test_export_manifest_cannot_silently_omit_evidence():
         )
 
 
+def test_configuration_errors_do_not_print_credentials():
+    with pytest.raises(ValidationError) as error:
+        Settings(
+            _env_file=None,
+            database_url="postgresql+asyncpg://synthetic:synthetic-secret@db/arbiq_test",
+            admin_password_hash="synthetic-sensitive-invalid-hash",
+        )
+    assert "synthetic-secret" not in str(error.value)
+    assert "synthetic-sensitive-invalid-hash" not in str(error.value)
