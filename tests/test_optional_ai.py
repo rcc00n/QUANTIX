@@ -193,6 +193,13 @@ async def test_failure_and_timeout_redact_provider_errors_and_preserve_fallback(
     assert value.status == "unavailable" and "C$6.71" in value.text
 
 
+async def test_oversized_inputs_are_not_sent():
+    transport = AsyncMock()
+    value = await NvidiaProvider(
+        settings(ai_max_input_bytes=10), transport=transport
+    ).explain(report(), now=NOW)
+    assert value.reason == "AI_INPUT_TOO_LARGE"
+    transport.assert_not_called()
 
 
 
