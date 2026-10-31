@@ -113,6 +113,24 @@ async def test_trusted_utc_required_even_with_key_and_authorization():
     transport.assert_not_called()
 
 
+async def test_success_cache_rate_daily_limit_and_expiry_are_bounded():
+    timer = [0]
+    transport = AsyncMock(return_value=response())
+    provider = NvidiaProvider(
+        settings(), transport=transport, monotonic=lambda: timer[0]
+    )
+    first = await provider.explain(report(), now=NOW)
+    assert first.status == "complete" and first.deterministic
+    assert "C$6.71" in first.text
+    assert (await provider.explain(report(), now=NOW)).cached
+    assert transport.await_count == 1
+    assert (await provider.explain(report("10"), now=NOW)).reason == "AI_RATE_LIMIT"
+    timer[0] = 61
+    assert (await provider.explain(report("10"), now=NOW)).status == "complete"
+    timer[0] = 122
+    assert (await provider.explain(report("20"), now=NOW)).reason == "AI_DAILY_LIMIT"
+    expired = await provider.explain(report(), now=NOW + timedelta(days=2))
+    assert expired.reason == "FREE_ALLOWANCE_AUTHORIZATION_EXPIRED"
 
 
 
