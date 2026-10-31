@@ -133,6 +133,22 @@ async def test_success_cache_rate_daily_limit_and_expiry_are_bounded():
     assert expired.reason == "FREE_ALLOWANCE_AUTHORIZATION_EXPIRED"
 
 
+async def test_cache_expires_and_memory_stays_bounded():
+    timer = [0]
+    transport = AsyncMock(return_value=response())
+    provider = NvidiaProvider(
+        settings(ai_max_requests_per_day=100),
+        transport=transport,
+        monotonic=lambda: timer[0],
+    )
+    await provider.explain(report(), now=NOW)
+    timer[0] = 301
+    assert not (await provider.explain(report(), now=NOW)).cached
+    for value in range(66):
+        timer[0] += 61
+        await provider.explain(report(str(value)), now=NOW)
+    assert len(provider.cache) == 64
+    assert transport.await_count == 68
 
 
 
