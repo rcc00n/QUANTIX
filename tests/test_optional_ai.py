@@ -232,6 +232,14 @@ def test_report_builder_excludes_symbols_secrets_arbitrary_text_and_new_metrics(
         build_report("opportunity", {"net_profit_cad": 1.2})
 
 
+def test_explanation_request_has_one_source_and_no_arbitrary_prompt():
+    for values in (
+        {},
+        {"opportunity_id": uuid4(), "session_id": uuid4()},
+        {"opportunity_id": uuid4(), "prompt": "SYNTHETIC-secret"},
+    ):
+        with pytest.raises(ValidationError):
+            ExplainRequest.model_validate(values)
 
 
 
