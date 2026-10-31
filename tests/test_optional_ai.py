@@ -106,6 +106,11 @@ async def test_configuration_gates_prevent_any_network_call(changes, expected):
     transport.assert_not_called()
 
 
+async def test_trusted_utc_required_even_with_key_and_authorization():
+    transport = AsyncMock()
+    value = await NvidiaProvider(settings(), transport=transport).explain(report())
+    assert value.reason == "TRUSTED_UTC_REQUIRED"
+    transport.assert_not_called()
 
 
 
