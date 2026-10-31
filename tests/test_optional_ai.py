@@ -326,3 +326,28 @@ async def test_restart_cannot_reset_durable_api_daily_limit(monkeypatch):
     db.commit.assert_not_called()
 
 
+async def test_api_cached_explanation_does_not_consume_durable_quota(monkeypatch):
+    app = FastAPI()
+    app.state.settings = settings()
+    transport = AsyncMock(return_value=response())
+    provider = NvidiaProvider(app.state.settings, transport=transport)
+    app.state.ai_provider, app.state.ai_gate = provider, asyncio.Semaphore(1)
+    evaluation = SimpleNamespace(
+        id=uuid4(),
+        evaluated_at=NOW,
+        result={"acquisition_cost_cad": "6.71", "net_profit_cad": "0.5"},
+    )
+    await provider.explain(build_report("opportunity", evaluation.result), now=NOW)
+    db = SimpleNamespace(scalar=AsyncMock(return_value=evaluation))
+    monkeypatch.setattr(
+        "arbiq.ai.api.utc_reference", AsyncMock(return_value=(NOW, {"trusted": True}))
+    )
+    result = await explain(
+        ExplainRequest(opportunity_id=uuid4()),
+        Request({"type": "http", "app": app}),
+        db,
+        SimpleNamespace(id=uuid4()),
+    )
+    assert result["cached"]
+    assert db.scalar.await_count == 1
+    assert transport.await_count == 1
