@@ -1,0 +1,10 @@
+# Reviewed image-only role selection. Compose with compose.production.yaml.
+services:
+  backend:
+    image: quantix-backend:0.7.1-stage8b1
+  collector:
+    image: quantix-backend:0.7.1-stage8b1
+  frontend:
+    image: quantix-frontend:0.7.1-stage8b1
+  notifications:
+    image: quantix-backend:0.7.1-stage8a1
