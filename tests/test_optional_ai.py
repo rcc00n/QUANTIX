@@ -261,6 +261,37 @@ async def test_explanation_endpoints_require_authentication_without_external_cal
         ).status_code == 401
 
 
+async def test_authenticated_disabled_api_returns_retained_numeric_explanation():
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+    app.state.settings = settings(ai_enabled=False)
+    app.state.collector_http = None
+    evaluation = SimpleNamespace(
+        id=uuid4(),
+        evaluated_at=NOW,
+        result={"acquisition_cost_cad": "6.71", "net_profit_cad": "0.5"},
+    )
+    db = SimpleNamespace(scalar=AsyncMock(return_value=evaluation))
+
+    async def database():
+        return db
+
+    async def owner():
+        return SimpleNamespace(id=uuid4())
+
+    app.dependency_overrides[get_db] = database
+    app.dependency_overrides[current_user] = owner
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        value = await client.post(
+            "/api/v1/ai/explain", json={"opportunity_id": str(uuid4())}
+        )
+        assert value.status_code == 200
+        assert value.json()["status"] == "disabled"
+        assert value.json()["numeric_inputs"]["buy_capital_cad"] == "6.71"
+        assert value.json()["attribution"]["current_quote"] is False
+        assert "SYNTHETIC-secret" not in value.text
 
 
 
