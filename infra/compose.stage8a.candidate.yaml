@@ -1,0 +1,11 @@
+# Prepared local candidate only. Production rollout is blocked by capacity gates.
+# Compose with compose.production.yaml; DB, migration and shared routing are untouched.
+services:
+  backend:
+    image: quantix-backend:0.7.1-stage8a1
+  collector:
+    image: quantix-backend:0.7.1-stage8a1
+  frontend:
+    image: quantix-frontend:0.7.1-stage8a1
+  notifications:
+    image: quantix-backend:0.7.1-stage8a1
