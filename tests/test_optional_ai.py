@@ -242,6 +242,23 @@ def test_explanation_request_has_one_source_and_no_arbitrary_prompt():
             ExplainRequest.model_validate(values)
 
 
+async def test_explanation_endpoints_require_authentication_without_external_calls():
+    app = FastAPI()
+    app.include_router(router, prefix="/api/v1")
+
+    async def database():
+        return SimpleNamespace()
+
+    app.dependency_overrides[get_db] = database
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        assert (await client.get("/api/v1/ai/status")).status_code == 401
+        assert (
+            await client.post(
+                "/api/v1/ai/explain", json={"opportunity_id": str(uuid4())}
+            )
+        ).status_code == 401
 
 
 
