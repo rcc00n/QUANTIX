@@ -1,0 +1,10 @@
+# Local candidate. Compose with the protected, otherwise unchanged production base.
+services:
+  backend:
+    image: quantix-backend:0.7.1-stage8c
+  collector:
+    image: quantix-backend:0.7.1-stage8c
+  frontend:
+    image: quantix-frontend:0.7.1-stage8c
+  notifications:
+    image: quantix-backend:0.7.1-stage8a1
