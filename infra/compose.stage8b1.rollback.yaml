@@ -1,0 +1,10 @@
+# Restores the exact prior Stage 8A.1 image selection for owned roles only.
+services:
+  backend:
+    image: quantix-backend:0.7.1-stage8a1
+  collector:
+    image: quantix-backend:0.7.1-stage8a1
+  frontend:
+    image: quantix-frontend:0.7.1-stage8a1
+  notifications:
+    image: quantix-backend:0.7.1-stage8a1
