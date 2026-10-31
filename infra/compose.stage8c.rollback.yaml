@@ -1,0 +1,10 @@
+# Exact existing Stage 8A.1 image selections, with protected services unchanged.
+services:
+  backend:
+    image: quantix-backend:0.7.1-stage8a1
+  collector:
+    image: quantix-backend:0.7.1-stage8a1
+  frontend:
+    image: quantix-frontend:0.7.1-stage8a1
+  notifications:
+    image: quantix-backend:0.7.1-stage8a1
