@@ -1,0 +1,10 @@
+# Exact pre-Stage-8A release image selection. No DB restore or history deletion.
+services:
+  backend:
+    image: quantix-backend:0.7.1-export2
+  collector:
+    image: quantix-backend:0.7.1
+  frontend:
+    image: quantix-frontend:0.7.1-export2
+  notifications:
+    image: quantix-backend:0.7.1
