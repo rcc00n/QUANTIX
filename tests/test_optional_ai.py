@@ -294,5 +294,35 @@ async def test_authenticated_disabled_api_returns_retained_numeric_explanation()
         assert "SYNTHETIC-secret" not in value.text
 
 
+async def test_restart_cannot_reset_durable_api_daily_limit(monkeypatch):
+    app = FastAPI()
+    app.state.settings = settings()
+    transport = AsyncMock(return_value=response())
+    provider = NvidiaProvider(app.state.settings, transport=transport)
+    app.state.ai_provider, app.state.ai_gate = provider, asyncio.Semaphore(1)
+    evaluation = SimpleNamespace(
+        id=uuid4(),
+        evaluated_at=NOW,
+        result={"acquisition_cost_cad": "6.71", "net_profit_cad": "0.5"},
+    )
+    db = SimpleNamespace(
+        scalar=AsyncMock(side_effect=[evaluation, None, 2, NOW]),
+        add=AsyncMock(),
+        commit=AsyncMock(),
+    )
+    monkeypatch.setattr(
+        "arbiq.ai.api.utc_reference", AsyncMock(return_value=(NOW, {"trusted": True}))
+    )
+    result = await explain(
+        ExplainRequest(opportunity_id=uuid4()),
+        Request({"type": "http", "app": app}),
+        db,
+        SimpleNamespace(id=uuid4()),
+    )
+    assert provider.daily_attempts == 0
+    assert result["reason"] == "AI_DAILY_LIMIT"
+    assert "C$6.71" in result["text"]
+    transport.assert_not_called()
+    db.commit.assert_not_called()
 
 
