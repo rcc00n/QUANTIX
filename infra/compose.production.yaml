@@ -1,0 +1,153 @@
+name: quantix
+x-runtime: &runtime
+  image: quantix-backend:0.7.1
+  env_file: ../.secrets/production/runtime.env
+  init: true
+  read_only: true
+  tmpfs: ["/tmp:size=16m,mode=1777"]
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+  pids_limit: 100
+  cpu_shares: 128
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+  secrets: [runtime_database_url, owner_password_hash, internal_token]
+services:
+  db:
+    image: quantix-postgres:16-0.7.1
+    environment:
+      POSTGRES_DB: quantix
+      POSTGRES_USER: quantix_migrator
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_owner_password
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets: [pg_owner_password, pg_runtime_password]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/010-runtime-role.sh:/docker-entrypoint-initdb.d/010-runtime-role.sh:ro
+    command: [postgres, -c, shared_buffers=64MB, -c, work_mem=2MB, -c, maintenance_work_mem=32MB, -c, max_connections=30, -c, max_wal_size=512MB, -c, min_wal_size=80MB, -c, log_min_error_statement=panic, -c, log_error_verbosity=terse]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U quantix_migrator -d quantix]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 320m
+    memswap_limit: 320m
+    cpus: 0.75
+    cpu_shares: 128
+    pids_limit: 80
+    restart: unless-stopped
+    security_opt: [no-new-privileges:true]
+    networks: [data]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  migrate:
+    <<: *runtime
+    command: [alembic, upgrade, head]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/migration_database_url
+    secrets: [migration_database_url, owner_password_hash, internal_token]
+    depends_on:
+      db: {condition: service_healthy}
+    restart: "no"
+    mem_limit: 192m
+    memswap_limit: 192m
+    cpus: 0.25
+    networks: [data]
+  backend:
+    <<: *runtime
+    image: quantix-backend:0.7.1-export2
+    environment:
+      TMPDIR: /var/tmp/quantix-export
+    volumes: [export_temp:/var/tmp/quantix-export]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready',timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 1.0
+    networks: [data, app]
+  collector:
+    <<: *runtime
+    command: [python, -m, arbiq.collector.worker]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health',timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    mem_limit: 768m
+    memswap_limit: 768m
+    cpus: 0.8
+    networks: [data, app]
+  notifications:
+    <<: *runtime
+    command: [python, -m, arbiq.notifications.worker]
+    environment:
+      NOTIFICATION_WORKER_ENABLED: "true"
+      TELEGRAM_TOKEN_FILE: /run/secrets/telegram_bot_token
+    secrets: [runtime_database_url, owner_password_hash, internal_token, telegram_bot_token]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import json,time; x=json.load(open('/tmp/quantix-notification-health.json')); assert x['healthy'] and time.clock_gettime(time.CLOCK_MONOTONIC_RAW)-x['heartbeat_monotonic']<45"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    mem_limit: 160m
+    memswap_limit: 160m
+    cpus: 0.15
+    networks: [data, app]
+  frontend:
+    image: quantix-frontend:0.7.1-export2
+    environment:
+      BACKEND_URL: http://backend:8000
+      PUBLIC_APP_URL: https://quantix.raccncode.com
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports: [127.0.0.1:3310:3000]
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3000/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    mem_limit: 192m
+    memswap_limit: 192m
+    cpus: 0.5
+    cpu_shares: 128
+    pids_limit: 80
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    restart: unless-stopped
+    networks: [app]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+volumes:
+  postgres_data:
+  export_temp:
+networks:
+  data: {internal: true}
+  app:
+secrets:
+  runtime_database_url: {file: ../.secrets/production/runtime-database-url}
+  migration_database_url: {file: ../.secrets/production/migration-database-url}
+  owner_password_hash: {file: ../.secrets/production/admin-password-hash}
+  internal_token: {file: ../.secrets/production/internal-token}
+  pg_owner_password: {file: ../.secrets/production/pg-owner-password}
+  pg_runtime_password: {file: ../.secrets/production/pg-runtime-password}
+  telegram_bot_token: {file: ../.secrets/telegram-bot-token}
