@@ -175,6 +175,22 @@ async def test_untrusted_output_injection_never_reaches_display_or_accounting(ou
     assert "SYNTHETIC-secret" not in value.model_dump_json()
 
 
+async def test_failure_and_timeout_redact_provider_errors_and_preserve_fallback():
+    provider = NvidiaProvider(
+        settings(),
+        transport=AsyncMock(side_effect=ValueError("SYNTHETIC-secret-not-real")),
+    )
+    value = await provider.explain(report(), now=NOW)
+    assert value.reason == "AI_PROVIDER_FAILED_OR_INVALID_OUTPUT"
+    assert "SYNTHETIC-secret" not in value.model_dump_json()
+
+    async def slow(payload):
+        await asyncio.sleep(0.05)
+
+    value = await NvidiaProvider(
+        settings(ai_request_timeout_seconds=0.001), transport=slow
+    ).explain(report(), now=NOW)
+    assert value.status == "unavailable" and "C$6.71" in value.text
 
 
 
