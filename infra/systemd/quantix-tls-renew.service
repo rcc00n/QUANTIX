@@ -1,0 +1,38 @@
+[Unit]
+Description=QUANTIX isolated TLS renewal with protected NGINX guards
+After=network-online.target nginx.service
+Wants=network-online.target
+# Provision only after explicit production gates; no unit is enabled by source creation.
+# Before enabling, run the exact sandbox with ExecStart omitting --apply and verify
+# real path/log permissions. Mock tests are not an actual renewal or service proof.
+ConditionPathExists=/opt/quantix/safety/nginx-baseline.json
+ConditionPathExists=/opt/quantix/certbot/config/live/quantix.raccncode.com/fullchain.pem
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/quantix
+UMask=0077
+# Defer optional maintenance unless its full cap leaves fail-safe headroom.
+ExecCondition=/usr/bin/python3 -c 'from pathlib import Path; import sys; d=dict(x.split(":",1) for x in Path("/proc/meminfo").read_text().splitlines()); sys.exit(0 if int(d["MemAvailable"].split()[0]) >= 896*1024 else 1)'
+ExecStart=/usr/bin/python3 /opt/quantix/scripts/renew_quantix_tls.py --apply
+TimeoutStartSec=300
+Nice=10
+# Root is required to signal the existing NGINX master. No shared service restart.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/quantix/certbot /opt/quantix/acme-webroot /opt/quantix/safety/nginx-validation-logs /opt/quantix/safety/nginx-validation.pid
+# nginx -T/-t opens configured log files even without serving requests. Mask the
+# standard log directory only inside this unit, so protected host logs stay untouched.
+# Provision the source directory root:root 0700 before enabling; never bind host logs RW.
+BindPaths=/opt/quantix/safety/nginx-validation-logs:/var/log/nginx
+# nginx -t/-T also opens the PID file read-write. Mask this exact file, not /run.
+# Provision an empty root:root 0600 source; actual master lookup remains D-Bus+/proc.
+BindPaths=/opt/quantix/safety/nginx-validation.pid:/run/nginx.pid
+# Other configured log locations intentionally fail read-only; inspect, do not widen blindly.
+MemorySwapMax=0
+MemoryMax=192M
+CPUQuota=25%
+# Unrelated changes intentionally block renewal until independently reviewed.
