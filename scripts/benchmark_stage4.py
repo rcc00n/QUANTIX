@@ -58,3 +58,32 @@ def rss_bytes() -> int:
         return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
 
 
+def synthetic_market(venue: str, index: int) -> DiscoveredMarket:
+    symbol = f"SYNTH{index:02d}"
+    return DiscoveredMarket(
+        native_symbol=f"{symbol}/CAD",
+        native_id=f"explicit-synthetic-{index}",
+        base=AssetIdentity(
+            f"synthetic:asset:{index}",
+            symbol,
+            "crypto",
+            True,
+            "SYNTHETIC fixture identity",
+        ),
+        quote=AssetIdentity(
+            "fiat:CAD", "CAD", "fiat", True, "SYNTHETIC fixture CAD identity"
+        ),
+        active=True,
+        amount_step=Decimal("0.001"),
+        price_tick=Decimal("0.001"),
+        min_notional=Decimal(1),
+        quote_volume=Decimal(10000000),
+        metadata={
+            "synthetic": True,
+            "active_status": "active",
+            "minimum_quantity": "0.001",
+        },
+        id=uuid5(NAMESPACE_URL, f"quantix-explicit-synthetic/{venue}/{index}"),
+    )
+
+
