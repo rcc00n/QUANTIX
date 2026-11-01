@@ -51,3 +51,21 @@ def audit(path: Path, evaluation_id: UUID, budget: Decimal):
     raise ValueError("Requested evaluation not present in retained archive")
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("archive", type=Path)
+    parser.add_argument("--evaluation", type=UUID, required=True)
+    parser.add_argument("--budget-cad", default="1000")
+    args = parser.parse_args()
+    try:
+        print(
+            json.dumps(
+                audit(args.archive, args.evaluation, Decimal(args.budget_cad)), indent=2
+            )
+        )
+    except (ValueError, KeyError, OSError, zipfile.BadZipFile) as exc:
+        raise SystemExit("Retained size audit failed: " + str(exc)) from None
+
+
+if __name__ == "__main__":
+    main()
