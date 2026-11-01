@@ -12,6 +12,22 @@ def stamp(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def stats(values):
+    values = sorted(values)
+    n = len(values)
+
+    def rank(p):
+        return round(values[max(0, math.ceil(n * p) - 1)], 3) if n else None
+
+    return {
+        "sample_count": n,
+        "p50": rank(0.5),
+        "p95": rank(0.95) if n >= 20 else None,
+        "p99": rank(0.99) if n >= 100 else None,
+        "maximum": rank(1),
+    }
+
+
 def analyze(filename, market_scope=None):
     rows = [json.loads(line) for line in filename.read_text().splitlines()]
     groups = defaultdict(lambda: defaultdict(list))
