@@ -87,3 +87,39 @@ def synthetic_market(venue: str, index: int) -> DiscoveredMarket:
     )
 
 
+def synthetic_book(venue, market, now, sequence, depth=25):
+    venue_index = int(venue.removeprefix("synthetic"))
+    # Half the independent fixture venues have a deliberate dislocation. This
+    # stresses positive research sizing rather than relying on live profits.
+    mid = Decimal(100) + Decimal(market.base.symbol.removeprefix("SYNTH")) * 10
+    if venue_index >= 10:
+        mid *= Decimal("1.025")
+    mid += Decimal(sequence % 5) * Decimal("0.001")
+    raw = {
+        "symbol": market.native_symbol,
+        "timestamp": int(now.timestamp() * 1000),
+        "bids": [
+            [str(mid - Decimal("0.01") - Decimal(i) * Decimal("0.001")), "10"]
+            for i in range(depth)
+        ],
+        "asks": [
+            [str(mid + Decimal("0.01") + Decimal(i) * Decimal("0.001")), "10"]
+            for i in range(depth)
+        ],
+    }
+    book = validate_book(
+        raw,
+        market_id=market.id,
+        exchange=venue,
+        symbol=market.native_symbol,
+        base_key=market.base.key,
+        quote_key=market.quote.key,
+        received_at=now,
+        request_started_at=now - timedelta(milliseconds=20),
+        latency_ms=20,
+        config=CollectorConfig(depth=depth),
+        source="SYNTHETIC_OFFLINE_REPLAY",
+    )
+    return book.model_copy(update={"ingestion_index": sequence})
+
+
