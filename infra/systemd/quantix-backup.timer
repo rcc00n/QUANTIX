@@ -1,0 +1,11 @@
+[Unit]
+Description=QUANTIX daily private backup
+
+[Timer]
+OnCalendar=*-*-* 08:20:00 UTC
+RandomizedDelaySec=600
+Persistent=true
+Unit=quantix-backup.service
+
+[Install]
+WantedBy=timers.target
