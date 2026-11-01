@@ -1,0 +1,11 @@
+[Unit]
+Description=Check only QUANTIX TLS renewal twice daily
+
+[Timer]
+OnCalendar=*-*-* 03,15:20:00 UTC
+RandomizedDelaySec=30m
+Persistent=true
+Unit=quantix-tls-renew.service
+
+[Install]
+WantedBy=timers.target
