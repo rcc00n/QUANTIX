@@ -1,0 +1,16 @@
+[Unit]
+Description=QUANTIX private PostgreSQL backup
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/quantix
+# Defer optional maintenance unless its full cap leaves fail-safe headroom.
+ExecCondition=/usr/bin/python3 -c 'from pathlib import Path; import sys; d=dict(x.split(":",1) for x in Path("/proc/meminfo").read_text().splitlines()); sys.exit(0 if int(d["MemAvailable"].split()[0]) >= 832*1024 else 1)'
+ExecStart=/usr/bin/python3 /opt/quantix/scripts/backup_database.py --production
+UMask=0077
+Nice=15
+CPUWeight=10
+IOWeight=10
+MemorySwapMax=0
+MemoryMax=128M
