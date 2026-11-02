@@ -345,3 +345,236 @@ def evidence_measurement(count: int, shared: bool) -> dict:
     }
 
 
+async def paper_ledger_measurement(rounds: int) -> dict:
+    """Exercise real balanced SQL journals only in an explicitly isolated _test DB."""
+    from arbiq.db.models import (
+        Asset,
+        Exchange,
+        Journal,
+        LedgerEntry,
+        PaperSession,
+        StrategyVersion,
+        User,
+    )
+    from arbiq.portfolio.accounting import (
+        execute_leg,
+        fund,
+        reconcile,
+        release_remaining,
+        reserve,
+    )
+    from arbiq.portfolio.contracts import PriceEvidence, Reservation
+    from arbiq.portfolio.valuation import snapshot
+    from sqlalchemy import func, select, text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    url = os.environ.get("TEST_DATABASE_URL", "")
+    if not url or not (make_url(url).database or "").endswith("_test"):
+        raise ValueError(
+            "TEST_DATABASE_URL must point to an isolated database ending _test"
+        )
+    if not 1 <= rounds <= 1000:
+        raise ValueError("Paper benchmark rounds must be1–1000")
+    engine = create_async_engine(url, pool_size=2, max_overflow=0, hide_parameters=True)
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    nonce = uuid4().hex
+    evidence = {
+        "synthetic": True,
+        "kind": "SYNTHETIC_ACCOUNTING_CAPACITY",
+        "no_exchange_requests": True,
+    }
+    size_sql = text(
+        "SELECT sum(pg_total_relation_size(quote_ident(schemaname)||'.'||quote_ident(tablename))) FROM pg_tables WHERE schemaname='public'"
+    )
+    try:
+        async with maker() as db:
+            before = await db.scalar(size_sql)
+            user = User(
+                username="synthetic-capacity-" + nonce,
+                password_hash="SYNTHETIC_NOT_A_LOGIN",
+            )
+            venues = [
+                Exchange(
+                    slug=f"synthetic-capacity-{i}-{nonce}",
+                    name="SYNTHETIC capacity venue",
+                )
+                for i in range(2)
+            ]
+            cad = await db.scalar(
+                select(Asset).where(Asset.canonical_key == "fiat:CAD")
+            )
+            if cad is None:
+                cad = Asset(
+                    canonical_key="fiat:CAD",
+                    symbol="CAD",
+                    kind="fiat",
+                    identifiers={"synthetic": True},
+                )
+                db.add(cad)
+            base = Asset(
+                canonical_key="synthetic:capacity:" + nonce,
+                symbol="SYNTH_BTC",
+                kind="crypto",
+                identifiers=evidence,
+            )
+            db.add_all([user, *venues, base])
+            await db.flush()
+            strategy = StrategyVersion(
+                user_id=user.id,
+                version=1,
+                settings=evidence,
+                reason="SYNTHETIC benchmark",
+            )
+            db.add(strategy)
+            await db.flush()
+            session = PaperSession(
+                user_id=user.id,
+                strategy_version_id=strategy.id,
+                name="SYNTHETIC capacity research",
+                started_at=FIXTURE_TIME,
+                initial_equity_cad=Decimal(10000),
+                benchmark_snapshot={"synthetic": True, "research_only": True},
+            )
+            db.add(session)
+            await db.flush()
+            await fund(
+                db,
+                session.id,
+                venues[0].id,
+                cad.id,
+                Decimal(5000),
+                Decimal(5000),
+                FIXTURE_TIME,
+                "capacity:cash:" + nonce,
+                evidence,
+            )
+            await fund(
+                db,
+                session.id,
+                venues[1].id,
+                base.id,
+                Decimal(50),
+                Decimal(5000),
+                FIXTURE_TIME,
+                "capacity:base:" + nonce,
+                evidence,
+            )
+            await db.commit()
+            started = elapsed_seconds()
+            cpu_started = time.process_time()
+            latencies = []
+            initial_rss = rss_bytes()
+            for i in range(rounds):
+                tick = elapsed_seconds()
+                now = FIXTURE_TIME + timedelta(seconds=i + 1)
+                key = f"capacity:{nonce}:{i}"
+                await reserve(
+                    db,
+                    session.id,
+                    [
+                        Reservation(venues[0].id, cad.id, Decimal(2)),
+                        Reservation(venues[1].id, base.id, Decimal("0.01")),
+                    ],
+                    now,
+                    key,
+                    evidence,
+                )
+                await db.commit()
+                await execute_leg(
+                    db,
+                    session.id,
+                    venues[0].id,
+                    base.id,
+                    cad.id,
+                    "buy",
+                    Decimal("0.01"),
+                    Decimal("1.01"),
+                    Decimal("0.00606"),
+                    "quote",
+                    Decimal(100),
+                    Decimal(1),
+                    now,
+                    key + ":buy",
+                    None,
+                    evidence,
+                    reservation_key=key,
+                )
+                await db.commit()
+                await execute_leg(
+                    db,
+                    session.id,
+                    venues[1].id,
+                    base.id,
+                    cad.id,
+                    "sell",
+                    Decimal("0.01"),
+                    Decimal("1.03"),
+                    Decimal("0.00618"),
+                    "quote",
+                    Decimal(100),
+                    Decimal(1),
+                    now,
+                    key + ":sell",
+                    None,
+                    evidence,
+                    reservation_key=key,
+                )
+                await db.commit()
+                await release_remaining(
+                    db, session.id, key, now, key + ":release", evidence
+                )
+                await db.commit()
+                latencies.append((elapsed_seconds() - tick) * 1000)
+            now = FIXTURE_TIME + timedelta(seconds=rounds + 1)
+            mark = PriceEvidence(
+                Decimal(100), now, now, False, "SYNTHETIC capacity mark", evidence
+            )
+            valuation = await snapshot(
+                db,
+                session.id,
+                {(venue.id, base.id): mark for venue in venues},
+                now,
+                research_only=True,
+            )
+            await db.commit()
+            reconciliation = await reconcile(db, session.id)
+            after = await db.scalar(size_sql)
+            journal_count = await db.scalar(
+                select(func.count())
+                .select_from(Journal)
+                .where(Journal.session_id == session.id)
+            )
+            ledger_count = await db.scalar(
+                select(func.count())
+                .select_from(LedgerEntry)
+                .join(Journal)
+                .where(Journal.session_id == session.id)
+            )
+            elapsed = elapsed_seconds() - started
+            return {
+                "kind": "EXPLICITLY_SYNTHETIC_POSTGRES_PAPER_ACCOUNTING",
+                "rounds": rounds,
+                "session_id": str(session.id),
+                "external_requests": 0,
+                "actual_exchange_orders": 0,
+                "duration_seconds": elapsed,
+                "process_cpu_seconds": time.process_time() - cpu_started,
+                "roundtrip_latency_ms": {
+                    "mean": statistics.mean(latencies),
+                    "max": max(latencies),
+                },
+                "roundtrips_per_second": rounds / elapsed,
+                "rss_initial_bytes": initial_rss,
+                "rss_final_bytes": rss_bytes(),
+                "postgres_public_relation_growth_bytes": int(after - before),
+                "journal_count": journal_count,
+                "ledger_entry_count": ledger_count,
+                "reconciliation": safe_json(reconciliation),
+                "valuation": valuation,
+                "interpretation": "Synthetic isolated SQL transactions; two leg commits independent; no live opportunity or trading claim",
+            }
+    finally:
+        await engine.dispose()
+
+
