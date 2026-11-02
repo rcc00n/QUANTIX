@@ -279,3 +279,69 @@ async def scanner_measurement(count: int, seconds: float) -> dict:
     return output
 
 
+def evidence_measurement(count: int, shared: bool) -> dict:
+    """Same exact route payloads before/after sharing, in separate processes."""
+    gc.collect()
+    tracemalloc.start()
+    start = elapsed_seconds()
+    pool = EvidencePool(20)
+    markets = [synthetic_market(f"synthetic{i:02d}", 0) for i in range(20)]
+    books = [
+        synthetic_book(f"synthetic{i:02d}", market, FIXTURE_TIME, 1)
+        for i, market in enumerate(markets)
+    ]
+    inputs = [
+        MarketInput(
+            str(m.id),
+            f"synthetic{i:02d}",
+            m.base.key,
+            "CAD",
+            b.normalized.asks,
+            b.normalized.bids,
+            Fee(Decimal("0.006")),
+            MarketRules(amount_step=Decimal("0.001")),
+            identity_cad(),
+        )
+        for i, (m, b) in enumerate(zip(markets, books, strict=True))
+    ]
+    fx = {str(book.market_id): pool.book(book) for book in books[:5]}
+    retained = []
+    payload = None
+    for i in range(count):
+        payload = {
+            "quantity": Decimal("0.01"),
+            "status": "RESEARCH_ONLY",
+            "synthetic": True,
+            "evidence": {
+                "fx_books": fx,
+                "calculation_inputs": {
+                    "buy": pool.market_input(inputs[i % 20]),
+                    "sell": pool.market_input(inputs[(i + 1) % 20]),
+                    "evaluated_at": FIXTURE_TIME.isoformat(),
+                },
+            },
+        }
+        retained.append(
+            pool.current(shared_json(payload), payload)
+            if shared
+            else safe_json(payload)
+        )
+    current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    # Canonical payload comparison avoids comparing Python tuple/list ownership.
+    expected = json.dumps(safe_json(payload), sort_keys=True, separators=(",", ":"))
+    actual = json.dumps(retained[-1], sort_keys=True, separators=(",", ":"))
+    return {
+        "kind": "EXPLICITLY_SYNTHETIC_IDENTICAL_EVIDENCE_MEMORY",
+        "variant": "shared_immutable" if shared else "independent_deep_copies",
+        "routes": count,
+        "traced_current_bytes": current,
+        "traced_peak_bytes": peak,
+        "duration_seconds": elapsed_seconds() - start,
+        "canonical_payload_equal": actual == expected,
+        "process_peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        * 1024,
+        "pool": pool.metrics(),
+    }
+
+
