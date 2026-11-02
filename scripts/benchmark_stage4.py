@@ -578,3 +578,78 @@ async def paper_ledger_measurement(rounds: int) -> dict:
         await engine.dispose()
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--counts", default="120,200,300,500")
+    parser.add_argument("--seconds", type=float, default=30)
+    parser.add_argument("--worker", type=int)
+    parser.add_argument("--evidence-worker", choices=["before", "after"])
+    parser.add_argument("--evidence-routes", type=int, default=500)
+    parser.add_argument("--evidence-only", action="store_true")
+    parser.add_argument("--paper-ledger", action="store_true")
+    parser.add_argument("--paper-rounds", type=int, default=100)
+    args = parser.parse_args()
+    if not 2 <= args.seconds <= 3600:
+        parser.error("--seconds must be2–3600")
+    if args.paper_ledger:
+        print(
+            json.dumps(
+                asyncio.run(paper_ledger_measurement(args.paper_rounds)), indent=2
+            )
+        )
+        return
+    if args.worker:
+        print(json.dumps(asyncio.run(scanner_measurement(args.worker, args.seconds))))
+        return
+    if args.evidence_worker:
+        print(
+            json.dumps(
+                evidence_measurement(
+                    args.evidence_routes, args.evidence_worker == "after"
+                )
+            )
+        )
+        return
+    output = {
+        "schema_version": "stage4-capacity-v1",
+        "kind": "EXPLICITLY_SYNTHETIC_OFFLINE_CAPACITY",
+        "no_external_exchange_traffic": True,
+        "evidence_optimization": [],
+        "capacity": [],
+    }
+    for variant in ("before", "after"):
+        result = subprocess.run(
+            [
+                sys.executable,
+                __file__,
+                "--evidence-worker",
+                variant,
+                "--evidence-routes",
+                str(args.evidence_routes),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        output["evidence_optimization"].append(json.loads(result.stdout))
+    if not args.evidence_only:
+        for count in [int(x) for x in args.counts.split(",")]:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    __file__,
+                    "--worker",
+                    str(count),
+                    "--seconds",
+                    str(args.seconds),
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            output["capacity"].append(json.loads(result.stdout))
+    print(json.dumps(output, indent=2))
+
+
+if __name__ == "__main__":
+    main()
