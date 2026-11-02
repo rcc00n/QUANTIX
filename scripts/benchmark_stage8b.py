@@ -184,3 +184,14 @@ def assessment_summary(data):
     }
 
 
+def market_summary(cohort, minimum):
+    return {
+        "priced_size_points": len(cohort.demands),
+        "routes_with_priced_evidence": len({d.route_id for d in cohort.demands}),
+        "routes_with_any_positive_meaningful_projection": len(
+            {d.route_id for d in cohort.demands if d.profitable and d.acquisition_cad >= minimum}
+        ),
+        "exclusions": dict(cohort.exclusions),
+    }
+
+
