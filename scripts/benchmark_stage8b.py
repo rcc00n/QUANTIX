@@ -195,3 +195,152 @@ def market_summary(cohort, minimum):
     }
 
 
+@decimal_context
+async def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--sample", type=Path, required=True)
+    parser.add_argument("--cohort", type=Path, required=True)
+    parser.add_argument("--archive", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--target", type=D, default=D(2500))
+    parser.add_argument("--max-reserve-pct", type=D, default=D(50))
+    args = parser.parse_args()
+    started = time.process_time()
+    metadata = json.loads(args.cohort.read_text())
+    training, later = cohort_routes(args.sample, metadata)
+    cutoff, finish = time_value(metadata["cutoff"]), time_value(metadata["forward_through"])
+    snapshot, exchanges, assets, reserve_venues, cash_exchange, stablecoins, groups = (
+        archive_metadata(args.archive, cutoff)
+    )
+    if snapshot != metadata["archive_snapshot_at"]:
+        raise ValueError("Archive snapshot and sample metadata disagree")
+    archive_preparation_cpu_ms = (time.process_time() - started) * 1000
+    sizing_start = time.process_time()
+    common = {"trade_amount_cad": args.target, "max_reserve_pct": args.max_reserve_pct}
+    representative = ProposalRequest(**common)
+    strategy = optimized_strategy(representative)
+    prior = funding_demands(training, cutoff, strategy, include_legacy=True)
+    future = funding_demands(later, finish, strategy)
+    sizing_cpu_ms = (time.process_time() - sizing_start) * 1000
+    records = []
+    by_capital = {}
+    for capital in (10000, 50000, 100000):
+        body = ProposalRequest(capital_cad=D(capital), **common)
+        constraints = constraints_for(body)
+        by_capital[str(capital)] = []
+        for policy in ("COVERAGE", *OPTIMIZED_POLICIES):
+            sys_start = time.process_time()
+            if policy == "COVERAGE":
+                comparison = await baseline_comparison(
+                    body,
+                    prior,
+                    constraints,
+                    exchanges,
+                    assets,
+                    cash_exchange,
+                    groups,
+                    stablecoins,
+                    cutoff,
+                )
+            else:
+                comparison = optimize_allocation(
+                    policy,
+                    constraints,
+                    prior.demands,
+                    reserve_venues,
+                    stablecoins,
+                    venue_groups=groups,
+                    as_of=cutoff,
+                ).as_payload()
+            allocation_cpu_ms = (time.process_time() - sys_start) * 1000
+            fixed = frozen_inventory(comparison["allocations"])
+            assessment_start = time.process_time()
+            forward = describe_inventory(
+                constraints,
+                future.demands,
+                fixed,
+                venue_groups=groups,
+                stablecoin_assets=stablecoins,
+                as_of=finish,
+            )
+            used = D(comparison["total_cad"])
+            unplaced = D(comparison["unallocated_cad"])
+            if used + unplaced != capital:
+                raise ArithmeticError("Initial accounting capital did not reconcile")
+            summary = comparison["allocation_summary"]
+            exchange_values = {k: row["cad_value"] for k, row in summary["by_exchange"].items()}
+            record = {
+                "capital_cad": str(capital),
+                "policy": policy,
+                "initial_placed_cad": str(used),
+                "unplaced_cad": str(unplaced),
+                "feasible": comparison["feasible"],
+                "reasons": comparison["reasons"],
+                "reserve_cad": summary["reserve_cad"],
+                "invested_cad": summary["invested_cad"],
+                "stablecoin_cad": summary["stablecoin_cad"],
+                "funded_cells": len(fixed),
+                "highest_exchange_share_pct": str(
+                    max((D(x["share_pct"]) for x in summary["by_exchange"].values()), default=D(0))
+                ),
+                "highest_asset_share_pct": str(
+                    max((D(x["share_pct"]) for x in summary["by_asset"].values()), default=D(0))
+                ),
+                "venue_values_cad": exchange_values,
+                "training": assessment_summary(comparison),
+                "first_matching_forward": assessment_summary(forward),
+                "allocation_cpu_ms": allocation_cpu_ms,
+                "followup_assessment_cpu_ms": (time.process_time() - assessment_start) * 1000,
+            }
+            if policy == "COVERAGE":
+                record["legacy_nominal_individual_coverage"] = comparison[
+                    "legacy_individual_coverage"
+                ]
+            records.append(record)
+            by_capital[str(capital)].append(
+                {
+                    "policy": policy,
+                    "feasible": record["feasible"],
+                    "training_targets": comparison["funded_route_count"],
+                    "held_forward_targets": forward["funded_route_count"],
+                }
+            )
+    with args.sample.open("rb") as stream:
+        fingerprint = hashlib.file_digest(stream, "sha256").hexdigest()
+    payload = {
+        "kind": "PRESERVED_PRODUCTION_RETAINED_EVIDENCE_PLANNING_COMPARISON",
+        "cohort": metadata,
+        "sample_sha256": fingerprint,
+        "shared_controls": representative.model_dump(mode="json"),
+        "first_forward_routes_available": len(later),
+        "planning_market": market_summary(prior, strategy.min_buy_capital_cad),
+        "forward_market": market_summary(future, strategy.min_buy_capital_cad),
+        "reserve_venues_with_cad_at_cutoff": reserve_venues,
+        "archive_preparation_cpu_ms": archive_preparation_cpu_ms,
+        "shared_sizing_cpu_ms": sizing_cpu_ms,
+        "benchmark_peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+        "actual_forward_session_counts": None,
+        "realized_simulated_pnl_cad": None,
+        "unrealized_simulated_pnl_cad": None,
+        "holdings_benchmark_return": None,
+        "interpretation": [
+            "First retained event per route. Missing evidence stays missing.",
+            "The training and forward slices only cover retained observations.",
+            "Forward inventory is held fixed and reserve is excluded from planning coverage.",
+            "Static coverage has no orders, fills, rejection rates or P&L.",
+            "Baseline uses the same evidence and the old sizing that maximizes net within a cap.",
+            "Infeasible plans show their funded subsets. Unplaced CAD cannot fund a session.",
+        ],
+        "records": records,
+    }
+    descriptor = os.open(args.output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(descriptor, "w") as target:
+        json.dump(payload, target, indent=2)
+        target.write("\n")
+    print(
+        json.dumps({"records": len(records), "counts": by_capital, "sizing_cpu_ms": sizing_cpu_ms})
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
