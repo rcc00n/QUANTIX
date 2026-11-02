@@ -162,3 +162,13 @@ def archive_metadata(path, cutoff):
     )
 
 
+@decimal_context
+def frozen_inventory(allocations):
+    quantities = Counter()
+    for item in allocations:
+        evidence = item.get("evidence", {})
+        if not evidence.get("reserve") and not evidence.get("cash_remainder"):
+            quantities[Cell(item["exchange"], item["asset"])] += D(item["quantity"])
+    return quantities
+
+
