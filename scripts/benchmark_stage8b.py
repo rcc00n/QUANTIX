@@ -108,3 +108,57 @@ def cohort_routes(path, metadata):
     return list(training.values()), [data[1] for data in later.values()]
 
 
+def archive_metadata(path, cutoff):
+    def rows(z, dataset):
+        matches = [name for name in z.namelist() if name.endswith(f"/{dataset}.csv")]
+        if len(matches) != 1:
+            raise ValueError(f"Expected one dataset named {dataset}")
+        with z.open(matches[0]) as stream:
+            yield from csv.DictReader(io.TextIOWrapper(stream, encoding="utf-8"))
+
+    with zipfile.ZipFile(path) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        if not manifest["complete"] or manifest["schema_version"] != "quantix-full-v2":
+            raise ValueError("A complete quantix-full-v2 archive is required")
+        exchanges = {
+            UUID(x["id"]): SimpleNamespace(id=UUID(x["id"]), slug=x["slug"])
+            for x in rows(archive, "exchanges")
+            if time_value(x["created_at"]) <= cutoff and x["enabled"].lower() == "true"
+        }
+        assets = {
+            UUID(x["id"]): SimpleNamespace(**x)
+            for x in rows(archive, "assets")
+            if time_value(x["created_at"]) <= cutoff
+        }
+        cad = str(
+            next(identifier for identifier, x in assets.items() if x.canonical_key == "fiat:CAD")
+        )
+        reserve_venues = sorted(
+            {
+                exchanges[UUID(x["exchange_id"])].slug
+                for x in rows(archive, "markets")
+                if x["quote_asset_id"] == cad
+                and UUID(x["exchange_id"]) in exchanges
+                and time_value(x["created_at"]) <= cutoff
+            }
+        )
+    cash_exchange = next(
+        x
+        for x in sorted(
+            exchanges.values(), key=lambda x: (x.slug not in {"kraken", "ndax"}, x.slug)
+        )
+        if x.slug in reserve_venues
+    )
+    stablecoins = {x.canonical_key for x in assets.values() if x.kind == "stablecoin"}
+    groups = {x.slug: venue_group(x.slug) for x in exchanges.values()}
+    return (
+        manifest["snapshot_at"],
+        exchanges,
+        assets,
+        reserve_venues,
+        cash_exchange,
+        stablecoins,
+        groups,
+    )
+
+
