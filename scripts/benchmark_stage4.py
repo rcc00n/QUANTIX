@@ -123,3 +123,33 @@ def synthetic_book(venue, market, now, sequence, depth=25):
     return book.model_copy(update={"ingestion_index": sequence})
 
 
+class SyntheticStore:
+    def __init__(self):
+        self.saved = 0
+        self.evidence_bytes = 0
+        self.statuses = Counter()
+        self.route_ids = {}
+
+    async def save(self, key, payload, buy, sell, *args):
+        now = payload["evidence"]["calculation_inputs"]["evaluated_at"]
+        body = safe_json(
+            {
+                **payload,
+                "id": self.route_ids.setdefault(key, str(uuid4())),
+                "detected_at": now,
+                "updated_at": now,
+            }
+        )
+        serialized = json.dumps(body, separators=(",", ":"))
+        self.evidence_bytes += len(serialized.encode())
+        self.saved += 1
+        self.statuses[body["status"]] += 1
+        return body
+
+    async def transition(self, *args):
+        return None
+
+    async def expire_previous_runs(self, *args):
+        return None
+
+
