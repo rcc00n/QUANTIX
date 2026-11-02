@@ -172,3 +172,15 @@ def frozen_inventory(allocations):
     return quantities
 
 
+def assessment_summary(data):
+    return {
+        key: data[key]
+        for key in (
+            "coverage_by_size",
+            "funded_route_count",
+            "simultaneous_funded_route_count",
+            "median_funded_acquisition_cad",
+        )
+    }
+
+
