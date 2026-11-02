@@ -153,3 +153,129 @@ class SyntheticStore:
         return None
 
 
+async def scanner_measurement(count: int, seconds: float) -> dict:
+    if count not in (120, 200, 300, 500):
+        raise ValueError("Supported controlled book counts:120/200/300/500")
+    slugs = [f"synthetic{i:02d}" for i in range(20)]
+    config = CollectorConfig(
+        exchange_ids=slugs, max_markets_per_exchange=math.ceil(count / 20)
+    )
+    cache = BookCache(config)
+    runtimes = {
+        slug: SimpleNamespace(
+            slug=slug,
+            exchange_id=uuid4(),
+            markets=[],
+            catalog=[],
+            health={"error_code": None},
+        )
+        for slug in slugs
+    }
+    flat = []
+    for i in range(count):
+        slug = slugs[i % 20]
+        market = synthetic_market(slug, i // 20)
+        runtimes[slug].markets.append(market)
+        runtimes[slug].catalog.append(market)
+        flat.append((slug, market))
+    started = elapsed_seconds()
+    now = lambda: FIXTURE_TIME + timedelta(seconds=elapsed_seconds() - started)
+    cache.now = now
+    for index, (slug, market) in enumerate(flat):
+        cache.put(synthetic_book(slug, market, now(), index + 1))
+    requested = set()
+
+    def request(mid):
+        if mid in requested:
+            return "COOLDOWN"
+        requested.add(mid)
+        return "QUEUED"
+
+    collector = SimpleNamespace(
+        settings=SimpleNamespace(arbitrage=EngineConfig()),
+        store=SimpleNamespace(sessions=None, run_id=uuid4()),
+        cache=cache,
+        runtimes=runtimes,
+        utcnow=now,
+        utc_clock=SimpleNamespace(
+            snapshot=lambda: {"trusted": True, "host_healthy": True}
+        ),
+        request_confirmation=request,
+        stop=asyncio.Event(),
+    )
+    engine = ArbitrageEngine(collector)
+    store = SyntheticStore()
+    engine.store = store
+    for book in cache.books.values():
+        engine.changed(book)
+    task = asyncio.create_task(engine.run())
+    samples = []
+    observations = count
+    update_index = 0
+    next_update = elapsed_seconds()
+    next_sample = elapsed_seconds()
+    measured_start = elapsed_seconds()
+    cpu_start = time.process_time()
+    while elapsed_seconds() - measured_start < seconds:
+        wall = elapsed_seconds()
+        # Replay a normal25-second per-book cadence; never accelerate exchange
+        # HTTP/subscriptions to manufacture load. All observations are local.
+        while wall >= next_update:
+            slug, market = flat[update_index % count]
+            observations += 1
+            update_index += 1
+            book = cache.put(synthetic_book(slug, market, now(), observations))
+            engine.changed(book)
+            next_update += 25 / count
+        if wall >= next_sample:
+            samples.append(
+                {
+                    "elapsed_seconds": wall - measured_start,
+                    "rss_bytes": rss_bytes(),
+                    "backlog": len(engine.jobs),
+                    "financial_evaluations": engine.metrics["evaluations"],
+                }
+            )
+            next_sample += 1
+        await asyncio.sleep(0.02)
+    collector.stop.set()
+    await asyncio.wait_for(task, 15)
+    elapsed = elapsed_seconds() - measured_start
+    cpu = time.process_time() - cpu_start
+    ages = [(now() - book.received_at).total_seconds() for book in cache.books.values()]
+    output = {
+        "kind": "EXPLICITLY_SYNTHETIC_OFFLINE_CAPACITY",
+        "external_requests": 0,
+        "book_count": count,
+        "depth": 25,
+        "duration_seconds": elapsed,
+        "process_cpu_seconds": cpu,
+        "one_cpu_utilization_pct": cpu / elapsed * 100,
+        "process_rss_bytes": rss_bytes(),
+        "process_peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        * 1024,
+        "rss_samples": samples,
+        "rss_change_first_last_bytes": samples[-1]["rss_bytes"]
+        - samples[0]["rss_bytes"]
+        if samples
+        else None,
+        "observations_ingested": observations,
+        "cache_books": len(cache.books),
+        "cache_capacity": cache.limit,
+        "source_quality_counts": dict(
+            Counter(book.state.value for book in cache.books.values())
+        ),
+        "fixture_clock_ingestion_age_seconds": {
+            "median": statistics.median(ages),
+            "max": max(ages),
+        },
+        "engine": engine.diagnostics(),
+        "synthetic_evidence_writes": store.saved,
+        "serialized_evidence_bytes": store.evidence_bytes,
+        "postgres_growth": "not measured by this memory-only scanner replay",
+        "rate_limit_errors": "not applicable: no exchange API traffic",
+        "interpretation": "CPU/RSS of scanner/cache/math process only; add measured live adapter/API/PostgreSQL/frontend footprint separately",
+    }
+    return output
+
+
