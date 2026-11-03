@@ -32,3 +32,15 @@ def password_hash(password: str) -> str:
     return f"scrypt${salt.hex()}${digest.hex()}"
 
 
+def protected_write(path: Path, content: str) -> None:
+    descriptor, temporary = tempfile.mkstemp(prefix=".credential-", dir=path.parent)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
