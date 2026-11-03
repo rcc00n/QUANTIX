@@ -212,3 +212,31 @@ def worker_started_at(start_ticks):
     return boot + start_ticks / os.sysconf("SC_CLK_TCK")
 
 
+def protected_https():
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    allowed = {
+        "badguymotors.com": {
+            "badguymotors.com",
+            "www.badguymotors.com",
+            "badguymotors.ca",
+            "www.badguymotors.ca",
+        },
+        "raccncode.com": {"raccncode.com", "www.raccncode.com"},
+    }
+    for url in PROTECTED_HTTPS:
+        try:
+            with opener.open(url, timeout=5) as response:
+                final = urllib.parse.urlsplit(response.geturl())
+                if (
+                    response.status != 200
+                    or final.scheme != "https"
+                    or final.hostname
+                    not in allowed[urllib.parse.urlsplit(url).hostname]
+                ):
+                    raise GuardError("PROTECTED_HTTPS_NOT_HEALTHY")
+        except GuardError:
+            raise
+        except (OSError, TimeoutError, ValueError):
+            raise GuardError("PROTECTED_HTTPS_NOT_HEALTHY") from None
+
+
