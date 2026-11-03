@@ -100,3 +100,95 @@ def read_category(path):
     raise CapacityProofError("UNRECOGNIZED_READ_WORKLOAD")
 
 
+def summarize_profile(profile):
+    if profile.get("kind") != PROFILE_KIND:
+        raise CapacityProofError("UNSUPPORTED_PROFILE_KIND")
+    samples = profile.get("samples")
+    if not isinstance(samples, list) or not 2 <= len(samples) <= 10000:
+        raise CapacityProofError("INCOMPLETE_SERVICE_MEASUREMENT")
+    service_peaks = {role: Decimal(0) for role in REQUIRED_ROLES}
+    instance_ids = {}
+    times, totals = [], []
+    for sample in samples:
+        if not isinstance(sample, dict):
+            raise CapacityProofError("INVALID_SAMPLE")
+        times.append(decimal_value(sample.get("elapsed_seconds")))
+        services = sample.get("services")
+        if not isinstance(services, list) or len(services) != len(REQUIRED_ROLES):
+            raise CapacityProofError("INCOMPLETE_SERVICE_MEASUREMENT")
+        measured = {}
+        for service in services:
+            if not isinstance(service, dict):
+                raise CapacityProofError("INVALID_SERVICE_SAMPLE")
+            name = service.get("Name")
+            role = next((r for r in REQUIRED_ROLES if name == f"arbiq-{r}-1"), None)
+            if role is None or role in measured:
+                raise CapacityProofError("INCOMPLETE_SERVICE_MEASUREMENT")
+            instance = service.get("ID")
+            if not isinstance(instance, str) or not re.fullmatch(
+                r"[a-f0-9]{12,64}", instance
+            ):
+                raise CapacityProofError("INVALID_SERVICE_INSTANCE")
+            if role in instance_ids and instance_ids[role] != instance:
+                raise CapacityProofError("SERVICE_RESTART_DURING_MEASUREMENT")
+            instance_ids[role] = instance
+            measured[role] = docker_memory_mib(service.get("MemUsage"))
+            service_peaks[role] = max(service_peaks[role], measured[role])
+        with localcontext() as context:
+            context.prec = 80
+            totals.append(sum(measured.values(), Decimal(0)))
+    if any(later <= earlier for earlier, later in itertools.pairwise(times)):
+        raise CapacityProofError("NON_MONOTONIC_PROFILE_SAMPLES")
+    reads = profile.get("reads")
+    if (
+        not isinstance(reads, list)
+        or not len(REQUIRED_READ_CATEGORIES) <= len(reads) <= 10000
+    ):
+        raise CapacityProofError("INCOMPLETE_READ_WORKLOAD")
+    categories = set()
+    for item in reads:
+        if (
+            not isinstance(item, dict)
+            or type(item.get("status")) is not int
+            or item["status"] != 200
+        ):
+            raise CapacityProofError("NORMAL_READ_FAILED")
+        categories.add(read_category(item.get("path")))
+    coverage = profile.get("coverage")
+    if not isinstance(coverage, list) or not 1 <= len(coverage) <= 10000:
+        raise CapacityProofError("INCOMPLETE_COVERAGE_EVIDENCE")
+    minimum_coverage = {}
+    for source, target in (
+        ("connected_exchanges", "adapters"),
+        ("venue_groups", "venue_groups"),
+        ("monitored_markets", "books"),
+    ):
+        values = []
+        for entry in coverage:
+            if not isinstance(entry, dict):
+                raise CapacityProofError("INCOMPLETE_COVERAGE_EVIDENCE")
+            values.append(exact_int(entry.get(source)))
+        minimum_coverage[target] = min(values)
+    return {
+        "elapsed_seconds": str(decimal_value(profile.get("elapsed_seconds"))),
+        "sample_count": len(samples),
+        "sample_first_seconds": str(times[0]),
+        "sample_last_seconds": str(times[-1]),
+        "maximum_sample_gap_seconds": str(
+            max(b - a for a, b in itertools.pairwise(times))
+        ),
+        "stack_peak_mib": str(max(totals)),
+        "service_peak_mib": {role: str(service_peaks[role]) for role in REQUIRED_ROLES},
+        "read_count": len(reads),
+        "read_status_codes": [200],
+        "read_categories": sorted(categories),
+        "coverage_sample_count": len(coverage),
+        "minimum_coverage": minimum_coverage,
+        "export_exit_code": profile.get("export_exit_code"),
+        "external_exchange_requests_forced": profile.get(
+            "external_exchange_requests_forced"
+        ),
+        "stable_service_instances": True,
+    }
+
+
