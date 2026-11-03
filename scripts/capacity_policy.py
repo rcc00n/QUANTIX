@@ -86,3 +86,17 @@ def docker_memory_mib(value):
     return number
 
 
+def read_category(path):
+    if not isinstance(path, str) or len(path) > 300:
+        raise CapacityProofError("INVALID_READ_RECORD")
+    if path == "terminal/overview":
+        return "overview"
+    if path == "opportunities?history=true&limit=50":
+        return "opportunities_default"
+    if path == "opportunities?history=true&limit=25&budget_cad=250":
+        return "opportunities_custom"
+    if re.fullmatch(r"analytics/sessions/[a-f0-9-]{36}", path):
+        return "analytics"
+    raise CapacityProofError("UNRECOGNIZED_READ_WORKLOAD")
+
+
