@@ -233,3 +233,44 @@ def read_profile(path):
     return data
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--before", type=Path, default=ROOT / ".local/optimization/stack-before.json"
+    )
+    parser.add_argument(
+        "--after", type=Path, default=ROOT / ".local/optimization/stack-after.json"
+    )
+    parser.add_argument(
+        "--base64", action="store_true", help="Print only a bounded sanitized proof"
+    )
+    parser.add_argument(
+        "--output", type=Path, help="Exclusively save a private JSON proof"
+    )
+    args = parser.parse_args()
+    try:
+        proof = build_capacity_proof(
+            read_profile(args.before), read_profile(args.after)
+        )
+        if args.output:
+            fd = os.open(args.output, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with os.fdopen(fd, "w") as stream:
+                json.dump(proof, stream, indent=2)
+        print(
+            base64.b64encode(canonical(proof)).decode()
+            if args.base64
+            else json.dumps(proof, indent=2)
+        )
+    except (CapacityProofError, TypeError, KeyError, OSError) as error:
+        code = (
+            str(error)
+            if isinstance(error, CapacityProofError)
+            else "INVALID_OR_UNAVAILABLE_EVIDENCE"
+        )
+        raise SystemExit(
+            f"Capacity evidence rejected: {code}; default 1536 MiB budget remains"
+        ) from None
+
+
+if __name__ == "__main__":
+    main()
