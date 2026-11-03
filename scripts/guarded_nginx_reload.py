@@ -91,3 +91,31 @@ def load_baseline(path):
         raise GuardError("BASELINE_UNAVAILABLE_OR_INVALID") from None
 
 
+def warnings(stderr):
+    result = []
+    for line in stderr.splitlines():
+        if "[warn]" not in line:
+            continue
+        conflict = re.search(
+            r'conflicting server name "([^"]+)" on ([^,]+), ignored', line
+        )
+        if conflict:
+            result.append(
+                {
+                    "type": "conflicting_server_name",
+                    "name": conflict[1],
+                    "listen": conflict[2],
+                }
+            )
+        else:
+            message = re.sub(r"^\s*\d+#\d+:\s*", "", line.split("[warn]", 1)[1])
+            result.append({"type": "warning", "message": message.strip()})
+    return result
+
+
+def warning_counts(items):
+    return Counter(
+        json.dumps(item, sort_keys=True, separators=(",", ":")) for item in items
+    )
+
+
