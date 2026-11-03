@@ -47,3 +47,13 @@ def run(args, *, timeout=20):
     return result
 
 
+def digest(path):
+    try:
+        value = Path(path).read_bytes()
+    except OSError:
+        raise GuardError("CONFIG_FILE_UNAVAILABLE") from None
+    if len(value) > MAX_OUTPUT:
+        raise GuardError("CONFIG_FILE_SIZE_LIMIT")
+    return hashlib.sha256(value).hexdigest()
+
+
