@@ -351,3 +351,30 @@ def checked_reload(baseline, expected_vhost_sha256, *, apply=False, timeout=25):
     return result
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--baseline", type=Path, default=BASELINE)
+    parser.add_argument(
+        "--expected-vhost-sha256",
+        help="Pinned reviewed template; never current-file auto-trust",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="Send one graceful SIGHUP after all checks"
+    )
+    args = parser.parse_args()
+    try:
+        baseline = load_baseline(args.baseline)
+        checksum = args.expected_vhost_sha256 or baseline.get("quantix_vhost_sha256")
+        result = checked_reload(baseline, checksum, apply=args.apply)
+        print(json.dumps(result))
+    except GuardError as exc:
+        print(
+            json.dumps(
+                {"status": "blocked", "code": exc.code, "applied": exc.reload_applied}
+            )
+        )
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()
