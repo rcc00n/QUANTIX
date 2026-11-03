@@ -292,3 +292,62 @@ def inspect(baseline, expected_vhost_sha256):
     return Snapshot(master, started_at, generation, tuple(files), hashes)
 
 
+def checked_reload(baseline, expected_vhost_sha256, *, apply=False, timeout=25):
+    before = inspect(baseline, expected_vhost_sha256)
+    protected_https()
+    result = {
+        "status": "checks_passed",
+        "applied": False,
+        "master_pid": before.master,
+        "protected_file_count": len(baseline["loaded_files_in_order"]),
+        "warning_count": len(baseline["warnings"]),
+    }
+    if not apply:
+        return result
+    if os.geteuid() != 0:
+        raise GuardError("APPLY_REQUIRES_ROOT")
+    # Repeat after network checks. Never activate an intervening unrelated change.
+    fresh = inspect(baseline, expected_vhost_sha256)
+    if (
+        fresh.master != before.master
+        or fresh.files != before.files
+        or fresh.hashes != before.hashes
+    ):
+        raise GuardError("NGINX_CHANGED_DURING_PREFLIGHT")
+    syntax = run(["nginx", "-t"])
+    if syntax.returncode or warning_counts(warnings(syntax.stderr)) != warning_counts(
+        baseline["warnings"]
+    ):
+        raise GuardError("NGINX_FINAL_SYNTAX_OR_WARNINGS_CHANGED")
+    if master_pid() != before.master:
+        raise GuardError("NGINX_MASTER_CHANGED")
+    try:
+        os.kill(
+            before.master, signal.SIGHUP
+        )  # The only proxy mutation. Never restart/stop.
+    except OSError:
+        raise GuardError("NGINX_HUP_FAILED") from None
+    try:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if master_pid() != before.master:
+                raise GuardError("NGINX_MASTER_CHANGED_AFTER_HUP")
+            if worker_generation(before.master) > fresh.generation_ticks:
+                break
+            time.sleep(0.5)
+        else:
+            raise GuardError("NEW_NGINX_WORKER_GENERATION_NOT_OBSERVED")
+        after = inspect(baseline, expected_vhost_sha256)
+        if (
+            after.master != before.master
+            or after.files != before.files
+            or after.hashes != before.hashes
+        ):
+            raise GuardError("NGINX_CONFIG_CHANGED_AFTER_HUP")
+        protected_https()
+    except GuardError as exc:
+        raise GuardError(exc.code, reload_applied=True) from None
+    result.update(status="reloaded_and_verified", applied=True)
+    return result
+
+
