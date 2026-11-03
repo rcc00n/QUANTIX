@@ -240,3 +240,55 @@ def protected_https():
             raise GuardError("PROTECTED_HTTPS_NOT_HEALTHY") from None
 
 
+@dataclass(frozen=True)
+class Snapshot:
+    master: int
+    worker_started: float
+    generation_ticks: int
+    files: tuple[str, ...]
+    hashes: dict[str, str]
+
+
+def inspect(baseline, expected_vhost_sha256):
+    if not isinstance(expected_vhost_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", expected_vhost_sha256
+    ):
+        raise GuardError("REVIEWED_VHOST_CHECKSUM_REQUIRED")
+    clock = run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"])
+    if clock.returncode or clock.stdout.strip() != "yes":
+        raise GuardError("VPS_CLOCK_NOT_SYNCHRONIZED")
+    result = run(["nginx", "-T"])
+    if result.returncode:
+        raise GuardError("NGINX_SYNTAX_INVALID")
+    prefix = "# configuration file "
+    files = [
+        line[len(prefix) : -1]
+        for line in result.stdout.splitlines()
+        if line.startswith(prefix) and line.endswith(":")
+    ]
+    if files.count(VHOST) != 1 or len(files) != len(set(files)):
+        raise GuardError("EXACTLY_ONE_QUANTIX_VHOST_REQUIRED")
+    if [p for p in files if p != VHOST] != baseline["loaded_files_in_order"]:
+        raise GuardError("PROTECTED_INCLUDE_ORDER_CHANGED")
+    if warning_counts(warnings(result.stderr)) != warning_counts(baseline["warnings"]):
+        raise GuardError("NGINX_WARNING_MULTISET_CHANGED")
+    hashes = {path: digest(path) for path in files}
+    if hashes[VHOST] != expected_vhost_sha256:
+        raise GuardError("QUANTIX_VHOST_NOT_REVIEWED")
+    if any(hashes[p] != h for p, h in baseline["loaded_file_sha256"].items()):
+        raise GuardError("PROTECTED_CONFIG_HASH_CHANGED")
+    master = master_pid()
+    generation = worker_generation(master)
+    started_at = worker_started_at(generation)
+    for path in baseline["loaded_files_in_order"]:
+        try:
+            if modified_at(path) > started_at:
+                raise GuardError("PENDING_UNRELATED_CONFIG_EDIT")
+        except OSError:
+            raise GuardError("CONFIG_FILE_UNAVAILABLE") from None
+    for reference in protected_tls_references(result.stdout):
+        if tls_modified_at(reference) > started_at:
+            raise GuardError("PENDING_PROTECTED_TLS_MATERIAL")
+    return Snapshot(master, started_at, generation, tuple(files), hashes)
+
+
