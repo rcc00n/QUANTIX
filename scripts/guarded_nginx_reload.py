@@ -176,3 +176,39 @@ def tls_modified_at(path):
         raise GuardError("PROTECTED_TLS_MATERIAL_UNAVAILABLE") from None
 
 
+def master_pid():
+    result = run(["systemctl", "show", "nginx", "-p", "MainPID", "--value"])
+    if (
+        result.returncode
+        or not result.stdout.strip().isdigit()
+        or int(result.stdout.strip()) <= 1
+    ):
+        raise GuardError("NGINX_MASTER_UNAVAILABLE")
+    return int(result.stdout.strip())
+
+
+def worker_generation(master):
+    result = run(["pgrep", "-P", str(master), "-x", "nginx"])
+    if result.returncode:
+        raise GuardError("NGINX_WORKERS_UNAVAILABLE")
+    starts = []
+    for pid in result.stdout.split():
+        if not pid.isdigit():
+            raise GuardError("NGINX_WORKER_PID_INVALID")
+        try:
+            raw = Path("/proc", pid, "stat").read_text()
+            fields = raw[raw.rfind(")") + 2 :].split()
+            if int(fields[1]) == master:
+                starts.append(int(fields[19]))
+        except (OSError, ValueError, IndexError):
+            continue  # A draining worker can exit during this read.
+    if not starts:
+        raise GuardError("NGINX_WORKERS_UNAVAILABLE")
+    return max(starts)
+
+
+def worker_started_at(start_ticks):
+    boot = time.time() - time.clock_gettime(time.CLOCK_BOOTTIME)
+    return boot + start_ticks / os.sysconf("SC_CLK_TCK")
+
+
