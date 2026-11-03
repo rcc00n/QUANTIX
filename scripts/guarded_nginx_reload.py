@@ -126,3 +126,41 @@ def modified_at(path):
         raise GuardError("CONFIG_FILE_UNAVAILABLE") from None
 
 
+def protected_tls_references(config_text):
+    """Literal file references only. Do not read or log certificate/key contents."""
+    lexer = shlex.shlex(config_text, posix=True, punctuation_chars="{};")
+    lexer.whitespace_split = True
+    lexer.commenters = "#"
+    lexer.escape = ""
+    statement = []
+    references = set()
+    try:
+        for token in lexer:
+            parts = list(token) if token and all(c in "{};" for c in token) else [token]
+            for part in parts:
+                if part in ("{", "}", ";"):
+                    if statement and statement[0] in (
+                        "ssl_certificate",
+                        "ssl_certificate_key",
+                    ):
+                        if part != ";" or len(statement) != 2:
+                            raise GuardError("TLS_REFERENCE_REQUIRES_INSPECTION")
+                        value = statement[1]
+                        if not value.startswith("/") or "$" in value or "\\" in value:
+                            raise GuardError("TLS_REFERENCE_REQUIRES_INSPECTION")
+                        path = Path(value)
+                        if path.is_relative_to(QUANTIX_CERTBOT):
+                            if not path.resolve().is_relative_to(
+                                QUANTIX_CERTBOT.resolve()
+                            ):
+                                raise GuardError("TLS_REFERENCE_REQUIRES_INSPECTION")
+                        else:
+                            references.add(value)
+                    statement = []
+                else:
+                    statement.append(part)
+    except (OSError, ValueError):
+        raise GuardError("TLS_REFERENCE_REQUIRES_INSPECTION") from None
+    return references
+
+
