@@ -119,3 +119,10 @@ def warning_counts(items):
     )
 
 
+def modified_at(path):
+    try:
+        return Path(path).stat().st_mtime
+    except OSError:
+        raise GuardError("CONFIG_FILE_UNAVAILABLE") from None
+
+
