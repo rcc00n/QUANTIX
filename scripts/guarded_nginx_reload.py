@@ -164,3 +164,15 @@ def protected_tls_references(config_text):
     return references
 
 
+def tls_modified_at(path):
+    try:
+        reference = Path(path)
+        target, link = reference.stat(), reference.lstat()
+        if not stat.S_ISREG(target.st_mode):
+            raise GuardError("PROTECTED_TLS_MATERIAL_UNAVAILABLE")
+        # A retargeted certificate symlink also represents a pending change.
+        return max(target.st_mtime, link.st_mtime)
+    except OSError:
+        raise GuardError("PROTECTED_TLS_MATERIAL_UNAVAILABLE") from None
+
+
