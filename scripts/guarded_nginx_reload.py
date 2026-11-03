@@ -57,3 +57,37 @@ def digest(path):
     return hashlib.sha256(value).hexdigest()
 
 
+def load_baseline(path):
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o022:
+            raise GuardError("BASELINE_PERMISSIONS_INVALID")
+        if info.st_uid != os.geteuid():
+            raise GuardError("BASELINE_OWNER_INVALID")
+        if info.st_size > 256 * 1024:
+            raise GuardError("BASELINE_SIZE_LIMIT")
+        baseline = json.loads(path.read_text())
+        files, hashes = (
+            baseline["loaded_files_in_order"],
+            baseline["loaded_file_sha256"],
+        )
+        valid = (
+            isinstance(files, list)
+            and 0 < len(files) <= 256
+            and all(isinstance(p, str) and p.startswith("/") for p in files)
+            and len(files) == len(set(files))
+            and VHOST not in files
+            and isinstance(hashes, dict)
+            and set(hashes) == set(files)
+            and all(re.fullmatch(r"[0-9a-f]{64}", h) for h in hashes.values())
+            and isinstance(baseline["warnings"], list)
+        )
+        if not valid:
+            raise GuardError("BASELINE_FORMAT_INVALID")
+        return baseline
+    except GuardError:
+        raise
+    except (OSError, ValueError, TypeError, KeyError):
+        raise GuardError("BASELINE_UNAVAILABLE_OR_INVALID") from None
+
+
