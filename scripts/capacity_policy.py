@@ -192,3 +192,33 @@ def summarize_profile(profile):
     }
 
 
+def build_capacity_proof(before_bytes, after_bytes):
+    before = summarize_profile(bounded_json(before_bytes, MAX_PROFILE_BYTES))
+    after = summarize_profile(bounded_json(after_bytes, MAX_PROFILE_BYTES))
+    with localcontext() as context:
+        context.prec = 80
+        saving = Decimal(before["stack_peak_mib"]) - Decimal(after["stack_peak_mib"])
+    proof = seal_proof(
+        {
+            "schema_version": SCHEMA,
+            "kind": "DERIVED_ACTUAL_LOCAL_CAPACITY_EVIDENCE",
+            "before": before,
+            "after": after,
+            "evidence_sha256": {
+                "before": hashlib.sha256(before_bytes).hexdigest(),
+                "after": hashlib.sha256(after_bytes).hexdigest(),
+            },
+            "planning_envelope_mib": planning_envelope(after["stack_peak_mib"]),
+            "reserve_mib": RESERVE_MIB,
+            "startup_margin_mib": STARTUP_MARGIN_MIB,
+            "minimum_after_seconds": MIN_AFTER_SECONDS,
+            "minimum_peak_saving_mib": MIN_PEAK_SAVING_MIB,
+            "peak_saving_mib": str(saving),
+            "cold_cache_savings_proven": False,
+            "sustained_vps_coexistence_proven": False,
+        }
+    )
+    validate_capacity_proof(proof)
+    return proof
+
+
