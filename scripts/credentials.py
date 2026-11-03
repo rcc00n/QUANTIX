@@ -26,3 +26,9 @@ def generate_passphrase() -> str:
     )
 
 
+def password_hash(password: str) -> str:
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=64)
+    return f"scrypt${salt.hex()}${digest.hex()}"
+
+
