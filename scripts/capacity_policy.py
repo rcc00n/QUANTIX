@@ -222,3 +222,14 @@ def build_capacity_proof(before_bytes, after_bytes):
     return proof
 
 
+def read_profile(path):
+    try:
+        with path.open("rb") as stream:
+            data = stream.read(MAX_PROFILE_BYTES + 1)
+    except OSError:
+        raise CapacityProofError("PROFILE_FILE_UNAVAILABLE") from None
+    if len(data) > MAX_PROFILE_BYTES:
+        raise CapacityProofError("EVIDENCE_TOO_LARGE")
+    return data
+
+
