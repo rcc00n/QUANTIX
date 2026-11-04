@@ -322,3 +322,14 @@ def capacity_policy(proof_base64=None):
     return result
 
 
+def call(args):
+    return subprocess.run(args, capture_output=True, text=True, timeout=20, check=False)
+
+
+def docker_data(args):
+    response = call([*LOCAL_DOCKER, *args])
+    if response.returncode:
+        raise CapacityProofError("LOCAL_DOCKER_INSPECTION_FAILED")
+    return response.stdout
+
+
