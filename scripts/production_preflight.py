@@ -143,3 +143,79 @@ def planning_envelope(after_peak_mib):
         )
 
 
+def validate_summary(value, *, after):
+    expected = {
+        "elapsed_seconds",
+        "sample_count",
+        "sample_first_seconds",
+        "sample_last_seconds",
+        "maximum_sample_gap_seconds",
+        "stack_peak_mib",
+        "service_peak_mib",
+        "read_count",
+        "read_status_codes",
+        "read_categories",
+        "coverage_sample_count",
+        "minimum_coverage",
+        "export_exit_code",
+        "external_exchange_requests_forced",
+        "stable_service_instances",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        raise CapacityProofError("INVALID_PROFILE_SUMMARY")
+    elapsed = decimal_value(value["elapsed_seconds"])
+    first = decimal_value(value["sample_first_seconds"])
+    last = decimal_value(value["sample_last_seconds"])
+    gap = decimal_value(value["maximum_sample_gap_seconds"])
+    exact_int(value["sample_count"], minimum=2, maximum=10000)
+    if (
+        elapsed <= 0
+        or not 0 <= first < last <= elapsed
+        or first > 30
+        or elapsed - last > 30
+        or gap > 30
+    ):
+        raise CapacityProofError("INCOMPLETE_OBSERVATION_WINDOW")
+    if after and elapsed < MIN_AFTER_SECONDS:
+        raise CapacityProofError("AFTER_PROFILE_SHORTER_THAN_900_SECONDS")
+    if value["stable_service_instances"] is not True:
+        raise CapacityProofError("SERVICE_RESTART_DURING_MEASUREMENT")
+    peaks = value["service_peak_mib"]
+    if not isinstance(peaks, dict) or set(peaks) != set(REQUIRED_ROLES):
+        raise CapacityProofError("INCOMPLETE_SERVICE_MEASUREMENT")
+    numbers = [decimal_value(peaks[role]) for role in REQUIRED_ROLES]
+    peak = decimal_value(value["stack_peak_mib"])
+    with localcontext() as context:
+        context.prec = 80
+        separate_peak_sum = sum(numbers, Decimal(0))
+    if any(number <= 0 for number in numbers) or not max(numbers) <= peak <= separate_peak_sum:
+        raise CapacityProofError("INCONSISTENT_PEAK_MEASUREMENT")
+    exact_int(value["read_count"], minimum=len(REQUIRED_READ_CATEGORIES), maximum=10000)
+    if value["read_status_codes"] != [200] or any(
+        type(x) is not int for x in value["read_status_codes"]
+    ):
+        raise CapacityProofError("NORMAL_READ_FAILED")
+    categories = value["read_categories"]
+    if not isinstance(categories, list) or set(categories) != set(REQUIRED_READ_CATEGORIES):
+        raise CapacityProofError("INCOMPLETE_READ_WORKLOAD")
+    if type(value["export_exit_code"]) is not int or value["export_exit_code"] != 0:
+        raise CapacityProofError("GENUINE_EXPORT_FAILED_OR_MISSING")
+    if (
+        type(value["external_exchange_requests_forced"]) is not int
+        or value["external_exchange_requests_forced"] != 0
+    ):
+        raise CapacityProofError("FORCED_EXTERNAL_WORKLOAD")
+    exact_int(value["coverage_sample_count"], minimum=1, maximum=10000)
+    coverage = value["minimum_coverage"]
+    if not isinstance(coverage, dict) or set(coverage) != {
+        "adapters",
+        "venue_groups",
+        "books",
+    }:
+        raise CapacityProofError("INCOMPLETE_COVERAGE_EVIDENCE")
+    for key, minimum in (("adapters", 20), ("venue_groups", 19), ("books", 200)):
+        if exact_int(coverage[key], maximum=100000) < minimum:
+            raise CapacityProofError("MARKET_COVERAGE_REDUCED")
+    return peak
+
+
