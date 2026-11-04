@@ -22,3 +22,24 @@ def put(path, value):
         stream.write(value.rstrip("\n") + "\n")
 
 
+def validate_bundle(directory):
+    """Reject partially mismatched credentials without rotating a deployed identity."""
+    try:
+        password = (directory / "admin-password").read_text().strip()
+        kind, salt, digest = (directory / "admin-password-hash").read_text().strip().split("$")
+        actual = hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt),
+                                n=16384, r=8, p=1, dklen=64)
+        if kind != "scrypt" or not secrets.compare_digest(actual.hex(), digest):
+            raise ValueError
+        for role, name, secret in (
+            ("quantix_runtime", "runtime-database-url", "pg-runtime-password"),
+            ("quantix_migrator", "migration-database-url", "pg-owner-password"),
+        ):
+            expected = (f"postgresql+asyncpg://{role}:"
+                        f"{(directory / secret).read_text().strip()}@db:5432/quantix")
+            if not secrets.compare_digest((directory / name).read_text().strip(), expected):
+                raise ValueError
+    except (OSError, ValueError, TypeError):
+        raise SystemExit("Production credential bundle is inconsistent; no values overwritten") from None
+
+
