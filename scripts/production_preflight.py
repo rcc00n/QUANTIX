@@ -130,3 +130,16 @@ def bounded_json(data, maximum):
     return value
 
 
+def planning_envelope(after_peak_mib):
+    peak = decimal_value(after_peak_mib)
+    if peak <= 0:
+        raise CapacityProofError("EMPTY_PEAK_MEASUREMENT")
+    with localcontext() as context:
+        context.prec = 80
+        bound = max(peak * PEAK_FACTOR, peak + PEAK_FIXED_MARGIN_MIB)
+        return (
+            int((bound / BUDGET_QUANTUM_MIB).to_integral_value(rounding=ROUND_CEILING))
+            * BUDGET_QUANTUM_MIB
+        )
+
+
