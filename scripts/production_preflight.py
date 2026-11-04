@@ -101,3 +101,32 @@ def seal_proof(value):
     return result
 
 
+def bounded_json(data, maximum):
+    if not isinstance(data, bytes) or len(data) > maximum:
+        raise CapacityProofError("EVIDENCE_TOO_LARGE")
+
+    def unique_pairs(pairs):
+        result = {}
+        for key, item in pairs:
+            if key in result:
+                raise CapacityProofError("DUPLICATE_JSON_KEY")
+            result[key] = item
+        return result
+
+    def nonfinite(_value):
+        raise CapacityProofError("NONFINITE_JSON_NUMBER")
+
+    try:
+        value = json.loads(
+            data.decode("utf-8"),
+            parse_float=Decimal,
+            parse_constant=nonfinite,
+            object_pairs_hook=unique_pairs,
+        )
+    except (ValueError, UnicodeError, RecursionError):
+        raise CapacityProofError("INVALID_JSON_EVIDENCE") from None
+    if not isinstance(value, dict):
+        raise CapacityProofError("INVALID_PROOF_STRUCTURE")
+    return value
+
+
