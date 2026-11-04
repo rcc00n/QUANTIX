@@ -283,3 +283,42 @@ def validate_capacity_proof(proof):
     return envelope
 
 
+def capacity_policy(proof_base64=None):
+    result = {
+        "mode": "default_unproven_budget",
+        "planning_envelope_mib": DEFAULT_PLANNING_MIB,
+        "reserve_mib": RESERVE_MIB,
+        "startup_margin_mib": STARTUP_MARGIN_MIB,
+        "required_memavailable_mib": DEFAULT_PLANNING_MIB + RESERVE_MIB + STARTUP_MARGIN_MIB,
+        "proof_valid": None,
+        "cold_cache_savings_proven": False,
+        "sustained_vps_coexistence_proven": False,
+    }
+    if proof_base64 is None:
+        return result
+    try:
+        if not isinstance(proof_base64, str) or len(proof_base64) > MAX_PROOF_BASE64_BYTES:
+            raise CapacityProofError("EVIDENCE_TOO_LARGE")
+        try:
+            decoded = base64.b64decode(proof_base64, validate=True)
+        except (ValueError, TypeError):
+            raise CapacityProofError("INVALID_BASE64_PROOF") from None
+        proof = bounded_json(decoded, MAX_PROOF_BYTES)
+        envelope = validate_capacity_proof(proof)
+        result.update(
+            mode="measured_local_budget",
+            planning_envelope_mib=envelope,
+            required_memavailable_mib=envelope + RESERVE_MIB + STARTUP_MARGIN_MIB,
+            proof_valid=True,
+            evidence=proof,
+        )
+    except (CapacityProofError, TypeError, KeyError, InvalidOperation) as error:
+        result.update(
+            proof_valid=False,
+            error_code=str(error)
+            if isinstance(error, CapacityProofError)
+            else "INVALID_PROOF_STRUCTURE",
+        )
+    return result
+
+
