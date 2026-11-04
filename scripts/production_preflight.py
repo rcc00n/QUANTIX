@@ -219,3 +219,67 @@ def validate_summary(value, *, after):
     return peak
 
 
+def validate_capacity_proof(proof):
+    expected = {
+        "schema_version",
+        "kind",
+        "before",
+        "after",
+        "evidence_sha256",
+        "planning_envelope_mib",
+        "reserve_mib",
+        "startup_margin_mib",
+        "minimum_after_seconds",
+        "minimum_peak_saving_mib",
+        "peak_saving_mib",
+        "cold_cache_savings_proven",
+        "sustained_vps_coexistence_proven",
+        "proof_sha256",
+    }
+    if not isinstance(proof, dict) or set(proof) != expected or proof["schema_version"] != SCHEMA:
+        raise CapacityProofError("INVALID_PROOF_STRUCTURE")
+    if proof["kind"] != "DERIVED_ACTUAL_LOCAL_CAPACITY_EVIDENCE":
+        raise CapacityProofError("UNSUPPORTED_CAPACITY_EVIDENCE")
+    if len(canonical(proof)) > MAX_PROOF_BYTES:
+        raise CapacityProofError("EVIDENCE_TOO_LARGE")
+    if proof.get("proof_sha256") != seal_proof(proof)["proof_sha256"]:
+        raise CapacityProofError("PROOF_DIGEST_MISMATCH")
+    for key, expected_value in (
+        ("reserve_mib", RESERVE_MIB),
+        ("startup_margin_mib", STARTUP_MARGIN_MIB),
+        ("minimum_after_seconds", MIN_AFTER_SECONDS),
+        ("minimum_peak_saving_mib", MIN_PEAK_SAVING_MIB),
+    ):
+        if type(proof[key]) is not int or proof[key] != expected_value:
+            raise CapacityProofError("SAFETY_POLICY_CHANGED")
+    if (
+        proof["cold_cache_savings_proven"] is not False
+        or proof["sustained_vps_coexistence_proven"] is not False
+    ):
+        raise CapacityProofError("UNSUPPORTED_CAPACITY_CLAIM")
+    hashes = proof["evidence_sha256"]
+    if (
+        not isinstance(hashes, dict)
+        or set(hashes) != {"before", "after"}
+        or any(
+            not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{64}", value) is None
+            for value in hashes.values()
+        )
+    ):
+        raise CapacityProofError("INVALID_EVIDENCE_DIGEST")
+    before_peak = validate_summary(proof["before"], after=False)
+    after_peak = validate_summary(proof["after"], after=True)
+    with localcontext() as context:
+        context.prec = 80
+        saving = before_peak - after_peak
+    if saving < MIN_PEAK_SAVING_MIB or decimal_value(proof["peak_saving_mib"]) != saving:
+        raise CapacityProofError("PEAK_SAVING_BELOW_200_MIB")
+    envelope = planning_envelope(after_peak)
+    if (
+        type(proof["planning_envelope_mib"]) is not int
+        or proof["planning_envelope_mib"] != envelope
+    ):
+        raise CapacityProofError("PLANNING_FORMULA_MISMATCH")
+    return envelope
+
+
