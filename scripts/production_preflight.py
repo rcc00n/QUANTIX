@@ -87,3 +87,17 @@ def exact_int(value, *, minimum=0, maximum=100000):
     return value
 
 
+def canonical(value):
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    except (TypeError, ValueError):
+        raise CapacityProofError("INVALID_PROOF_STRUCTURE") from None
+
+
+def seal_proof(value):
+    result = dict(value)
+    result.pop("proof_sha256", None)
+    result["proof_sha256"] = hashlib.sha256(canonical(result)).hexdigest()
+    return result
+
+
