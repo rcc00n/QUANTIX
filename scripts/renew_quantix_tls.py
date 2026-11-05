@@ -222,3 +222,49 @@ def renew(baseline, *, apply=False):
     }
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--baseline", type=Path, default=BASELINE)
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Allow QUANTIX-only Certbot renewal and guarded reload",
+    )
+    args = parser.parse_args()
+    try:
+        baseline = load_baseline(args.baseline)
+        if args.apply:
+            if os.geteuid() != 0:
+                raise GuardError("APPLY_REQUIRES_ROOT")
+            descriptor = os.open(
+                CONFIG.parent / "renew.guard.lock",
+                os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW,
+                0o600,
+            )
+            with os.fdopen(descriptor, "w") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise GuardError("QUANTIX_RENEWAL_ALREADY_RUNNING") from None
+                result = renew(baseline, apply=True)
+        else:
+            result = renew(baseline, apply=False)
+        print(json.dumps(result))
+    except OSError:
+        print(json.dumps({"status": "blocked", "code": "QUANTIX_TLS_STATE_IO_ERROR"}))
+        raise SystemExit(1) from None
+    except GuardError as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "blocked",
+                    "code": exc.code,
+                    "reload_applied": exc.reload_applied,
+                }
+            )
+        )
+        raise SystemExit(1) from None
+
+
+if __name__ == "__main__":
+    main()
