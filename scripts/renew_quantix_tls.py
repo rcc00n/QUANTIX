@@ -75,3 +75,10 @@ def pending_hash():
     return value
 
 
+def certificate_hash():
+    try:
+        return hashlib.sha256(FULLCHAIN.read_bytes()).hexdigest()
+    except OSError:
+        raise GuardError("QUANTIX_CERTIFICATE_UNAVAILABLE") from None
+
+
