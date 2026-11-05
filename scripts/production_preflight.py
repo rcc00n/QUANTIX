@@ -496,3 +496,75 @@ def read_guard_identity():
     return pid
 
 
+def replacement_preflight(role, stopped_id, image_id, release="stage8a1"):
+    result = {
+        "kind": "READ_ONLY_QUANTIX_STOP_BEFORE_START_PREFLIGHT",
+        "role": role,
+        "release": release,
+        "replaced_container_id": stopped_id,
+        "replacement_image_id": image_id,
+        "single_role_start_gate": False,
+    }
+    try:
+        before = inspect_replacement(role, stopped_id, image_id, release)
+        guard = read_guard_identity()
+        nginx = call(["nginx", "-t"])
+        sync = call(["timedatectl", "show", "-p", "NTPSynchronized", "--value"])
+        bgm = https_status("https://badguymotors.com")
+        owner = https_status("https://raccncode.com")
+        memory_limit, swap_limit, docker_root_name = json.loads(
+            docker_data(
+                [
+                    "info",
+                    "--format",
+                    "[{{json .MemoryLimit}},{{json .SwapLimit}},{{json .DockerRootDir}}]",
+                ]
+            )
+        )
+        if memory_limit is not True or swap_limit is not True:
+            raise CapacityProofError("DOCKER_MEMORY_AND_SWAP_LIMITS_NOT_ENFORCED")
+        docker_root = pathlib.Path(docker_root_name)
+        if not docker_root.is_absolute() or docker_root == pathlib.Path("/"):
+            raise CapacityProofError("UNKNOWN_DOCKER_STORAGE")
+        samples = []
+        for index in range(16):
+            if index:
+                time.sleep(2)
+            samples.append((time.monotonic(), memory()["MemAvailable"]))
+        after = inspect_replacement(role, stopped_id, image_id, release)
+        after_guard = read_guard_identity()
+        disk_free = min(shutil.disk_usage(path).free for path in {docker_root, PRODUCTION_ROOT})
+        # A final freshness check after inspection prevents a late drop from passing.
+        last = (time.monotonic(), memory()["MemAvailable"])
+        headroom = replacement_headroom(role, samples)
+        required = headroom["required_guard_gate_memavailable_mib"]
+        gates = {
+            **headroom.pop("gates"),
+            "current_memavailable_sufficient": last[1] >= 1024 * required,
+            "inventory_stable_while_stopped": before == after,
+            "capacity_guard_still_active": guard == after_guard,
+            "nginx_syntax_valid": nginx.returncode == 0,
+            "vps_clock_synchronized": sync.returncode == 0 and sync.stdout.strip() == "yes",
+            "bgm_https_healthy": bgm == 200,
+            "owner_site_https_healthy": owner == 200,
+            "disk_reserve_available": disk_free >= REPLACEMENT_DISK_RESERVE_BYTES,
+        }
+        result.update(
+            **headroom,
+            gates=gates,
+            single_role_start_gate=all(gates.values()),
+            current_memavailable_mib=last[1] / 1024,
+            disk_free_bytes=disk_free,
+            bgm_status=bgm,
+            owner_status=owner,
+            snapshots={"before": before, "after": after},
+            memory_samples_kib=[kib for _at, kib in samples],
+        )
+    except CapacityProofError as error:
+        result["error_code"] = str(error)
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        result["error_code"] = "PREFLIGHT_MEASUREMENT_FAILED"
+    result["measured_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return result
+
+
