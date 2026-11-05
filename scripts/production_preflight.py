@@ -568,3 +568,107 @@ def replacement_preflight(role, stopped_id, image_id, release="stage8a1"):
     return result
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--capacity-proof-b64", help="Bounded sanitized local proof; never code")
+    parser.add_argument("--replacement-role", choices=REPLACEABLE_ROLES)
+    parser.add_argument("--replacement-release", choices=REPLACEMENT_ROLES)
+    parser.add_argument(
+        "--replaced-container-id", help="Full, gracefully stopped QUANTIX container ID"
+    )
+    parser.add_argument("--replacement-image-id", help="Full locally loaded QUANTIX image ID")
+    args = parser.parse_args()
+    if any(
+        (
+            args.replacement_role,
+            args.replaced_container_id,
+            args.replacement_image_id,
+            args.replacement_release,
+        )
+    ):
+        release = args.replacement_release or "stage8a1"
+        if (
+            args.replacement_role not in REPLACEMENT_ROLES[release]
+            or not re.fullmatch(r"[0-9a-f]{64}", args.replaced_container_id or "")
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", args.replacement_image_id or "")
+            or args.capacity_proof_b64 is not None
+        ):
+            parser.error("single-role replacement needs both full IDs and no cold-deployment proof")
+        result = replacement_preflight(
+            args.replacement_role, args.replaced_container_id, args.replacement_image_id, release
+        )
+        print(json.dumps(result, indent=2))
+        raise SystemExit(0 if result["single_role_start_gate"] else 1)
+    policy = capacity_policy(args.capacity_proof_b64)
+    test = call(["nginx", "-T"])
+    files = {}
+    for line in test.stdout.splitlines():
+        if line.startswith("# configuration file ") and line.endswith(":"):
+            path = pathlib.Path(line[len("# configuration file ") : -1])
+            if path.is_file():
+                files[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+    containers = []
+    for cid in call(["docker", "ps", "-aq"]).stdout.split():
+        value = json.loads(call(["docker", "inspect", cid]).stdout)[0]
+        containers.append(
+            {
+                "id": value["Id"],
+                "name": value["Name"],
+                "state": value["State"]["Status"],
+                "started_at": value["State"]["StartedAt"],
+                "restart_count": value["RestartCount"],
+                "oom": value["State"]["OOMKilled"],
+            }
+        )
+    samples = []
+    for index in range(16):
+        samples.append(
+            {
+                "memory": memory(),
+                "vmstat": pathlib.Path("/proc/vmstat").read_text(),
+                "cpu": pathlib.Path("/proc/stat").read_text().splitlines()[0],
+                "pressure": pathlib.Path("/proc/pressure/memory").read_text(),
+                "diskstats": pathlib.Path("/proc/diskstats").read_text(),
+            }
+        )
+        if index < 15:
+            time.sleep(2)
+    minimum = min(Decimal(x["memory"]["MemAvailable"]) / 1024 for x in samples)
+    sync = call(["timedatectl", "show", "-p", "NTPSynchronized", "--value"]).stdout.strip()
+    bgm = https_status("https://badguymotors.com")
+    owner = https_status("https://raccncode.com")
+    required = policy["required_memavailable_mib"]
+    gates = {
+        f"minimum_memavailable_{required}mib": minimum >= required,
+        "vps_clock_synchronized": sync == "yes",
+        "bgm_https_healthy": bgm == 200,
+        "owner_site_https_healthy": owner == 200,
+        "existing_nginx_syntax_valid": test.returncode == 0,
+    }
+    if policy["proof_valid"] is not None:
+        gates["capacity_evidence_valid"] = policy["proof_valid"] is True
+    print(
+        json.dumps(
+            {
+                "kind": "READ_ONLY_PRODUCTION_PREFLIGHT",
+                "measured_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "gates": gates,
+                "private_staging_gate": all(gates.values()),
+                "not_public_deployment_approval": True,
+                "capacity_policy": policy,
+                "minimum_memavailable_mib": float(minimum),
+                "containers": containers,
+                "protected_config_hashes": files,
+                "nginx_validation": test.stderr,
+                "bgm_status": bgm,
+                "owner_status": owner,
+                "samples": samples,
+                "disk": call(["df", "-B1", "/"]).stdout,
+            },
+            indent=2,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()
