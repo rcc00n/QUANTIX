@@ -334,6 +334,15 @@ def memory():
     }
 
 
+def https_status(url):
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=15) as response:
+            return response.status
+    except (OSError, ValueError):
+        return None
+
+
 def docker_data(args):
     response = call([*LOCAL_DOCKER, *args])
     if response.returncode:
