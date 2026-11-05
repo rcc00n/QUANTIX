@@ -326,6 +326,14 @@ def call(args):
     return subprocess.run(args, capture_output=True, text=True, timeout=20, check=False)
 
 
+def memory():
+    return {
+        line.split(":")[0]: int(line.split()[1])
+        for line in pathlib.Path("/proc/meminfo").read_text().splitlines()
+        if len(line.split()) > 1 and line.split()[1].isdigit()
+    }
+
+
 def docker_data(args):
     response = call([*LOCAL_DOCKER, *args])
     if response.returncode:
