@@ -157,3 +157,68 @@ def validate_lineage():
         raise GuardError("QUANTIX_CERTIFICATE_NAMES_NOT_EXCLUSIVE")
 
 
+def renew(baseline, *, apply=False):
+    checksum = baseline.get("quantix_vhost_sha256")
+    checked_reload(baseline, checksum, apply=False)
+    validate_lineage()
+    before = certificate_hash()
+    pending = pending_hash()
+    if pending is not None and pending != before:
+        raise GuardError("PENDING_CERTIFICATE_HASH_MISMATCH")
+    if not apply:
+        return {
+            "status": "renewal_checks_passed",
+            "applied": False,
+            "certificate_changed": False,
+            "pending_reload": pending is not None,
+        }
+    result = run(
+        [
+            "certbot",
+            "renew",
+            "--config",
+            str(CLI_CONFIG),
+            "--cert-name",
+            DOMAIN,
+            "--non-interactive",
+            "--no-random-sleep-on-renew",
+            "--no-directory-hooks",
+            "--config-dir",
+            str(CONFIG),
+            "--work-dir",
+            str(WORK),
+            "--logs-dir",
+            str(LOGS),
+        ],
+        timeout=180,
+    )
+    after = certificate_hash()
+    if before != after:
+        mark_pending(
+            after
+        )  # Survives a blocked reload or interruption; no extra issuance required.
+    if result.returncode:
+        raise GuardError("QUANTIX_CERTBOT_RENEWAL_FAILED")
+    if before == after and pending is None:
+        return {
+            "status": "certificate_unchanged",
+            "applied": True,
+            "certificate_changed": False,
+        }
+    validate_lineage()
+    guard = checked_reload(baseline, checksum, apply=True)
+    try:
+        pending_path().unlink(missing_ok=True)
+    except OSError:
+        raise GuardError(
+            "RELOADED_CERTIFICATE_STATE_CLEANUP_FAILED", reload_applied=True
+        ) from None
+    return {
+        "status": "certificate_renewed_and_reloaded",
+        "applied": True,
+        "certificate_changed": before != after,
+        "pending_reload_recovered": pending is not None,
+        "reload": guard,
+    }
+
+
