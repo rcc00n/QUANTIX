@@ -358,6 +358,68 @@ def replacement_images(role, release="stage8a1"):
     return set(replacement_image_transition(role, release))
 
 
+def replacement_snapshot(containers, role, stopped_id, *, unhealthy_role=None):
+    """Recognize exactly the owned layout; retain only non-secret identity facts."""
+    owned, protected_running = {}, {}
+    for container in containers:
+        state = container["State"]
+        labels = container["Config"].get("Labels") or {}
+        if labels.get("com.docker.compose.project") != "quantix":
+            if state["Running"]:
+                protected_running[container["Id"]] = [
+                    state["StartedAt"],
+                    container["RestartCount"],
+                ]
+            continue
+        service = labels.get("com.docker.compose.service")
+        if (
+            service not in (*REQUIRED_ROLES, "migrate")
+            or service in owned
+            or container["Name"] != f"/quantix-{service}-1"
+            or labels.get("com.docker.compose.container-number") != "1"
+            or labels.get("com.docker.compose.oneoff", "").lower() != "false"
+        ):
+            raise CapacityProofError("UNEXPECTED_QUANTIX_CONTAINER_LAYOUT")
+        if state["OOMKilled"] or state["Restarting"] or state["Paused"]:
+            raise CapacityProofError("UNSAFE_QUANTIX_CONTAINER_STATE")
+        if service in PRODUCTION_MEMORY_MIB:
+            cap_bytes = PRODUCTION_MEMORY_MIB[service] * MIB
+            if (
+                container["HostConfig"]["Memory"] != cap_bytes
+                or container["HostConfig"]["MemorySwap"] != cap_bytes
+            ):
+                raise CapacityProofError("QUANTIX_MEMORY_LIMIT_CHANGED")
+        if service == role:
+            if (
+                container["Id"] != stopped_id
+                or state["Status"] != "exited"
+                or state["Running"]
+                or state["Pid"] != 0
+                or state["ExitCode"] not in (0, 143)
+            ):
+                raise CapacityProofError("REPLACED_CONTAINER_NOT_GRACEFULLY_STOPPED")
+        elif service == "migrate":
+            if state["Status"] != "exited" or state["Running"] or state["ExitCode"] != 0:
+                raise CapacityProofError("MIGRATION_NOT_IDLE")
+        elif (
+            state["Status"] != "running"
+            or not state["Running"]
+            or (service != unhealthy_role and state.get("Health", {}).get("Status") != "healthy")
+        ):
+            raise CapacityProofError("OTHER_QUANTIX_SERVICE_NOT_HEALTHY")
+        owned[service] = {
+            "id": container["Id"],
+            "image_id": container["Image"],
+            "status": state["Status"],
+            "started_at": state["StartedAt"],
+            "finished_at": state["FinishedAt"],
+            "restarts": container["RestartCount"],
+        }
+    if set(owned) != {*REQUIRED_ROLES, "migrate"}:
+        raise CapacityProofError("MISSING_QUANTIX_CONTAINER")
+    return {"owned": owned, "protected_running": protected_running}
+
+
 def docker_data(args):
     response = call([*LOCAL_DOCKER, *args])
     if response.returncode:
