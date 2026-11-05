@@ -444,3 +444,33 @@ def inspect_replacement(role, stopped_id, image_id, release="stage8a1"):
     return snapshot
 
 
+def replacement_headroom(role, samples):
+    """Use measured post-stop availability. Docker working set and cache are omitted."""
+    cap = PRODUCTION_MEMORY_MIB[role]
+    minimum = min(kib for _at, kib in samples)
+    window = samples[-1][0] - samples[0][0]
+    gaps = [right[0] - left[0] for left, right in zip(samples, samples[1:], strict=False)]
+    return {
+        "role_memory_cap_mib": cap,
+        "reserve_mib": RESERVE_MIB,
+        "startup_margin_mib": STARTUP_MARGIN_MIB,
+        "active_guard_floor_mib": GUARD_SUSTAINED_FLOOR_MIB,
+        "required_reserve_gate_memavailable_mib": cap + RESERVE_MIB + STARTUP_MARGIN_MIB,
+        "required_guard_gate_memavailable_mib": cap
+        + GUARD_SUSTAINED_FLOOR_MIB
+        + STARTUP_MARGIN_MIB,
+        "minimum_memavailable_mib": minimum / 1024,
+        "sample_count": len(samples),
+        "elapsed_seconds": round(window, 3),
+        "gates": {
+            "complete_post_stop_memory_window": len(samples) >= 16
+            and window >= 30
+            and all(0 < gap <= 5 for gap in gaps),
+            "reserve_and_startup_preserved": minimum
+            >= 1024 * (cap + RESERVE_MIB + STARTUP_MARGIN_MIB),
+            "active_guard_headroom_preserved": minimum
+            >= 1024 * (cap + GUARD_SUSTAINED_FLOOR_MIB + STARTUP_MARGIN_MIB),
+        },
+    }
+
+
