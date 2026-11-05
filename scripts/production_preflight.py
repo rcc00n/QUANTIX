@@ -427,3 +427,20 @@ def docker_data(args):
     return response.stdout
 
 
+def inspect_replacement(role, stopped_id, image_id, release="stage8a1"):
+    ids = docker_data(["ps", "-aq", "--no-trunc"]).split()
+    if not ids or len(ids) > 128:
+        raise CapacityProofError("UNEXPECTED_CONTAINER_INVENTORY_SIZE")
+    containers = json.loads(docker_data(["inspect", "--type", "container", *ids]))
+    snapshot = replacement_snapshot(containers, role, stopped_id)
+    images = json.loads(docker_data(["image", "inspect", image_id]))
+    if (
+        len(images) != 1
+        or images[0]["Id"] != image_id
+        or not replacement_images(role, release).intersection(images[0]["RepoTags"] or [])
+        or snapshot["owned"][role]["image_id"] == image_id
+    ):
+        raise CapacityProofError("INVALID_OWNED_REPLACEMENT_IMAGE")
+    return snapshot
+
+
