@@ -82,3 +82,78 @@ def certificate_hash():
         raise GuardError("QUANTIX_CERTIFICATE_UNAVAILABLE") from None
 
 
+def validate_lineage():
+    for path in (CLI_CONFIG, RENEWAL):
+        try:
+            info = path.lstat()
+        except OSError:
+            raise GuardError("QUANTIX_TLS_CONFIG_UNAVAILABLE") from None
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_mode & 0o022
+        ):
+            raise GuardError("QUANTIX_TLS_CONFIG_PERMISSIONS_INVALID")
+    try:
+        cli = CLI_CONFIG.read_text()
+    except OSError:
+        raise GuardError("QUANTIX_PRIVATE_CLI_CONFIG_REQUIRED") from None
+    if len(cli) > 4096 or any(
+        line.strip() and not line.lstrip().startswith(("#", ";"))
+        for line in cli.splitlines()
+    ):
+        raise GuardError("QUANTIX_CLI_CONFIG_MUST_BE_EMPTY")
+    try:
+        text = RENEWAL.read_text()
+    except OSError:
+        raise GuardError("QUANTIX_RENEWAL_CONFIG_UNAVAILABLE") from None
+    if len(text) > 65536:
+        raise GuardError("QUANTIX_RENEWAL_CONFIG_TOO_LARGE")
+    values = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";", "[")) or "=" not in stripped:
+            continue
+        key, value = (p.strip() for p in stripped.split("=", 1))
+        if key in values:
+            raise GuardError("QUANTIX_RENEWAL_CONFIG_AMBIGUOUS")
+        values[key] = value
+    if values.get("authenticator") != "webroot" or values.get(
+        "installer", "None"
+    ) not in ("None", ""):
+        raise GuardError("QUANTIX_RENEWAL_MUST_USE_WEBROOT")
+    if any(
+        values.get(key)
+        for key in ("pre_hook", "post_hook", "deploy_hook", "renew_hook")
+    ):
+        raise GuardError("QUANTIX_RENEWAL_HOOKS_NOT_ALLOWED")
+    expected_paths = {
+        "archive_dir": CONFIG / "archive" / DOMAIN,
+        "cert": CONFIG / "live" / DOMAIN / "cert.pem",
+        "privkey": CONFIG / "live" / DOMAIN / "privkey.pem",
+        "chain": CONFIG / "live" / DOMAIN / "chain.pem",
+        "fullchain": FULLCHAIN,
+    }
+    for key, expected in expected_paths.items():
+        supplied = Path(values.get(key, "/invalid"))
+        if supplied != expected or not supplied.resolve().is_relative_to(
+            CONFIG.resolve()
+        ):
+            raise GuardError("QUANTIX_RENEWAL_PATH_NOT_ISOLATED")
+    for key in ("webroot_path", DOMAIN):
+        if values.get(key, "").rstrip(",").strip().strip("\"'") != str(WEBROOT):
+            raise GuardError("QUANTIX_WEBROOT_NOT_ISOLATED")
+    if values.get("server") != "https://acme-v02.api.letsencrypt.org/directory":
+        raise GuardError("QUANTIX_RENEWAL_CA_NOT_PRODUCTION_LETSENCRYPT")
+    certificate = run(
+        ["openssl", "x509", "-in", str(FULLCHAIN), "-noout", "-ext", "subjectAltName"]
+    )
+    names = set(re.findall(r"DNS:([^,\s]+)", certificate.stdout))
+    if (
+        certificate.returncode
+        or names != {DOMAIN}
+        or "IP Address:" in certificate.stdout
+    ):
+        raise GuardError("QUANTIX_CERTIFICATE_NAMES_NOT_EXCLUSIVE")
+
+
