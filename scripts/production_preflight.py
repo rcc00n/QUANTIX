@@ -343,6 +343,21 @@ def https_status(url):
         return None
 
 
+def replacement_image_transition(role, release):
+    """Exact old/new owned tags for one reviewed release transition."""
+    if role not in REPLACEMENT_ROLES.get(release, ()):
+        raise CapacityProofError("ROLE_NOT_APPROVED_FOR_RELEASE")
+    image = "quantix-frontend" if role == "frontend" else "quantix-backend"
+    if release in {"stage8b1", "stage8c"}:
+        return f"{image}:0.7.1-stage8a1", f"{image}:0.7.1-{release}"
+    old_tag = "0.7.1-export2" if role in {"backend", "frontend"} else "0.7.1"
+    return f"{image}:{old_tag}", f"{image}:0.7.1-stage8a1"
+
+
+def replacement_images(role, release="stage8a1"):
+    return set(replacement_image_transition(role, release))
+
+
 def docker_data(args):
     response = call([*LOCAL_DOCKER, *args])
     if response.returncode:
