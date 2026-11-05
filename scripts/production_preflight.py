@@ -474,3 +474,25 @@ def replacement_headroom(role, samples):
     }
 
 
+def read_guard_identity():
+    response = call(
+        [
+            "systemctl",
+            "show",
+            "--property=MainPID",
+            "--property=ActiveState",
+            "quantix-capacity-guard.service",
+        ]
+    )
+    state = dict(line.split("=", 1) for line in response.stdout.splitlines() if "=" in line)
+    pid = state.get("MainPID", "")
+    if (
+        response.returncode
+        or state.get("ActiveState") != "active"
+        or not pid.isdecimal()
+        or int(pid) <= 0
+    ):
+        raise CapacityProofError("CAPACITY_GUARD_NOT_ACTIVE")
+    return pid
+
+
