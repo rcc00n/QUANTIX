@@ -256,3 +256,84 @@ def record_selected_instance(role, outcome):
     outcome["selected_observed"] = None
 
 
+def replace(args, outcome):
+    if args.role not in gate.REPLACEMENT_ROLES[args.release]:
+        raise gate.CapacityProofError("ROLE_NOT_APPROVED_FOR_RELEASE")
+    with ExitStack() as stack:
+        # Use the original rollout lock for both releases to prevent overlap.
+        lock_fd = os.open(
+            PRIVATE / "serial-rollout.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
+        )
+        stack.callback(os.close, lock_fd)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        command = check_config(args.mode, args.release)
+        inspect_images(
+            args.role, args.current_image_id, args.replacement_image_id, args.mode, args.release
+        )
+        inventory = containers()
+        snapshot = gate.replacement_snapshot(
+            inventory, None, None, unhealthy_role=args.role if args.mode == "rollback" else None
+        )
+        keep_notification_worker = "notifications" not in gate.REPLACEMENT_ROLES[args.release]
+        if keep_notification_worker:
+            verify_notification_pin(snapshot)
+        old = snapshot["owned"][args.role]
+        if old["id"] != args.current_container_id or old["image_id"] != args.current_image_id:
+            raise gate.CapacityProofError("ORIGINAL_DEPLOYED_INSTANCE_CHANGED")
+        previous = sentinel(inventory, args.role, snapshot)
+        require_live_environment(gate.GUARD_SUSTAINED_FLOOR_MIB + gate.STARTUP_MARGIN_MIB)
+        if args.role == "backend":
+            export_lock(inventory, old["id"], stack)
+        outcome["state"] = "STOPPING_ORIGINAL"
+        checked([*gate.LOCAL_DOCKER, "stop", "--time", "25", old["id"]], timeout=35)
+        outcome["state"] = "ORIGINAL_STOPPED"
+        result = gate.replacement_preflight(
+            args.role, old["id"], args.replacement_image_id, args.release
+        )
+        outcome["preflight"] = result
+        try:
+            if not result["single_role_start_gate"]:
+                raise gate.CapacityProofError("POST_STOP_REPLACEMENT_GATE_DENIED")
+            inventory = containers()
+            stopped = gate.replacement_snapshot(inventory, args.role, old["id"])
+            if sentinel(inventory, args.role, stopped) != previous:
+                raise gate.CapacityProofError("PROTECTED_SENTINEL_CHANGED")
+            if keep_notification_worker:
+                verify_notification_pin(stopped)
+            inspect_images(
+                args.role, args.current_image_id, args.replacement_image_id, args.mode, args.release
+            )
+            check_config(args.mode, args.release)
+            require_live_environment(result["required_guard_gate_memavailable_mib"])
+        except (gate.CapacityProofError, OSError, ValueError, KeyError, subprocess.SubprocessError):
+            start_gates = result.get("gates", {})
+            if not (
+                start_gates.get("complete_post_stop_memory_window")
+                and start_gates.get("reserve_and_startup_preserved")
+            ):
+                raise gate.CapacityProofError("ORIGINAL_RESTART_HEADROOM_NOT_PROVEN") from None
+            start_previous(args.role, old, previous, outcome)
+            raise
+        outcome["state"] = "REPLACING_ORIGINAL"
+        checked(
+            [
+                *command,
+                "up",
+                "-d",
+                "--no-deps",
+                "--no-build",
+                "--pull",
+                "never",
+                "--wait",
+                "--wait-timeout",
+                "100",
+                args.role,
+            ],
+            timeout=120,
+        )
+        outcome["selected"] = observe_running(
+            args.role, None, args.replacement_image_id, previous, seconds=15
+        )
+        outcome["state"] = "SELECTED_ROLE_HEALTHY"
+
+
