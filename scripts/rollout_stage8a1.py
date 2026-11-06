@@ -101,3 +101,40 @@ def check_config(mode, release="stage8a1"):
     return [*COMPOSE, "-f", str(private / overlays[mode])]
 
 
+def containers():
+    ids = gate.docker_data(["ps", "-aq", "--no-trunc"]).split()
+    if not ids or len(ids) > 128:
+        raise gate.CapacityProofError("UNEXPECTED_CONTAINER_INVENTORY_SIZE")
+    return json.loads(gate.docker_data(["inspect", "--type", "container", *ids]))
+
+
+def nginx_sentinel():
+    configuration = checked(["nginx", "-T"])
+    service = checked(
+        ["systemctl", "show", "--property=MainPID", "--property=NRestarts", "nginx.service"]
+    )
+    return hashlib.sha256(configuration.encode()).hexdigest(), service
+
+
+def sentinel(inventory, role, snapshot):
+    protected = {}
+    for item in inventory:
+        labels = item["Config"].get("Labels") or {}
+        if labels.get("com.docker.compose.project") == "quantix":
+            continue
+        host = dict(item["HostConfig"])
+        if isinstance(host.get("Links"), list):
+            host["Links"] = sorted(host["Links"])
+        mounts = sorted(item.get("Mounts", []), key=lambda mount: mount["Destination"])
+        protected[item["Id"]] = hashlib.sha256(
+            gate.canonical([item["Image"], item["Config"], host, mounts])
+        ).hexdigest()
+    return (
+        {key: item for key, item in snapshot["owned"].items() if key != role},
+        snapshot["protected_running"],
+        protected,
+        gate.read_guard_identity(),
+        nginx_sentinel(),
+    )
+
+
