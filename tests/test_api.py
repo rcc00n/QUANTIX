@@ -42,6 +42,29 @@ def test_login_cookie_logout_and_audit(authenticated):
     assert client.get("/api/v1/auth/me").status_code == 401
 
 
+def test_login_cookie_flags_and_origin(client):
+    client.cookies.clear()
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": "synthetic-admin", "password": SYNTHETIC_PASSWORD},
+        headers={"Origin": "http://testserver"},
+    )
+    assert response.status_code == 200
+    cookie = response.headers["set-cookie"].lower()
+    assert (
+        "httponly" in cookie
+        and "samesite=strict" in cookie
+        and "max-age=28800" in cookie
+    )
+    assert response.headers["cache-control"] == "no-store"
+    assert (
+        client.post(
+            "/api/v1/auth/logout", headers={"Origin": "https://evil.example"}
+        ).status_code
+        == 403
+    )
+    client.post("/api/v1/auth/logout")
+    client.cookies.clear()
 
 
 
