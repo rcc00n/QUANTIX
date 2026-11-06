@@ -59,3 +59,10 @@ def inspect_images(role, current_id, replacement_id, mode, release="stage8a1"):
     return candidate if mode == "candidate" else previous
 
 
+def verify_notification_pin(snapshot):
+    _, tag = gate.replacement_image_transition("notifications", "stage8a1")
+    image = gate.docker_data(["image", "inspect", "--format", "{{.Id}}", tag]).strip()
+    if snapshot["owned"]["notifications"]["image_id"] != image:
+        raise gate.CapacityProofError("UNCHANGED_NOTIFICATION_IMAGE_MISMATCH")
+
+
