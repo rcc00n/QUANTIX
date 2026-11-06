@@ -48,3 +48,14 @@ def checked(args, *, timeout=20):
     return completed.stdout
 
 
+def inspect_images(role, current_id, replacement_id, mode, release="stage8a1"):
+    previous, candidate = gate.replacement_image_transition(role, release)
+    ids = {candidate: replacement_id, previous: current_id}
+    if mode == "rollback":
+        ids = {candidate: current_id, previous: replacement_id}
+    for tag, expected in ids.items():
+        if gate.docker_data(["image", "inspect", "--format", "{{.Id}}", tag]).strip() != expected:
+            raise gate.CapacityProofError("PINNED_IMAGE_TAG_CHANGED")
+    return candidate if mode == "candidate" else previous
+
+
