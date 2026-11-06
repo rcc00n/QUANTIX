@@ -243,3 +243,16 @@ def start_previous(role, old, previous, outcome, *, health_timeout=100):
     raise gate.CapacityProofError("ORIGINAL_HEALTH_TIMEOUT")
 
 
+def record_selected_instance(role, outcome):
+    for item in containers():
+        if item["Name"] == f"/quantix-{role}-1":
+            outcome["selected_observed"] = {
+                "id": item["Id"],
+                "image_id": item["Image"],
+                "status": item["State"]["Status"],
+                "health": item["State"].get("Health", {}).get("Status"),
+            }
+            return
+    outcome["selected_observed"] = None
+
+
