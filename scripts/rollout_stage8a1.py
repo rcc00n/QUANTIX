@@ -66,3 +66,38 @@ def verify_notification_pin(snapshot):
         raise gate.CapacityProofError("UNCHANGED_NOTIFICATION_IMAGE_MISMATCH")
 
 
+def release_path(release):
+    return PRIVATE.parent / release
+
+
+def check_config(mode, release="stage8a1"):
+    """Validate both directions using Compose normalization, with no config output."""
+    base = json.loads(checked([*COMPOSE, "config", "--format", "json"]))
+    if base["name"] != "quantix" or set(base["services"]) != {*gate.REQUIRED_ROLES, "migrate"}:
+        raise gate.CapacityProofError("UNEXPECTED_COMPOSE_PROJECT")
+    for role, cap in gate.PRODUCTION_MEMORY_MIB.items():
+        configured = base["services"][role]
+        if int(configured["mem_limit"]) != cap * gate.MIB:
+            raise gate.CapacityProofError("BASE_CAP_CHANGED")
+        if int(configured["memswap_limit"]) != cap * gate.MIB:
+            raise gate.CapacityProofError("BASE_SWAP_CHANGED")
+    overlays = OVERLAYS[release]
+    private = release_path(release)
+    for name, filename in overlays.items():
+        overlay = [*COMPOSE, "-f", str(private / filename)]
+        config = json.loads(checked([*overlay, "config", "--format", "json"]))
+        for role in gate.REPLACEABLE_ROLES:
+            image = config["services"][role]["image"]
+            if role in gate.REPLACEMENT_ROLES[release]:
+                old, new = gate.replacement_image_transition(role, release)
+                expected = new if name == "candidate" else old
+            else:
+                _, expected = gate.replacement_image_transition(role, "stage8a1")
+            if image != expected:
+                raise gate.CapacityProofError("UNEXPECTED_OVERLAY_IMAGE")
+            config["services"][role]["image"] = base["services"][role]["image"]
+        if config != base:
+            raise gate.CapacityProofError("NON_IMAGE_COMPOSE_CHANGE")
+    return [*COMPOSE, "-f", str(private / overlays[mode])]
+
+
