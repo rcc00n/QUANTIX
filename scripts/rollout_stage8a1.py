@@ -215,3 +215,31 @@ def observe_running(role, expected_id, expected_image, previous, *, seconds):
     return selected
 
 
+def start_previous(role, old, previous, outcome, *, health_timeout=100):
+    """Recover the known service only after the original reserve and safety checks."""
+    inventory = containers()
+    stopped = gate.replacement_snapshot(inventory, role, old["id"])
+    if sentinel(inventory, role, stopped) != previous:
+        raise gate.CapacityProofError("PROTECTED_SENTINEL_CHANGED")
+    memory_floor = gate.PRODUCTION_MEMORY_MIB[role] + gate.RESERVE_MIB + gate.STARTUP_MARGIN_MIB
+    require_live_environment(memory_floor)
+    if stopped["owned"][role]["image_id"] != old["image_id"]:
+        raise gate.CapacityProofError("ORIGINAL_CONTAINER_IMAGE_CHANGED")
+    outcome["state"] = "STARTING_ORIGINAL"
+    checked([*gate.LOCAL_DOCKER, "start", old["id"]])
+    deadline = time.monotonic() + health_timeout
+    while time.monotonic() < deadline:
+        current = next(item for item in containers() if item["Id"] == old["id"])
+        state = current["State"]
+        if not state["Running"] or state["OOMKilled"]:
+            raise gate.CapacityProofError("ORIGINAL_FAILED_TO_RECOVER")
+        if state.get("Health", {}).get("Status") == "healthy":
+            outcome["restored"] = observe_running(
+                role, old["id"], old["image_id"], previous, seconds=10
+            )
+            outcome["state"] = "ORIGINAL_RESTORED"
+            return
+        time.sleep(2)
+    raise gate.CapacityProofError("ORIGINAL_HEALTH_TIMEOUT")
+
+
