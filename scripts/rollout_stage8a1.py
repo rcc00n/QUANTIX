@@ -191,3 +191,27 @@ def export_lock(inventory, backend_id, stack):
         raise gate.CapacityProofError("LEGACY_EXPORT_ARTIFACT_PRESENT")
 
 
+def observe_running(role, expected_id, expected_image, previous, *, seconds):
+    """Keep the same guard and allow only the selected runtime identity to change."""
+    deadline = time.monotonic() + seconds
+    while True:
+        inventory = containers()
+        snapshot = gate.replacement_snapshot(inventory, None, None)
+        selected = snapshot["owned"][role]
+        if selected["image_id"] != expected_image or (
+            expected_id is not None and selected["id"] != expected_id
+        ):
+            raise gate.CapacityProofError("RUNNING_IMAGE_OR_CONTAINER_MISMATCH")
+        if gate.memory()["MemAvailable"] < 1024 * gate.GUARD_SUSTAINED_FLOOR_MIB:
+            raise gate.CapacityProofError("RUNNING_GUARD_HEADROOM_LOW")
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(2)
+    if sentinel(inventory, role, snapshot) != previous:
+        raise gate.CapacityProofError("PROTECTED_SENTINEL_CHANGED")
+    require_live_environment(gate.GUARD_SUSTAINED_FLOOR_MIB)
+    if gate.https_status("https://quantix.raccncode.com/login") != 200:
+        raise gate.CapacityProofError("QUANTIX_PUBLIC_HTTPS_FAILED")
+    return selected
+
+
