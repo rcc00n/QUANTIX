@@ -138,3 +138,19 @@ def sentinel(inventory, role, snapshot):
     )
 
 
+def require_live_environment(required_mib):
+    if checked(["timedatectl", "show", "-p", "NTPSynchronized", "--value"]).strip() != "yes":
+        raise gate.CapacityProofError("VPS_CLOCK_NOT_SYNCHRONIZED")
+    for address in ("https://badguymotors.com", "https://raccncode.com"):
+        if gate.https_status(address) != 200:
+            raise gate.CapacityProofError("PROTECTED_HTTPS_FAILED")
+    for unit in ("quantix-backup.service", "quantix-tls-renew.service"):
+        status = checked(["systemctl", "show", "--property=ActiveState", "--value", unit])
+        if status.strip() != "inactive":
+            raise gate.CapacityProofError("QUANTIX_MAINTENANCE_JOB_NOT_IDLE")
+    if shutil.disk_usage(ROOT).free < gate.REPLACEMENT_DISK_RESERVE_BYTES:
+        raise gate.CapacityProofError("QUANTIX_DISK_RESERVE_LOW")
+    if gate.memory()["MemAvailable"] < 1024 * required_mib:
+        raise gate.CapacityProofError("CURRENT_HEADROOM_TOO_LOW")
+
+
