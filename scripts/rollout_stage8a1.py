@@ -154,3 +154,40 @@ def require_live_environment(required_mib):
         raise gate.CapacityProofError("CURRENT_HEADROOM_TOO_LOW")
 
 
+def export_lock(inventory, backend_id, stack):
+    backend = next(item for item in inventory if item["Id"] == backend_id)
+    mount = next(item for item in backend["Mounts"] if item["Destination"] == EXPORT_MOUNT)
+    if mount["Type"] != "volume" or mount["Name"] != "quantix_export_temp":
+        raise gate.CapacityProofError("UNEXPECTED_EXPORT_VOLUME")
+    root = Path(mount["Source"]).resolve(strict=True)
+    volume = json.loads(gate.docker_data(["volume", "inspect", "quantix_export_temp"]))[0]
+    if (
+        Path(volume["Mountpoint"]).resolve(strict=True) != root
+        or volume["Labels"]["com.docker.compose.project"] != "quantix"
+    ):
+        raise gate.CapacityProofError("UNEXPECTED_EXPORT_VOLUME")
+    # Use the service user to create a missing lock with correct ownership. The app
+    # and runner both flock this same file. Completed exports are never opened.
+    code = (
+        "import os; from pathlib import Path; "
+        "root=Path('/var/tmp/quantix-export/quantix-full-exports'); "
+        "assert not root.is_symlink(); "
+        "root.mkdir(mode=0o700, exist_ok=True); "
+        "os.close(os.open(root/'.worker.lock', os.O_RDONLY|os.O_CREAT|os.O_NOFOLLOW, 0o600))"
+    )
+    gate.docker_data(["exec", backend_id, "python", "-c", code])
+    path = root / "quantix-full-exports/.worker.lock"
+    if path.parent.resolve(strict=True) != path.parent:
+        raise gate.CapacityProofError("UNEXPECTED_EXPORT_LOCK_PATH")
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    stack.callback(os.close, fd)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        raise gate.CapacityProofError("UNEXPECTED_EXPORT_LOCK_PATH")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise gate.CapacityProofError("FULL_EXPORT_IN_PROGRESS") from None
+    if next(root.glob("quantix-export-*.zip"), None) is not None:
+        raise gate.CapacityProofError("LEGACY_EXPORT_ARTIFACT_PRESENT")
+
+
