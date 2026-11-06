@@ -337,3 +337,45 @@ def replace(args, outcome):
         outcome["state"] = "SELECTED_ROLE_HEALTHY"
 
 
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", choices=("candidate", "rollback"))
+    parser.add_argument("role", choices=gate.REPLACEABLE_ROLES)
+    parser.add_argument("--release", choices=OVERLAYS, default="stage8a1")
+    parser.add_argument("--current-container-id", required=True)
+    parser.add_argument("--current-image-id", required=True)
+    parser.add_argument("--replacement-image-id", required=True)
+    args = parser.parse_args()
+    if (
+        not re.fullmatch(r"[a-f0-9]{64}", args.current_container_id)
+        or not re.fullmatch(r"sha256:[a-f0-9]{64}", args.current_image_id)
+        or not re.fullmatch(r"sha256:[a-f0-9]{64}", args.replacement_image_id)
+        or args.current_image_id == args.replacement_image_id
+    ):
+        parser.error("Supply distinct full image IDs and exact current container ID")
+    outcome = {
+        "mode": args.mode,
+        "role": args.role,
+        "release": args.release,
+        "state": "UNCHANGED",
+    }
+    try:
+        if os.geteuid() or Path(__file__).resolve().parent != release_path(args.release):
+            raise gate.CapacityProofError("RUNNER_OUTSIDE_PRIVATE_QUANTIX_INSTALLATION")
+        replace(args, outcome)
+    except gate.CapacityProofError as error:
+        outcome["error_code"] = str(error)
+    except (OSError, ValueError, KeyError, StopIteration, subprocess.SubprocessError):
+        outcome["error_code"] = "ROLLOUT_INTERRUPTED_OR_MEASUREMENT_FAILED"
+    if outcome["state"] in {"STOPPING_ORIGINAL", "ORIGINAL_STOPPED", "REPLACING_ORIGINAL"}:
+        try:
+            record_selected_instance(args.role, outcome)
+        except (gate.CapacityProofError, OSError, ValueError, KeyError, subprocess.SubprocessError):
+            outcome["selected_observation_failed"] = True
+    outcome["checked_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    print(json.dumps(outcome, indent=2))
+    return 0 if outcome["state"] == "SELECTED_ROLE_HEALTHY" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
