@@ -86,3 +86,15 @@ def test_invalid_credentials_do_not_leak_secrets(client):
     assert "synthetic-secret" not in response.text
 
 
+def test_z_persisted_login_rate_limit(client):
+    client.cookies.clear()
+    for _ in range(10):
+        result = client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": "synthetic-missing-user",
+                "password": "synthetic-wrong-password",
+            },
+        )
+    assert result.status_code == 429
+    assert result.headers["retry-after"] == "600"
