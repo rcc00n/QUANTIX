@@ -97,6 +97,17 @@ def test_valid_proof_recomputes_budget_and_preserves_safety_and_hashes():
     assert "SYNTHETIC_RESOURCE_FIXTURE" not in json.dumps(proof)
 
 
+@pytest.mark.parametrize(
+    "peak,expected",
+    [
+        ("1000", 1152),
+        ("1280", 1408),
+        ("1280.000000000000000001", 1472),
+        ("1600", 1792),
+    ],
+)
+def test_rounding_is_upward_to_64_and_uses_larger_margin(peak, expected):
+    assert preflight.planning_envelope(peak) == expected
 
 
 
