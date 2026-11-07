@@ -24,6 +24,10 @@ def test_capacity_evidence_variants_preserve_identical_complete_payloads():
     json.dumps(after)
 
 
+@pytest.mark.asyncio
+async def test_capacity_rejects_unsupported_counts_before_allocating_or_network():
+    with pytest.raises(ValueError, match="120/200/300/500"):
+        await benchmark.scanner_measurement(10000, 2)
 
 
 
