@@ -169,6 +169,25 @@ def test_incomplete_or_degraded_evidence_cannot_lower_budget(fault):
         make_proof(after=after)
 
 
+@pytest.mark.parametrize(
+    "fault", ["reserve", "startup", "budget", "duration", "saving", "claim", "unknown"]
+)
+def test_resealed_tampering_still_fails_formula_and_policy_guards(fault):
+    proof = make_proof()
+    key, value = {
+        "reserve": ("reserve_mib", 0),
+        "startup": ("startup_margin_mib", 0),
+        "budget": ("planning_envelope_mib", 64),
+        "duration": ("minimum_after_seconds", 100),
+        "saving": ("minimum_peak_saving_mib", 1),
+        "claim": ("cold_cache_savings_proven", True),
+        "unknown": ("untrusted_text", "SYNTHETIC-secret"),
+    }[fault]
+    proof[key] = value
+    value = preflight.capacity_policy(encoded(preflight.seal_proof(proof)))
+    assert value["proof_valid"] is False
+    assert value["required_memavailable_mib"] == 2112
+    assert "SYNTHETIC-secret" not in json.dumps(value)
 
 
 
