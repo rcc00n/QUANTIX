@@ -40,3 +40,11 @@ def test_capacity_market_and_book_provenance_remain_synthetic():
     assert len(book.normalized.asks) == 25
 
 
+@pytest.mark.asyncio
+async def test_paper_capacity_rejects_non_test_database_before_connecting(monkeypatch):
+    monkeypatch.setenv(
+        "TEST_DATABASE_URL",
+        "postgresql+asyncpg://synthetic:synthetic@localhost/production",
+    )
+    with pytest.raises(ValueError, match="ending _test"):
+        await benchmark.paper_ledger_measurement(1)
