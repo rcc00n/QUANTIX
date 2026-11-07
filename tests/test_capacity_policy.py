@@ -301,3 +301,43 @@ def test_snapshot_pins_old_container_and_leaves_protected_apps_read_only():
     assert "SYNTHETIC_PRIVATE_SETTING" not in json.dumps(snapshot)
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "wrong_id",
+        "target_running",
+        "duplicate",
+        "other_service_down",
+        "unexpected_job",
+        "target_killed",
+        "weakened_cap",
+        "swap_allowed",
+        "migration_started",
+    ],
+)
+def test_invalid_runtime_shape_cannot_pass_replacement(fault):
+    inventory = replacement_inventory()
+    old = inventory[1]
+    identifier = old["Id"]
+    if fault == "wrong_id":
+        identifier = "b" * 64
+    elif fault == "target_running":
+        old["State"].update(Status="running", Running=True, Pid=123)
+    elif fault == "duplicate":
+        inventory.append(copy.deepcopy(old))
+    elif fault == "other_service_down":
+        inventory[0]["State"]["Health"]["Status"] = "unhealthy"
+    elif fault == "unexpected_job":
+        job = copy.deepcopy(old)
+        job["Config"]["Labels"]["com.docker.compose.oneoff"] = "True"
+        inventory.append(job)
+    elif fault == "target_killed":
+        old["State"]["ExitCode"] = 137
+    elif fault == "weakened_cap":
+        old["HostConfig"]["Memory"] += 64 * preflight.MIB
+    elif fault == "swap_allowed":
+        old["HostConfig"]["MemorySwap"] = -1
+    else:
+        inventory[-1]["State"].update(Status="running", Running=True, Pid=123)
+    with pytest.raises(preflight.CapacityProofError):
+        preflight.replacement_snapshot(inventory, "collector", identifier)
