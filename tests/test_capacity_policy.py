@@ -110,6 +110,63 @@ def test_rounding_is_upward_to_64_and_uses_larger_margin(peak, expected):
     assert preflight.planning_envelope(peak) == expected
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "short",
+        "read_failed",
+        "export_failed",
+        "missing_export",
+        "coverage_adapter",
+        "coverage_group",
+        "coverage_book",
+        "restart",
+        "missing_service",
+        "duplicate_service",
+        "out_of_order",
+        "unobserved_tail",
+        "missing_read_category",
+        "forced_external",
+        "weak_saving",
+    ],
+)
+def test_incomplete_or_degraded_evidence_cannot_lower_budget(fault):
+    after = synthetic_profile(after=True)
+    if fault == "short":
+        after["elapsed_seconds"] = 899
+        after["samples"].pop()
+    elif fault == "read_failed":
+        after["reads"][0]["status"] = 429
+    elif fault == "export_failed":
+        after["export_exit_code"] = 1
+    elif fault == "missing_export":
+        after["export_exit_code"] = None
+    elif fault.startswith("coverage_"):
+        field = {
+            "coverage_adapter": "connected_exchanges",
+            "coverage_group": "venue_groups",
+            "coverage_book": "monitored_markets",
+        }[fault]
+        after["coverage"][0][field] -= 1
+    elif fault == "restart":
+        after["samples"][-1]["services"][0]["ID"] = "ffffffffffff"
+    elif fault == "missing_service":
+        after["samples"][-1]["services"].pop()
+    elif fault == "duplicate_service":
+        after["samples"][-1]["services"][-1] = after["samples"][-1]["services"][0]
+    elif fault == "out_of_order":
+        after["samples"][-1]["elapsed_seconds"] = 0
+    elif fault == "unobserved_tail":
+        after["elapsed_seconds"] = 2000
+    elif fault == "missing_read_category":
+        after["reads"][-1]["path"] = "terminal/overview"
+    elif fault == "forced_external":
+        after["external_exchange_requests_forced"] = 1
+    else:
+        for sample in after["samples"]:
+            sample["services"][0]["MemUsage"] = "601MiB / 8GiB"
+    with pytest.raises(preflight.CapacityProofError):
+        make_proof(after=after)
 
 
 
