@@ -67,5 +67,22 @@ def test_login_cookie_flags_and_origin(client):
     client.cookies.clear()
 
 
+def test_invalid_credentials_do_not_leak_secrets(client):
+    client.cookies.clear()
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": "synthetic-admin", "password": "synthetic-wrong-password"},
+    )
+    assert response.status_code == 401
+    assert "synthetic-wrong-password" not in response.text
+    response = client.post(
+        "/api/v1/auth/login",
+        json={
+            "username": "synthetic-admin",
+            "password": {"invalid": "synthetic-secret"},
+        },
+    )
+    assert response.status_code == 422
+    assert "synthetic-secret" not in response.text
 
 
