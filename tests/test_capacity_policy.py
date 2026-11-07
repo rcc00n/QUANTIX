@@ -82,6 +82,19 @@ def test_no_proof_preserves_original_1536_plus_512_plus_64_gate():
     assert value["proof_valid"] is None
 
 
+def test_valid_proof_recomputes_budget_and_preserves_safety_and_hashes():
+    proof = make_proof()
+    value = preflight.capacity_policy(encoded(proof))
+    assert value["proof_valid"] is True
+    assert proof["after"]["stack_peak_mib"] == "1000"
+    assert proof["peak_saving_mib"] == "400"
+    assert value["planning_envelope_mib"] == 1152
+    assert value["required_memavailable_mib"] == 1728
+    assert len(proof["evidence_sha256"]["before"]) == 64
+    assert proof["cold_cache_savings_proven"] is False
+    assert proof["sustained_vps_coexistence_proven"] is False
+    assert "00000000-0000" not in json.dumps(proof)
+    assert "SYNTHETIC_RESOURCE_FIXTURE" not in json.dumps(proof)
 
 
 
