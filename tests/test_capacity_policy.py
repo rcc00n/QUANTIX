@@ -274,6 +274,12 @@ def test_replacement_requires_one_full_service_cap_above_real_post_stop_memory_f
     assert all(result["gates"].values())
 
 
+def test_one_low_post_stop_sample_fails_even_if_instant_reserve_gate_passes():
+    samples = [(i * 2, 1472 * 1024) for i in range(16)]
+    samples[6] = (12, 1472 * 1024 - 1)
+    result = preflight.replacement_headroom("collector", samples)
+    assert result["gates"]["reserve_and_startup_preserved"]
+    assert not result["gates"]["active_guard_headroom_preserved"]
 
 
 
