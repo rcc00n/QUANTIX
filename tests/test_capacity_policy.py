@@ -254,6 +254,24 @@ def replacement_inventory(role="collector"):
     return containers
 
 
+@pytest.mark.parametrize(
+    "role,reserve_required,guard_required",
+    [
+        ("collector", 1344, 1472),
+        ("backend", 960, 1088),
+        ("frontend", 768, 896),
+        ("notifications", 736, 864),
+    ],
+)
+def test_replacement_requires_one_full_service_cap_above_real_post_stop_memory_floor(
+    role, reserve_required, guard_required
+):
+    result = preflight.replacement_headroom(
+        role, [(i * 2, 1024 * guard_required) for i in range(16)]
+    )
+    assert result["required_reserve_gate_memavailable_mib"] == reserve_required
+    assert result["required_guard_gate_memavailable_mib"] == guard_required
+    assert all(result["gates"].values())
 
 
 
