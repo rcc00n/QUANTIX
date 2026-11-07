@@ -288,5 +288,16 @@ def test_high_memory_in_incomplete_window_cannot_pass_replacement(times):
     assert not result["gates"]["complete_post_stop_memory_window"]
 
 
+def test_snapshot_pins_old_container_and_leaves_protected_apps_read_only():
+    inventory = replacement_inventory()
+    protected = copy.deepcopy(inventory[0])
+    protected["Id"] = "e" * 64
+    protected["Config"]["Labels"] = None
+    protected["Config"]["Env"] = ["SYNTHETIC_PRIVATE_SETTING=fixture"]
+    inventory.append(protected)
+    snapshot = preflight.replacement_snapshot(inventory, "collector", inventory[1]["Id"])
+    assert snapshot["owned"]["collector"]["status"] == "exited"
+    assert snapshot["protected_running"] == {protected["Id"]: ["SYNTHETIC_START", 0]}
+    assert "SYNTHETIC_PRIVATE_SETTING" not in json.dumps(snapshot)
 
 
