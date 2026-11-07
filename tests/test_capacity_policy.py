@@ -282,6 +282,10 @@ def test_one_low_post_stop_sample_fails_even_if_instant_reserve_gate_passes():
     assert not result["gates"]["active_guard_headroom_preserved"]
 
 
+@pytest.mark.parametrize("times", [range(0, 16, 1), range(0, 32, 3), range(0, 128, 8)])
+def test_high_memory_in_incomplete_window_cannot_pass_replacement(times):
+    result = preflight.replacement_headroom("collector", [(t, 9999 * 1024) for t in times])
+    assert not result["gates"]["complete_post_stop_memory_window"]
 
 
 
