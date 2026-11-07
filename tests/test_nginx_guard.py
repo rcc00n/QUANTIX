@@ -110,6 +110,45 @@ def test_apply_sends_only_one_hup_and_preserves_master(environment, monkeypatch)
     assert all("restart" not in args and "stop" not in args for args in state.calls)
 
 
+@pytest.mark.parametrize(
+    "change,code",
+    [
+        ("protected_hash", "PROTECTED_CONFIG_HASH_CHANGED"),
+        ("own_hash", "QUANTIX_VHOST_NOT_REVIEWED"),
+        ("include_order", "PROTECTED_INCLUDE_ORDER_CHANGED"),
+        ("extra_include", "PROTECTED_INCLUDE_ORDER_CHANGED"),
+        ("extra_warning", "NGINX_WARNING_MULTISET_CHANGED"),
+        ("missing_own", "EXACTLY_ONE_QUANTIX_VHOST_REQUIRED"),
+        ("pending_edit", "PENDING_UNRELATED_CONFIG_EDIT"),
+        ("syntax", "NGINX_SYNTAX_INVALID"),
+        ("clock", "VPS_CLOCK_NOT_SYNCHRONIZED"),
+    ],
+)
+def test_unrelated_or_unreviewed_changes_fail_closed_before_hup(
+    environment, change, code
+):
+    state, baseline = environment
+    if change == "protected_hash":
+        state.contents[OLD[1]] = "SYNTHETIC unrelated edit"
+    elif change == "own_hash":
+        state.contents[g.VHOST] = "SYNTHETIC unreviewed edit"
+    elif change == "include_order":
+        state.files = [OLD[1], OLD[0], g.VHOST]
+    elif change == "extra_include":
+        state.files.append("/etc/nginx/conf.d/synthetic-other.conf")
+    elif change == "extra_warning":
+        state.stderr += WARNING
+    elif change == "missing_own":
+        state.files = OLD.copy()
+    elif change == "pending_edit":
+        state.mtimes[OLD[1]] = 1001
+    elif change == "syntax":
+        state.syntax_code = 1
+    elif change == "clock":
+        state.clock = "no"
+    with pytest.raises(g.GuardError, match=code):
+        g.checked_reload(baseline, baseline["quantix_vhost_sha256"], apply=True)
+    assert state.sent == []
 
 
 
