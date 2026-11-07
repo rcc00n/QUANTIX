@@ -30,5 +30,13 @@ async def test_capacity_rejects_unsupported_counts_before_allocating_or_network(
         await benchmark.scanner_measurement(10000, 2)
 
 
+def test_capacity_market_and_book_provenance_remain_synthetic():
+    market = benchmark.synthetic_market("synthetic00", 0)
+    book = benchmark.synthetic_book("synthetic00", market, benchmark.FIXTURE_TIME, 1)
+    assert market.metadata["synthetic"] is True
+    assert market.base.key.startswith("synthetic:")
+    assert book.source == "SYNTHETIC_OFFLINE_REPLAY"
+    assert len(book.normalized.bids) == 25
+    assert len(book.normalized.asks) == 25
 
 
