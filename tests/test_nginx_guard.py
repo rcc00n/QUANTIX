@@ -151,6 +151,15 @@ def test_unrelated_or_unreviewed_changes_fail_closed_before_hup(
     assert state.sent == []
 
 
+def test_unrelated_change_during_https_check_prevents_signal(environment, monkeypatch):
+    state, baseline = environment
+    monkeypatch.setattr(g.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        g, "protected_https", lambda: state.contents.update({OLD[1]: "SYNTHETIC race"})
+    )
+    with pytest.raises(g.GuardError, match="PROTECTED_CONFIG_HASH_CHANGED"):
+        g.checked_reload(baseline, baseline["quantix_vhost_sha256"], apply=True)
+    assert state.sent == []
 
 
 
