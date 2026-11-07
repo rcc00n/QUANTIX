@@ -207,6 +207,13 @@ def test_numeric_units_are_converted_without_float_or_decimal_parity_assumptions
         policy.docker_memory_mib("NaNMiB / 8GiB")
 
 
+def test_remote_script_remains_standalone_python310_and_never_executes_proof_code():
+    for name in ("capacity_policy", "production_preflight"):
+        ast.parse((SCRIPTS / (name + ".py")).read_text(), feature_version=(3, 10))
+    source = (SCRIPTS / "production_preflight.py").read_text()
+    assert "import arbiq" not in source
+    assert "import capacity_policy" not in source
+    assert "exec(" not in source and "eval(" not in source
 
 
 def replacement_inventory(role="collector"):
