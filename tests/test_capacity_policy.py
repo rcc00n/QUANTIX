@@ -190,6 +190,13 @@ def test_resealed_tampering_still_fails_formula_and_policy_guards(fault):
     assert "SYNTHETIC-secret" not in json.dumps(value)
 
 
+@pytest.mark.parametrize(
+    "value", ["!not-base64!", "e30=", "x" * (preflight.MAX_PROOF_BASE64_BYTES + 1)]
+)
+def test_invalid_or_oversized_proof_blocks_and_keeps_default(value):
+    result = preflight.capacity_policy(value)
+    assert result["proof_valid"] is False
+    assert result["planning_envelope_mib"] == 1536
 
 
 
