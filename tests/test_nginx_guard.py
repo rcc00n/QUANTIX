@@ -101,6 +101,13 @@ def test_dry_check_validates_without_any_signal(environment):
     assert state.sent == [] and state.https == ["SYNTHETIC 200"]
 
 
+def test_apply_sends_only_one_hup_and_preserves_master(environment, monkeypatch):
+    state, baseline = environment
+    monkeypatch.setattr(g.os, "geteuid", lambda: 0)
+    result = g.checked_reload(baseline, baseline["quantix_vhost_sha256"], apply=True)
+    assert result["applied"] and state.sent == [(12345, signal.SIGHUP)]
+    assert len(state.https) == 2
+    assert all("restart" not in args and "stop" not in args for args in state.calls)
 
 
 
