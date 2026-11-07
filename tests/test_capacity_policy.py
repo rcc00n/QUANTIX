@@ -199,6 +199,12 @@ def test_invalid_or_oversized_proof_blocks_and_keeps_default(value):
     assert result["planning_envelope_mib"] == 1536
 
 
+def test_numeric_units_are_converted_without_float_or_decimal_parity_assumptions():
+    assert policy.docker_memory_mib("1GiB / 8GiB") == 1024
+    assert policy.docker_memory_mib("1048576B / 8GiB") == 1
+    assert policy.docker_memory_mib("1MB / 8GiB") == Decimal("0.95367431640625")
+    with pytest.raises(preflight.CapacityProofError):
+        policy.docker_memory_mib("NaNMiB / 8GiB")
 
 
 
