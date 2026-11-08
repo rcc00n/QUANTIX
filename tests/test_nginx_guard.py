@@ -435,6 +435,20 @@ def test_protected_bgm_cannot_pass_by_redirecting_to_owner_site(monkeypatch):
         g.protected_https()
 
 
+def test_worker_generation_uses_stable_process_ticks_not_wall_clock_jitter(monkeypatch):
+    fields = ["S", "12345"] + ["0"] * 17 + ["987654"]
+    raw = "77 (nginx) " + " ".join(fields)
+    monkeypatch.setattr(
+        g, "run", lambda args: SimpleNamespace(returncode=0, stdout="77\n", stderr="")
+    )
+    monkeypatch.setattr(g, "Path", lambda *args: SimpleNamespace(read_text=lambda: raw))
+    monkeypatch.setattr(
+        g.time,
+        "time",
+        lambda: (_ for _ in ()).throw(AssertionError("No wall time for generation")),
+    )
+    assert g.worker_generation(12345) == 987654
+    assert g.worker_generation(12345) == 987654
 
 
 
