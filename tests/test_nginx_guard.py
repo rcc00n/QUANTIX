@@ -451,6 +451,12 @@ def test_worker_generation_uses_stable_process_ticks_not_wall_clock_jitter(monke
     assert g.worker_generation(12345) == 987654
 
 
+def test_world_writable_private_cli_is_rejected_even_if_empty(lineage):
+    state, _, cli = lineage
+    cli.chmod(0o666)
+    with pytest.raises(g.GuardError, match="QUANTIX_TLS_CONFIG_PERMISSIONS_INVALID"):
+        r.renew({"quantix_vhost_sha256": sha("SYNTHETIC")}, apply=True)
+    assert state.guards == [False] and not state.calls
 
 
 
