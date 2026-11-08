@@ -191,6 +191,23 @@ def test_hup_without_new_workers_is_not_reported_as_success(environment, monkeyp
     assert exc.value.reload_applied and len(state.sent) == 1
 
 
+def test_baseline_rejects_symlinks_and_writable_files(tmp_path):
+    baseline = {
+        "loaded_files_in_order": OLD,
+        "loaded_file_sha256": {p: sha("SYNTHETIC") for p in OLD},
+        "warnings": [],
+    }
+    path = tmp_path / "synthetic-baseline.json"
+    path.write_text(json.dumps(baseline))
+    path.chmod(0o600)
+    assert g.load_baseline(path) == baseline
+    link = tmp_path / "synthetic-link.json"
+    link.symlink_to(path)
+    with pytest.raises(g.GuardError, match="BASELINE_PERMISSIONS_INVALID"):
+        g.load_baseline(link)
+    path.chmod(0o666)
+    with pytest.raises(g.GuardError, match="BASELINE_PERMISSIONS_INVALID"):
+        g.load_baseline(path)
 
 
 @pytest.fixture
