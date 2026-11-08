@@ -54,3 +54,37 @@ def test_rotation_never_follows_symlinks(tmp_path):
     assert link.is_symlink()
 
 
+def test_backup_flushes_data_before_exclusive_publication(
+    tmp_path, monkeypatch, capsys
+):
+    """SYNTHETIC pg_dump byte stream verifies durable publication, no database call."""
+    import os
+    import sys
+    from types import SimpleNamespace
+
+    events = []
+    original_fsync, original_link = os.fsync, os.link
+
+    def fake_dump(command, **kwargs):
+        kwargs["stdout"].write(b"PGDMP_SYNTHETIC_DURABILITY_FIXTURE")
+        return SimpleNamespace(returncode=0)
+
+    def fsync(fd):
+        events.append("fsync")
+        return original_fsync(fd)
+
+    def publish(source, target):
+        events.append("publish")
+        return original_link(source, target)
+
+    target = tmp_path / "synthetic-recovery.dump"
+    monkeypatch.setattr(sys, "argv", ["backup_database.py", "--output", str(target)])
+    monkeypatch.setattr(backup.subprocess, "run", fake_dump)
+    monkeypatch.setattr(backup.os, "fsync", fsync)
+    monkeypatch.setattr(backup.os, "link", publish)
+    backup.main()
+    assert events[0:2] == ["fsync", "publish"]
+    assert events[-2:] == ["fsync", "fsync"]
+    assert target.read_bytes() == b"PGDMP_SYNTHETIC_DURABILITY_FIXTURE"
+    assert target.stat().st_mode & 0o077 == 0
+    assert json.loads(capsys.readouterr().out)["restore_verified"] is False
