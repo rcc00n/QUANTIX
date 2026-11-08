@@ -473,6 +473,26 @@ def test_newer_protected_certificate_or_key_aborts_before_hup(environment, monke
     assert state.sent == []
 
 
+def test_old_literal_tls_metadata_passes_without_reading_key_contents(
+    environment, monkeypatch
+):
+    state, baseline = environment
+    state.contents[OLD[1]] = (
+        'server { ssl_certificate\n "/synthetic/cert with spaces.pem"; ssl_certificate_key /synthetic/protected.key; }'
+    )
+    baseline["loaded_file_sha256"][OLD[1]] = sha(state.contents[OLD[1]])
+    observed = []
+    monkeypatch.setattr(g, "tls_modified_at", lambda path: observed.append(path) or 900)
+    # The fixture digest accepts only .conf paths: hashing key bytes would fail this test.
+    assert (
+        g.checked_reload(baseline, baseline["quantix_vhost_sha256"])["status"]
+        == "checks_passed"
+    )
+    assert set(observed) == {
+        "/synthetic/cert with spaces.pem",
+        "/synthetic/protected.key",
+    }
+    assert state.sent == []
 
 
 
