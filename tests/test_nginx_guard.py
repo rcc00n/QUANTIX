@@ -303,6 +303,43 @@ def test_changed_certificate_uses_guarded_reload_only(lineage):
     assert result["certificate_changed"] and state.guards == [False, True]
 
 
+@pytest.mark.parametrize(
+    "mutation,code",
+    [
+        ("hook", "QUANTIX_RENEWAL_HOOKS_NOT_ALLOWED"),
+        ("installer", "QUANTIX_RENEWAL_MUST_USE_WEBROOT"),
+        ("outside_path", "QUANTIX_RENEWAL_PATH_NOT_ISOLATED"),
+        ("outside_webroot", "QUANTIX_WEBROOT_NOT_ISOLATED"),
+        ("staging_ca", "QUANTIX_RENEWAL_CA_NOT_PRODUCTION_LETSENCRYPT"),
+        ("global_cli", "QUANTIX_CLI_CONFIG_MUST_BE_EMPTY"),
+        ("other_san", "QUANTIX_CERTIFICATE_NAMES_NOT_EXCLUSIVE"),
+    ],
+)
+def test_unsafe_renewal_configuration_never_calls_certbot(lineage, mutation, code):
+    state, renewal, cli = lineage
+    text = renewal.read_text()
+    if mutation == "hook":
+        text += "\ndeploy_hook = systemctl restart nginx\n"
+    elif mutation == "installer":
+        text += "\ninstaller = nginx\n"
+    elif mutation == "outside_path":
+        text = text.replace(
+            str(r.FULLCHAIN), "/etc/letsencrypt/live/synthetic/fullchain.pem"
+        )
+    elif mutation == "outside_webroot":
+        text = text.replace(str(r.WEBROOT), "/var/www/synthetic-other-app")
+    elif mutation == "staging_ca":
+        text = text.replace(
+            "acme-v02.api.letsencrypt.org", "acme-staging-v02.api.letsencrypt.org"
+        )
+    elif mutation == "global_cli":
+        cli.write_text("deploy-hook = systemctl restart nginx\n")
+    elif mutation == "other_san":
+        state.names = r.DOMAIN + ", DNS:synthetic-other.invalid"
+    renewal.write_text(text)
+    with pytest.raises(g.GuardError, match=code):
+        r.renew({"quantix_vhost_sha256": sha("SYNTHETIC")}, apply=True)
+    assert all(c[0] != "certbot" for c in state.calls) and state.guards == [False]
 
 
 
