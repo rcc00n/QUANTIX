@@ -278,6 +278,11 @@ def lineage(tmp_path, monkeypatch):
     return state, renewal, cli
 
 
+def test_renewal_is_dry_by_default_and_never_calls_certbot(lineage):
+    state, _, _ = lineage
+    result = r.renew({"quantix_vhost_sha256": sha("SYNTHETIC")})
+    assert not result["applied"] and state.guards == [False]
+    assert [args[0] for args in state.calls] == ["openssl"]
 
 
 
