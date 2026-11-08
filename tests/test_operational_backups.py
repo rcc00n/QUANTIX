@@ -42,5 +42,15 @@ def test_rotation_preserves_newest_and_unknown_files(tmp_path):
     assert unknown.exists()
 
 
+def test_rotation_never_follows_symlinks(tmp_path):
+    external = tmp_path / "SYNTHETIC_ledger.dump"
+    external.write_text("SYNTHETIC_UNRELATED_DATA")
+    link = tmp_path / "quantix-20261101T000000Z.dump"
+    link.symlink_to(external)
+    for day in range(2, 5):
+        create(tmp_path, day)
+    backup.rotate_backups(tmp_path, keep=2)
+    assert external.read_text() == "SYNTHETIC_UNRELATED_DATA"
+    assert link.is_symlink()
 
 
