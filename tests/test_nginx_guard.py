@@ -342,6 +342,12 @@ def test_unsafe_renewal_configuration_never_calls_certbot(lineage, mutation, cod
     assert all(c[0] != "certbot" for c in state.calls) and state.guards == [False]
 
 
+def test_certbot_failure_cannot_reload_or_expose_provider_text(lineage):
+    state, _, _ = lineage
+    state.failed = True
+    with pytest.raises(g.GuardError, match="QUANTIX_CERTBOT_RENEWAL_FAILED") as exc:
+        r.renew({"quantix_vhost_sha256": sha("SYNTHETIC")}, apply=True)
+    assert state.guards == [False] and "secret-like" not in str(exc.value)
 
 
 
