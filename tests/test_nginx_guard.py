@@ -350,6 +350,32 @@ def test_certbot_failure_cannot_reload_or_expose_provider_text(lineage):
     assert state.guards == [False] and "secret-like" not in str(exc.value)
 
 
+def test_renewed_certificate_pending_reload_survives_guard_failure(
+    lineage, monkeypatch
+):
+    state, _, _ = lineage
+    state.changed = True
+
+    def blocked(baseline, checksum, *, apply=False):
+        state.guards.append(apply)
+        if apply:
+            raise g.GuardError("PROTECTED_CONFIG_HASH_CHANGED")
+        return {"applied": False}
+
+    monkeypatch.setattr(r, "checked_reload", blocked)
+    with pytest.raises(g.GuardError, match="PROTECTED_CONFIG_HASH_CHANGED"):
+        r.renew({"quantix_vhost_sha256": sha("SYNTHETIC")}, apply=True)
+    assert r.pending_hash() == r.certificate_hash()
+    state.changed = False
+    state.guards = []
+    monkeypatch.setattr(
+        r,
+        "checked_reload",
+        lambda b, c, apply=False: state.guards.append(apply) or {"applied": apply},
+    )
+    result = r.renew({"quantix_vhost_sha256": sha("SYNTHETIC")}, apply=True)
+    assert state.guards == [False, True] and result["pending_reload_recovered"]
+    assert not result["certificate_changed"] and not r.pending_path().exists()
 
 
 
