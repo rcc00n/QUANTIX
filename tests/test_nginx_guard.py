@@ -389,6 +389,12 @@ def test_failed_certbot_after_file_change_retains_pending_evidence_without_reloa
     assert state.guards == [False] and r.pending_hash() == r.certificate_hash()
 
 
+def test_pending_certificate_hash_mismatch_fails_before_certbot(lineage):
+    state, _, _ = lineage
+    r.mark_pending(sha("SYNTHETIC unexpected material"))
+    with pytest.raises(g.GuardError, match="PENDING_CERTIFICATE_HASH_MISMATCH"):
+        r.renew({"quantix_vhost_sha256": sha("SYNTHETIC")}, apply=True)
+    assert all(c[0] != "certbot" for c in state.calls)
 
 
 
