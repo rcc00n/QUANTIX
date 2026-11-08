@@ -285,6 +285,15 @@ def test_renewal_is_dry_by_default_and_never_calls_certbot(lineage):
     assert [args[0] for args in state.calls] == ["openssl"]
 
 
+def test_unchanged_certificate_does_not_reload(lineage):
+    state, _, _ = lineage
+    result = r.renew({"quantix_vhost_sha256": sha("SYNTHETIC")}, apply=True)
+    assert result["status"] == "certificate_unchanged" and state.guards == [False]
+    command = next(c for c in state.calls if c[0] == "certbot")
+    assert command[command.index("--cert-name") + 1] == r.DOMAIN
+    assert "--no-directory-hooks" in command and "--config" in command
+    assert "--nginx" not in command and "--standalone" not in command
+    assert "/etc/letsencrypt" not in " ".join(command)
 
 
 
