@@ -162,6 +162,20 @@ def test_unrelated_change_during_https_check_prevents_signal(environment, monkey
     assert state.sent == []
 
 
+def test_failed_postcheck_explicitly_reports_that_reload_already_happened(
+    environment, monkeypatch
+):
+    state, baseline = environment
+    monkeypatch.setattr(g.os, "geteuid", lambda: 0)
+
+    def https():
+        if state.sent:
+            raise g.GuardError("PROTECTED_HTTPS_NOT_HEALTHY")
+
+    monkeypatch.setattr(g, "protected_https", https)
+    with pytest.raises(g.GuardError) as exc:
+        g.checked_reload(baseline, baseline["quantix_vhost_sha256"], apply=True)
+    assert exc.value.reload_applied is True and state.sent == [(12345, signal.SIGHUP)]
 
 
 
