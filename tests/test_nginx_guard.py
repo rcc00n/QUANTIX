@@ -378,6 +378,15 @@ def test_renewed_certificate_pending_reload_survives_guard_failure(
     assert not result["certificate_changed"] and not r.pending_path().exists()
 
 
+def test_failed_certbot_after_file_change_retains_pending_evidence_without_reload(
+    lineage,
+):
+    state, _, _ = lineage
+    state.changed = True
+    state.failed = True
+    with pytest.raises(g.GuardError, match="QUANTIX_CERTBOT_RENEWAL_FAILED"):
+        r.renew({"quantix_vhost_sha256": sha("SYNTHETIC")}, apply=True)
+    assert state.guards == [False] and r.pending_hash() == r.certificate_hash()
 
 
 
