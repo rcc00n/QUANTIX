@@ -495,5 +495,12 @@ def test_old_literal_tls_metadata_passes_without_reading_key_contents(
     assert state.sent == []
 
 
+@pytest.mark.parametrize(
+    "reference",
+    ["relative.key", "$ssl_key", "/etc/$dynamic/key.pem", "engine:synthetic:slot"],
+)
+def test_nonliteral_or_relative_tls_references_require_inspection(reference):
+    with pytest.raises(g.GuardError, match="TLS_REFERENCE_REQUIRES_INSPECTION"):
+        g.protected_tls_references(f"server {{ ssl_certificate_key {reference}; }}")
 
 
