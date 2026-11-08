@@ -178,6 +178,17 @@ def test_failed_postcheck_explicitly_reports_that_reload_already_happened(
     assert exc.value.reload_applied is True and state.sent == [(12345, signal.SIGHUP)]
 
 
+def test_hup_without_new_workers_is_not_reported_as_success(environment, monkeypatch):
+    state, baseline = environment
+    monkeypatch.setattr(g.os, "geteuid", lambda: 0)
+    state.new_generation = False
+    with pytest.raises(
+        g.GuardError, match="NEW_NGINX_WORKER_GENERATION_NOT_OBSERVED"
+    ) as exc:
+        g.checked_reload(
+            baseline, baseline["quantix_vhost_sha256"], apply=True, timeout=0
+        )
+    assert exc.value.reload_applied and len(state.sent) == 1
 
 
 
