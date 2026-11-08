@@ -296,6 +296,11 @@ def test_unchanged_certificate_does_not_reload(lineage):
     assert "/etc/letsencrypt" not in " ".join(command)
 
 
+def test_changed_certificate_uses_guarded_reload_only(lineage):
+    state, _, _ = lineage
+    state.changed = True
+    result = r.renew({"quantix_vhost_sha256": sha("SYNTHETIC")}, apply=True)
+    assert result["certificate_changed"] and state.guards == [False, True]
 
 
 
