@@ -397,6 +397,20 @@ def test_pending_certificate_hash_mismatch_fails_before_certbot(lineage):
     assert all(c[0] != "certbot" for c in state.calls)
 
 
+def test_master_change_after_hup_is_an_explicit_failed_postcondition(
+    environment, monkeypatch
+):
+    state, baseline = environment
+    monkeypatch.setattr(g.os, "geteuid", lambda: 0)
+
+    def signal_target(pid, sig):
+        state.sent.append((pid, sig))
+        state.master = 54321
+
+    monkeypatch.setattr(g.os, "kill", signal_target)
+    with pytest.raises(g.GuardError, match="NGINX_MASTER_CHANGED_AFTER_HUP") as exc:
+        g.checked_reload(baseline, baseline["quantix_vhost_sha256"], apply=True)
+    assert exc.value.reload_applied and state.sent == [(12345, signal.SIGHUP)]
 
 
 
