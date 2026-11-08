@@ -504,3 +504,17 @@ def test_nonliteral_or_relative_tls_references_require_inspection(reference):
         g.protected_tls_references(f"server {{ ssl_certificate_key {reference}; }}")
 
 
+def test_only_owned_certbot_references_are_excluded_from_protected_checks():
+    text = """
+    # ssl_certificate_key /synthetic/comment-is-not-a-reference.key;
+    server {
+        ssl_certificate /opt/quantix/certbot/config/live/quantix.raccncode.com/fullchain.pem;
+        ssl_certificate_key /opt/quantix/certbot/config/live/quantix.raccncode.com/privkey.pem;
+        ssl_certificate /synthetic/protected.pem;
+    }
+    """
+    assert g.protected_tls_references(text) == {"/synthetic/protected.pem"}
+    with pytest.raises(g.GuardError, match="TLS_REFERENCE_REQUIRES_INSPECTION"):
+        g.protected_tls_references(
+            "ssl_certificate_key /opt/quantix/certbot/../../protected.key;"
+        )
