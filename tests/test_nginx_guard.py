@@ -459,6 +459,18 @@ def test_world_writable_private_cli_is_rejected_even_if_empty(lineage):
     assert state.guards == [False] and not state.calls
 
 
+def test_newer_protected_certificate_or_key_aborts_before_hup(environment, monkeypatch):
+    state, baseline = environment
+    state.contents[OLD[1]] = (
+        "server { ssl_certificate /synthetic/protected-cert.pem; ssl_certificate_key /synthetic/protected-key.pem; }"
+    )
+    baseline["loaded_file_sha256"][OLD[1]] = sha(state.contents[OLD[1]])
+    monkeypatch.setattr(
+        g, "tls_modified_at", lambda path: 1001 if "key" in path else 900
+    )
+    with pytest.raises(g.GuardError, match="PENDING_PROTECTED_TLS_MATERIAL"):
+        g.checked_reload(baseline, baseline["quantix_vhost_sha256"], apply=True)
+    assert state.sent == []
 
 
 
