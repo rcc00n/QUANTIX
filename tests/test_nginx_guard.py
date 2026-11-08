@@ -413,6 +413,26 @@ def test_master_change_after_hup_is_an_explicit_failed_postcondition(
     assert exc.value.reload_applied and state.sent == [(12345, signal.SIGHUP)]
 
 
+def test_protected_bgm_cannot_pass_by_redirecting_to_owner_site(monkeypatch):
+    class WrongSite:
+        status = 200
+
+        def geturl(self):
+            return "https://raccncode.com/"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(
+        g.urllib.request,
+        "build_opener",
+        lambda *args: SimpleNamespace(open=lambda *a, **k: WrongSite()),
+    )
+    with pytest.raises(g.GuardError, match="PROTECTED_HTTPS_NOT_HEALTHY"):
+        g.protected_https()
 
 
 
