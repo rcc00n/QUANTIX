@@ -162,3 +162,75 @@ class Collector:
             },
         }
 
+    def market_status(self):
+        now = self.utcnow()
+        clock = self.utc_clock.snapshot() if self.utc_clock else {"trusted": False}
+        items = {}
+        for slug, rt in self.runtimes.items():
+            books = [self.cache.get(m.id, now=now) for m in rt.markets]
+            available = [b for b in books if b is not None]
+            classes = Counter(
+                freshness(b, now, self.config, clock)["classification"] for b in available
+            )
+            classes["UNAVAILABLE"] += len(books) - len(available)
+            sources = [b.exchange_timestamp for b in available if b.exchange_timestamp is not None]
+            receive = max((b.received_at for b in available), default=None)
+            state = "UNAVAILABLE" if not available else "DEGRADED"
+            if (
+                available
+                and all(b.state == DataState.HEALTHY for b in available)
+                and not rt.health["error_code"]
+            ):
+                state = "HEALTHY"
+            if available and classes["STALE"] == len(available):
+                state = "STALE"
+            elif classes["STALE"] and state == "HEALTHY":
+                state = "DEGRADED"
+            if not rt.markets:
+                state = "UNAVAILABLE"
+            reasons = Counter(reason for b in available for reason in b.reasons)
+            if not clock.get("trusted"):
+                reasons["UTC_CLOCK_UNTRUSTED"] += 1
+                if state == "HEALTHY":
+                    state = "DEGRADED"
+            items[slug] = {
+                **safe_json(rt.health),
+                "state": state,
+                "status_generated_at": now.isoformat(),
+                "last_status_check_at": now.isoformat(),
+                "last_collector_received_at": receive.isoformat() if receive else None,
+                "last_source_update_at": max(sources).isoformat() if sources else None,
+                "freshness_seconds": age_seconds(now, receive) if clock.get("trusted") else None,
+                "book_age_seconds": distribution(age_seconds(now, b.received_at) for b in available)
+                if clock.get("trusted")
+                else distribution([]),
+                "freshness_counts": dict(classes),
+                "quality_reasons": dict(reasons),
+                "timings": rt.timings.snapshot(),
+                "queue_backlog": sum(s.due <= time.monotonic() for s in rt.schedules.values()),
+                "rate_limit_state": "BACKOFF" if rt.cooldown_until > time.monotonic() else "READY",
+                "ws_last_message_at": rt.ws_last_message_at.isoformat()
+                if rt.ws_last_message_at
+                else None,
+                "ws_synchronized": rt.ws_synchronized,
+                "native_stream": self.native_status(rt, now, clock.get("trusted")),
+                "transport_state": "HEALTHY"
+                if rt.ws_synchronized
+                and rt.ws_last_message_elapsed is not None
+                and elapsed_seconds() - rt.ws_last_message_elapsed
+                <= self.config.websocket_idle_timeout_seconds
+                else "REST"
+                if not rt.health["error_code"]
+                else "DEGRADED",
+                "clock_trusted": bool(clock.get("trusted")),
+                "source": "live_collector",
+                "active_monitored_markets": [m.native_symbol for m in rt.markets],
+            }
+        return {
+            "items": items,
+            "clock": clock,
+            "run_id": str(self.store.run_id),
+            "healthy": self.last_heartbeat > 0 and time.monotonic() - self.last_heartbeat < 30,
+            "status_generated_at": now.isoformat(),
+        }
+
