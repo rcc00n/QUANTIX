@@ -98,6 +98,24 @@ def test_changed_old_instance_fails_before_any_stop(transaction):
     assert not calls
 
 
+@pytest.mark.parametrize("role", ("backend", "collector", "frontend"))
+@pytest.mark.parametrize("mode", ("candidate", "rollback"))
+@pytest.mark.parametrize("release", ("stage8b1", "stage8c"))
+def test_new_release_uses_exact_stage8a1_rollback_and_candidate_tags(
+    monkeypatch, role, mode, release
+):
+    project = "quantix-frontend" if role == "frontend" else "quantix-backend"
+    old = f"{project}:0.7.1-stage8a1"
+    new = f"{project}:0.7.1-{release}"
+    image_ids = {old: "sha256:" + "a" * 64, new: "sha256:" + "b" * 64}
+    current, replacement = (old, new) if mode == "candidate" else (new, old)
+    monkeypatch.setattr(preflight, "docker_data", lambda cmd: image_ids[cmd[-1]])
+    assert (
+        rollout.inspect_images(role, image_ids[current], image_ids[replacement], mode, release)
+        == replacement
+    )
+    with pytest.raises(preflight.CapacityProofError, match="PINNED_IMAGE_TAG_CHANGED"):
+        rollout.inspect_images(role, image_ids[replacement], image_ids[current], mode, release)
 
 
 
