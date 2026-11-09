@@ -306,3 +306,90 @@ class Collector:
             details={"version": row.version, "minimum_liquidity_unit": "native quote volume"},
         )
 
+    def apply_exchange_cooldown(self, runtime, code: str, scheduled_until: float = 0):
+        if code in {"RATE_LIMIT", "ACCESS_DENIED", "PUBLIC_ENDPOINT_REQUIRES_AUTH"}:
+            floor = max(
+                getattr(runtime.connector, "retry_after_seconds", 0),
+                300 if code != "RATE_LIMIT" else 30,
+            )
+            runtime.cooldown_until = max(
+                runtime.cooldown_until, scheduled_until, time.monotonic() + floor
+            )
+
+    async def discover(self, runtime: ExchangeRuntime):
+        # Keep a venue's native full catalog stable until normalization/persistence
+        # and focus publish finish. Other venues continue independently.
+        async with runtime.metadata_lock:
+            await self._discover_locked(runtime)
+
+    async def _discover_locked(self, runtime: ExchangeRuntime):
+        raw_markets = await runtime.connector.discover_spot_markets()
+        tickers = {}
+        # Restrict bulk ticker calls to known single-request public endpoints.
+        if runtime.slug in {
+            "kraken",
+            "ndax",
+            "cryptocom",
+            "bitstamp",
+            "binance",
+            "bybit",
+            "okx",
+            "mexc",
+            "bitget",
+            "htx",
+            "poloniex",
+        }:
+            try:
+                tickers = await runtime.connector.fetch_tickers()
+            except Exception as exc:
+                self.apply_exchange_cooldown(runtime, classify_error(exc))
+                await self.store.event(
+                    runtime.exchange_id,
+                    "collector.liquidity_metadata_unavailable",
+                    "Optional ticker liquidity unavailable; slower book scheduling retained",
+                    "warning",
+                    {"error_code": classify_error(exc)},
+                )
+        markets = []
+        identity_by_symbol = {}
+        malformed = 0
+        for raw in raw_markets:
+            try:
+                markets.append(
+                    normalize_market(
+                        runtime.slug,
+                        raw,
+                        runtime.connector.adapter.currencies,
+                        tickers.get(raw.get("symbol"), {}),
+                        runtime.connector.adapter.precisionMode,
+                        identity_by_symbol=identity_by_symbol,
+                    )
+                )
+            except (ValueError, TypeError, KeyError, ArithmeticError):
+                malformed += 1
+        if not markets:
+            raise ValueError("No valid spot metadata discovered")
+        caps = capabilities(runtime.connector.adapter, raw_markets)
+        # The native tables are still needed for archive capture; the extra spot
+        # list and one-shot ticker map are not needed across database/focus awaits.
+        del raw_markets, tickers, identity_by_symbol
+        runtime.exchange_id = await self.store.register_exchange(
+            runtime.slug, runtime.connector.adapter.name, caps
+        )
+        runtime.catalog = markets
+        selected = self.monitoring_allocation().get(runtime.slug, [])
+        chosen = await self.store.save_markets(runtime.exchange_id, markets, selected)
+        if hasattr(runtime.connector, "archive_metadata"):
+            try:
+                await runtime.connector.archive_metadata()
+            except (ValueError, TypeError):
+                # An unfamiliar native cache shape must not disable a working
+                # market feed or discard any discovery/financial evidence.
+                await self.store.event(
+                    runtime.exchange_id,
+                    "collector.metadata_cache_unoptimized",
+                    "Native metadata retained expanded; cache compaction unavailable",
+                    "warning",
+                )
+        await self._apply_selection_locked(runtime, chosen)
+
