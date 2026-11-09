@@ -504,3 +504,33 @@ class Collector:
         if runtime.slug in NATIVE_PROTOCOLS:
             await self.configure_native(runtime)
 
+    def retire_native(self, runtime, *, fallback=True):
+        runtime.native_integrity_epoch += 1
+        runtime.native_synchronized = frozenset()
+        runtime.ws_synchronized = False
+        runtime.ws_last_message_elapsed = None
+        now = time.monotonic()
+        source = f"{runtime.slug}_ws"
+        for offset, market in enumerate(runtime.native_symbols.values()):
+            market_id = market.id
+            book = self.cache.books.get(market_id)
+            if book and book.source == source:
+                revoked = book.classified(
+                    DataState.STALE,
+                    reasons=tuple(dict.fromkeys((*book.reasons, "stream_unsynchronized"))),
+                )
+                self.cache.books[market_id] = revoked
+                if self.scanner:
+                    self.scanner.changed(revoked)
+            schedule = runtime.schedules.get(market_id)
+            if fallback and runtime.ws_last.pop(market_id, None) is not None and schedule:
+                if schedule.failures == 0 and schedule.due > now:
+                    schedule.due = max(
+                        runtime.cooldown_until,
+                        min(
+                            schedule.due,
+                            now + offset * self.config.minimum_request_interval_seconds,
+                        ),
+                    )
+        runtime.ws_last.clear()
+
