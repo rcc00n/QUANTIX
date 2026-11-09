@@ -264,3 +264,45 @@ class Collector:
             quality,
         )
 
+    async def reload_terminal_preferences(self):
+        from arbiq.db.models import User
+        from arbiq.settings.terminal import read_effective_terminal
+
+        async with self.store.sessions() as db:
+            owner = await db.scalar(
+                select(User.id).where(User.username == self.settings.admin_username)
+            )
+            if owner is None:
+                return
+            row, settings = await read_effective_terminal(db, owner)
+        if not row or row.version == self.applied_terminal_version:
+            return  # Environment defaults remain effective until an actual owner save.
+        prefs = settings.market
+        self.config = CollectorConfig.model_validate(
+            {
+                **self.settings.collector.model_dump(),
+                "base_assets": list(prefs.enabled_assets),
+                "quote_assets": list(prefs.preferred_quote_currencies),
+                "prefer_cad": prefs.cad_focused,
+                "maximum_age_seconds": prefs.maximum_age_seconds,
+                "minimum_quote_volume": prefs.minimum_liquidity,
+                "max_markets_per_exchange": prefs.maximum_markets_per_exchange,
+            }
+        )
+        self.cache.config = self.config
+        self.cache.limit = len(self.runtimes) * self.config.max_markets_per_exchange
+        if self.scanner:
+            self.scanner.config = self.scanner.config.model_copy(
+                update={
+                    "maximum_book_age_seconds": prefs.maximum_age_seconds,
+                }
+            )
+        self.terminal_market_preferences = prefs.model_dump(mode="json")
+        self.applied_terminal_version = row.version
+        await self.store.event(
+            None,
+            "collector.settings_applied",
+            "Owner market coverage settings applied",
+            details={"version": row.version, "minimum_liquidity_unit": "native quote volume"},
+        )
+
