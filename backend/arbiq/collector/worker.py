@@ -393,3 +393,114 @@ class Collector:
                 )
         await self._apply_selection_locked(runtime, chosen)
 
+    async def apply_selection(self, runtime, chosen):
+        async with runtime.metadata_lock:
+            await self._apply_selection_locked(runtime, chosen)
+
+    async def _apply_selection_locked(self, runtime, chosen):
+        selected_ids = {market.id for market in chosen}
+        missing = selected_ids - self.cache.books.keys() - self.cache.watermarks.keys()
+        watermarks = None
+        if missing and hasattr(self.store, "latest_watermarks"):
+            watermarks = await self.store.latest_watermarks(missing)
+        if hasattr(runtime.connector, "focus_metadata"):
+            await runtime.connector.focus_metadata([market.native_symbol for market in chosen])
+
+        # The exchange loop reads these together. Keep the prior selection until
+        # async preparation finishes, then install all runtime state without an await.
+        previous = set(runtime.schedules)
+        if isinstance(watermarks, dict):
+            self.cache.seed_watermarks(watermarks)
+        runtime.schedules = {
+            market.id: runtime.schedules.get(market.id, Schedule()) for market in chosen
+        }
+        runtime.markets = chosen
+        runtime.confirmation.intersection_update(selected_ids)
+        monitored = self.monitored_ids()
+        for key in list(self.confirmation_enqueued):
+            if key not in monitored:
+                self.confirmation_enqueued.pop(key, None)
+        for mapping in (runtime.ws_last, runtime.ws_published, runtime.last_confirmation):
+            for key in list(mapping):
+                if key not in selected_ids:
+                    mapping.pop(key)
+        self.cache.retain(monitored)
+        self.store.retain_runtime_keys(monitored)
+        runtime.discovery.success(self.config.discovery_interval_seconds)
+        now = self.utcnow()
+        runtime.health.update(
+            market_count=len(runtime.catalog),
+            cad_market_count=sum(m.quote.symbol == "CAD" for m in runtime.catalog),
+            monitored_count=len(chosen),
+            last_discovery_at=now,
+            updated_at=now,
+            error_code=None,
+            state="DEGRADED",
+            consecutive_failures=0,
+            next_retry_at=None,
+        )
+        await self.store.event(
+            runtime.exchange_id,
+            "exchange.markets_discovered",
+            "Spot markets dynamically discovered",
+            details={
+                "spot_markets": len(runtime.catalog),
+                "monitored": len(chosen),
+                "allocation": "cross_venue_intersections",
+            },
+        )
+        if not chosen:
+            runtime.health["error_code"] = "NO_MARKETS_MATCH_FILTERS"
+        if (
+            runtime.slug == "kraken"
+            and runtime.slug in self.config.websocket_exchanges
+            and set(runtime.schedules) != previous
+        ):
+            if runtime.ws_task:
+                runtime.ws_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await runtime.ws_task
+            if chosen:
+                by_symbol = {m.native_symbol: m for m in chosen}
+
+                async def on_book(symbol, raw):
+                    market = by_symbol[symbol]
+                    if market.id not in runtime.schedules:
+                        return
+                    now_mono = time.monotonic()
+                    runtime.ws_last[market.id] = now_mono
+                    if (
+                        now_mono - runtime.ws_published.get(market.id, -1000)
+                        < self.config.websocket_publish_interval_seconds
+                    ):
+                        return
+                    runtime.ws_published[market.id] = now_mono
+                    now = self.utcnow()
+                    received = raw.get("_collector_received_at") or now
+                    await self.accept(runtime, market, raw, received, received, None, "kraken_ws")
+                    runtime.health["connection_mode"] = "WebSocket + REST"
+
+                async def on_error(code, reconnects):
+                    runtime.health.update(connection_mode="REST fallback", reconnects=reconnects)
+                    runtime.ws_last.clear()
+                    runtime.ws_synchronized = False
+                    await self.store.event(
+                        runtime.exchange_id,
+                        "exchange.websocket_resync",
+                        "WebSocket stream requires fresh snapshot; REST fallback active",
+                        "warning",
+                        {"error_code": code},
+                    )
+
+                async def on_message(synchronized):
+                    runtime.ws_last_message_at = self.utcnow()
+                    runtime.ws_last_message_elapsed = elapsed_seconds()
+                    runtime.ws_synchronized = synchronized
+
+                stream = KrakenStream(
+                    self.config, on_book, on_error, on_message=on_message, utcnow=self.utcnow
+                )
+                runtime.ws_task = asyncio.create_task(stream.run(list(by_symbol), self.stop))
+        if runtime.slug in NATIVE_PROTOCOLS:
+            await self.configure_native(runtime)
+
