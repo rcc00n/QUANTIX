@@ -234,3 +234,33 @@ class Collector:
             "status_generated_at": now.isoformat(),
         }
 
+    def monitoring_allocation(self):
+        relevance = {}
+        market_by_id = {str(m.id): m for rt in self.runtimes.values() for m in rt.markets}
+        if self.scanner:
+            for route in self.scanner.current.values():
+                if route["status"] in {"RESEARCH_ONLY", "VERIFIED_MARKET", "RECHECKING"}:
+                    inputs = route.get("evidence", {}).get("calculation_inputs", {})
+                    for side in ("buy", "sell"):
+                        market = market_by_id.get(inputs.get(side, {}).get("market_id"))
+                        if market:
+                            key = (market.base.key, market.quote.key)
+                            relevance[key] = relevance.get(key, 0) + 1
+        quality = {
+            (book.exchange, book.symbol): self.cache.get(book.market_id).state.value
+            for book in self.cache.books.values()
+        }
+        catalogs = {slug: rt.catalog for slug, rt in self.runtimes.items()}
+        if self.terminal_market_preferences:
+            allowed = self.terminal_market_preferences["enabled_exchanges"]
+            catalogs = {
+                slug: rows if not allowed or slug in allowed else []
+                for slug, rows in catalogs.items()
+            }
+        return allocate(
+            catalogs,
+            self.config,
+            relevance,
+            quality,
+        )
+
