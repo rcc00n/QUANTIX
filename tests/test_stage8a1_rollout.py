@@ -89,6 +89,13 @@ def test_failed_gate_preserves_original_only_with_proven_restart_headroom(
     assert len(calls) == (2 if can_resume else 1)
 
 
+def test_changed_old_instance_fails_before_any_stop(transaction):
+    args, outcome, calls = transaction
+    args.current_container_id = "c" * 64
+    with pytest.raises(preflight.CapacityProofError, match="ORIGINAL_DEPLOYED_INSTANCE_CHANGED"):
+        rollout.replace(args, outcome)
+    assert outcome["state"] == "UNCHANGED"
+    assert not calls
 
 
 
