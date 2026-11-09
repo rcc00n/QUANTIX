@@ -96,3 +96,69 @@ class ExchangeRuntime:
     transport_counts: Counter = field(default_factory=Counter)
 
 
+class Collector:
+    def __init__(self, settings: Settings, store: CollectorStore):
+        self.settings = settings
+        self.config: CollectorConfig = settings.collector
+        self.store = store
+        self.stop = asyncio.Event()
+        self.gate = asyncio.Semaphore(self.config.max_concurrency)
+        self.metadata_gate = asyncio.Semaphore(max(1, min(2, self.config.max_concurrency - 1)))
+        self.cache = BookCache(self.config)
+        self.clock = ClockGuard(self.config.maximum_future_skew_seconds)
+        self.runtimes: dict[str, ExchangeRuntime] = {}
+        self.tasks: list[asyncio.Task] = []
+        self.last_heartbeat = 0.0
+        self.ingestion_index = 0
+        self.confirmation_queue = asyncio.Queue(maxsize=32)
+        self.utc_clock = None
+        self.scanner = None
+        self.paper = None
+        self.allocation_lock = asyncio.Lock()
+        self.telemetry = ProcessTelemetry()
+        self.api_latencies = deque(maxlen=600)
+        self.applied_terminal_version = 0
+        self.terminal_market_preferences = None
+        self.memory_maintenance = None
+        self.timings = Timings()
+        self.confirmation_enqueued = {}
+
+    def utcnow(self):
+        return self.utc_clock.utcnow() if self.utc_clock else datetime.now(UTC)
+
+    async def synchronize_clock(self):
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(limit=4)) as client:
+            while not self.stop.is_set():
+                await self.utc_clock.synchronize(client)
+                try:
+                    await asyncio.wait_for(self.stop.wait(), 30)
+                except TimeoutError:
+                    pass
+
+    def monitored_ids(self):
+        return {market.id for rt in self.runtimes.values() for market in rt.markets}
+
+    def native_status(self, runtime, now, clock_trusted):
+        stream = runtime.native_stream
+        fast = {m.id for m in runtime.native_symbols.values()} | set(runtime.ws_last)
+        books = [self.cache.get(m.id, now=now) for m in runtime.native_symbols.values()]
+        streamed = [b for b in books if b is not None and b.source == f"{runtime.slug}_ws"]
+        return {
+            "subscribed": sorted(runtime.native_symbols),
+            "synchronized": len(runtime.native_synchronized),
+            "cached_stream_books": len(streamed),
+            "valid_cached_stream_books": sum(
+                b.market_id in runtime.native_synchronized
+                and b.state in {DataState.HEALTHY, DataState.DEGRADED}
+                for b in streamed
+            ),
+            "book_age_seconds": distribution(
+                age_seconds(now, b.received_at) for b in streamed if clock_trusted
+            ),
+            "last_error": runtime.native_last_error,
+            "counters": {**(stream.counts if stream else {}), **runtime.transport_counts},
+            "market_tiers": {
+                m.native_symbol: tier(m, self.config.priority_assets, fast) for m in runtime.markets
+            },
+        }
+
