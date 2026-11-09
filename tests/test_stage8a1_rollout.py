@@ -66,6 +66,27 @@ def test_stops_only_exact_container_then_starts_one_role_if_gate_passes(monkeypa
     assert len(calls) == 3
 
 
+@pytest.mark.parametrize("can_resume", [True, False])
+def test_failed_gate_preserves_original_only_with_proven_restart_headroom(
+    monkeypatch, transaction, can_resume
+):
+    args, outcome, calls = transaction
+    monkeypatch.setattr(
+        preflight,
+        "replacement_preflight",
+        lambda *_: {
+            "single_role_start_gate": False,
+            "gates": {
+                "complete_post_stop_memory_window": True,
+                "reserve_and_startup_preserved": can_resume,
+            },
+        },
+    )
+    with pytest.raises(preflight.CapacityProofError):
+        rollout.replace(args, outcome)
+    assert outcome["state"] == ("ORIGINAL_RESTORED" if can_resume else "ORIGINAL_STOPPED")
+    assert all("up" not in call for call in calls)
+    assert len(calls) == (2 if can_resume else 1)
 
 
 
