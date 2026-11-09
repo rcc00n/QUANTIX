@@ -118,6 +118,15 @@ def test_new_release_uses_exact_stage8a1_rollback_and_candidate_tags(
         rollout.inspect_images(role, image_ids[replacement], image_ids[current], mode, release)
 
 
+@pytest.mark.parametrize("release", ("stage8b1", "stage8c"))
+def test_new_release_cannot_restart_the_active_notification_consumer(transaction, release):
+    args, outcome, calls = transaction
+    args.release = release
+    args.role = "notifications"
+    with pytest.raises(preflight.CapacityProofError, match="ROLE_NOT_APPROVED_FOR_RELEASE"):
+        rollout.replace(args, outcome)
+    assert outcome["state"] == "UNCHANGED"
+    assert not calls
 
 
 
