@@ -129,5 +129,13 @@ def test_new_release_cannot_restart_the_active_notification_consumer(transaction
     assert not calls
 
 
+def test_stage8b1_notification_pin_rejects_image_drift(monkeypatch):
+    pinned = "sha256:" + "a" * 64
+    snapshot = {"owned": {"notifications": {"image_id": pinned}}}
+    monkeypatch.setattr(preflight, "docker_data", lambda _cmd: pinned)
+    rollout.verify_notification_pin(snapshot)
+    snapshot["owned"]["notifications"]["image_id"] = "sha256:" + "b" * 64
+    with pytest.raises(preflight.CapacityProofError, match="UNCHANGED_NOTIFICATION_IMAGE_MISMATCH"):
+        rollout.verify_notification_pin(snapshot)
 
 
