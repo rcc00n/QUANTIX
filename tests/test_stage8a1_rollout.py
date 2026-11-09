@@ -139,3 +139,37 @@ def test_stage8b1_notification_pin_rejects_image_drift(monkeypatch):
         rollout.verify_notification_pin(snapshot)
 
 
+def test_full_export_worker_lock_blocks_maintenance_without_touching_archive(monkeypatch, tmp_path):
+    mount = tmp_path / "export_volume"
+    nested = mount / "quantix-full-exports"
+    nested.mkdir(parents=True)
+    archive = nested / "synthetic-completed-export.zip"
+    archive.write_bytes(b"SYNTHETIC fixture content")
+    backend = {
+        "Id": "a" * 64,
+        "Mounts": [
+            {
+                "Type": "volume",
+                "Name": "quantix_export_temp",
+                "Source": str(mount),
+                "Destination": "/var/tmp/quantix-export",
+            }
+        ],
+    }
+    volume = {
+        "Mountpoint": str(mount),
+        "Labels": {"com.docker.compose.project": "quantix"},
+    }
+
+    def docker_data(command):
+        if command[0] == "volume":
+            return json.dumps([volume])
+        assert command[:2] == ["exec", backend["Id"]]
+        return ""
+
+    monkeypatch.setattr(preflight, "docker_data", docker_data)
+    with (nested / ".worker.lock").open("w") as busy, ExitStack() as cleanup:
+        fcntl.flock(busy.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(preflight.CapacityProofError, match="FULL_EXPORT_IN_PROGRESS"):
+            rollout.export_lock([backend], backend["Id"], cleanup)
+    assert archive.read_bytes() == b"SYNTHETIC fixture content"
