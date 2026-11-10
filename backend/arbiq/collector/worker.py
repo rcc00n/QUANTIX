@@ -619,3 +619,28 @@ class Collector:
         )
         runtime.ws_task = asyncio.create_task(runtime.native_stream.run(list(selected), self.stop))
 
+    def native_book_fresh(self, runtime, market_id, now):
+        if (
+            not self.utc_clock
+            or not self.utc_clock.trusted
+            or market_id not in runtime.native_synchronized
+            or runtime.ws_last_message_elapsed is None
+            or elapsed_seconds() - runtime.ws_last_message_elapsed
+            > self.config.websocket_idle_timeout_seconds
+        ):
+            return False
+        book = self.cache.get(market_id, now=now)
+        if (
+            not book
+            or book.source != f"{runtime.slug}_ws"
+            or book.state not in {DataState.HEALTHY, DataState.DEGRADED}
+            or book.exchange_timestamp is None
+        ):
+            return False
+        # Quiet markets retain their quote ages and receive a paced REST
+        # verification before the owner's age limit. Heartbeats cannot renew them.
+        age = (now - min(book.received_at, book.exchange_timestamp)).total_seconds()
+        return (
+            0 <= age < min(self.config.freshness_stale_seconds, self.config.maximum_age_seconds / 2)
+        )
+
