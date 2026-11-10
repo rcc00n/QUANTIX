@@ -121,6 +121,56 @@ def settings(config):
     )
 
 
+async def test_exchange_keeps_polling_the_prior_selection_while_watermarks_load():
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    slug = "synthetic-venue"
+    previous, selected = [
+        replace(normalize_market(slug, synthetic_market(base), {}, precision_mode=4), id=uuid4())
+        for base in ("BTC", "ETH")
+    ]
+    now = datetime.now(UTC)
+
+    async def latest_watermarks(ids):
+        assert ids == {selected.id}
+        entered.set()
+        await release.wait()
+        return {selected.id: (now, now)}
+
+    store = SimpleNamespace(
+        latest_watermarks=latest_watermarks,
+        register_exchange=AsyncMock(return_value=uuid4()),
+        event=AsyncMock(),
+        retain_runtime_keys=Mock(),
+    )
+    collector = Collector(settings(CollectorConfig()), store)
+    connector = SimpleNamespace(
+        adapter=SimpleNamespace(id=slug, name="SYNTHETIC venue", has={}),
+        close=AsyncMock(),
+    )
+    runtime = ExchangeRuntime(
+        slug, connector, markets=[previous], schedules={previous.id: Schedule()}
+    )
+    runtime.discovery.due = float("inf")
+    collector.runtimes[slug] = runtime
+
+    async def fetch(active_runtime, market):
+        assert active_runtime.schedules[market.id].due == 0
+        assert market.id == previous.id
+        collector.stop.set()
+
+    collector.fetch = AsyncMock(side_effect=fetch)
+    selection = asyncio.create_task(collector.apply_selection(runtime, [selected]))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.wait_for(collector.run_exchange(slug), 2)
+        collector.fetch.assert_awaited_once_with(runtime, previous)
+    finally:
+        release.set()
+        await asyncio.wait_for(selection, 2)
+    assert runtime.markets == [selected]
+    assert set(runtime.schedules) == {selected.id}
+    assert collector.cache.watermarks[selected.id] == (now, now)
 
 
 
