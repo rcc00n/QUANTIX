@@ -644,3 +644,132 @@ class Collector:
             0 <= age < min(self.config.freshness_stale_seconds, self.config.maximum_age_seconds / 2)
         )
 
+    async def accept(
+        self, runtime, market, raw, received, started, latency, source, confirmation=False
+    ):
+        processing_started = elapsed_seconds()
+        selection = runtime.schedules.get(market.id)
+        if self.terminal_market_preferences:
+            allowed = self.terminal_market_preferences["enabled_exchanges"]
+            if (allowed and runtime.slug not in allowed) or market.id not in runtime.schedules:
+                await self.store.event(
+                    runtime.exchange_id,
+                    "collector.late_deselected_response",
+                    "Late response arrived after this market was deselected",
+                    details={"market_id": str(market.id), "source": source},
+                )
+                return
+        if latency is not None and source == "rest" and 0 <= latency < 300000:
+            self.api_latencies.append(latency)
+        book = validate_book(
+            raw,
+            market_id=market.id,
+            exchange=runtime.slug,
+            symbol=market.native_symbol,
+            base_key=market.base.key,
+            quote_key=market.quote.key,
+            received_at=received,
+            request_started_at=started,
+            latency_ms=latency,
+            config=self.config,
+            source=source,
+            identity_verified=market.base.verified and market.quote.verified,
+            active_verified=market.active is True,
+            clock_healthy=self.utc_clock.trusted if self.utc_clock else self.clock.healthy,
+        )
+        self.ingestion_index += 1
+        pipeline = {
+            **(getattr(runtime.connector, "last_timing", {}) if source == "rest" else {}),
+            "collector_received_at": received.isoformat(),
+            "collector_processed_at": self.utcnow().isoformat(),
+            "validation_ms": (elapsed_seconds() - processing_started) * 1000,
+            "stream_parse_ms": raw.get("_stream_parse_ms") if isinstance(raw, dict) else None,
+            "stream_queue_ms": raw.get("_stream_queue_ms") if isinstance(raw, dict) else None,
+        }
+        book = book.model_copy(update={"ingestion_index": self.ingestion_index}).with_pipeline(
+            **pipeline
+        )
+        if self.utc_clock:
+            book = book.model_copy(
+                update={"verification": {**book.verification, "clock": self.utc_clock.snapshot()}}
+            )
+        rejection = self.cache.rejection_reason(book)
+        candidate = book
+        book = self.cache.put(book, confirmation=confirmation)
+        if rejection:
+            await self.store.event(
+                runtime.exchange_id,
+                "collector.update_rejected",
+                "Observation retained as rejected evidence; current cache preserved",
+                "warning",
+                {
+                    "reason": rejection,
+                    "market_id": str(market.id),
+                    "rejected": candidate.model_dump(mode="json"),
+                },
+            )
+            return None
+        book = book.with_pipeline(cache_updated_at=self.utcnow().isoformat())
+        self.cache.books[book.market_id] = book
+        # Publish the changed immutable cache observation before a throttled DB write.
+        if self.scanner:
+            self.scanner.changed(book)
+        persistence_started = elapsed_seconds()
+        persisted = await self.store.save_book(book, force=confirmation)
+        persistence_ms = (elapsed_seconds() - persistence_started) * 1000
+        if persisted is True:
+            self.timings.add("persistence_commit_ms", persistence_ms)
+            if self.cache.books.get(book.market_id) is book:
+                book = book.with_pipeline(
+                    persisted_at=self.utcnow().isoformat(), persistence_commit_ms=persistence_ms
+                )
+                self.cache.books[book.market_id] = book
+        for name in (
+            "validation_ms",
+            "request_ms",
+            "http_body_ms",
+            "adapter_parse_ms",
+            "pacing_wait_ms",
+            "connector_queue_ms",
+            "global_queue_ms",
+            "stream_parse_ms",
+            "stream_queue_ms",
+        ):
+            runtime.timings.add(name, pipeline.get(name))
+        if source.endswith("_ws") and book.exchange_timestamp and self.utc_clock:
+            if self.utc_clock.trusted:
+                runtime.timings.add(
+                    "stream_source_receive_ms",
+                    (received - book.exchange_timestamp).total_seconds() * 1000,
+                )
+        if self.paper:
+            await self.paper.observe(book)
+        if selection is not None and runtime.schedules.get(market.id) is not selection:
+            # The already accepted observation remains historical evidence, while
+            # retired work must not overwrite the current connector status.
+            return book
+        structurally_available = bool(book.normalized.bids and book.normalized.asks) and not any(
+            reason.startswith("invalid_")
+            or reason.startswith("unordered_")
+            or reason == "symbol_mismatch"
+            for reason in book.reasons
+        )
+        if structurally_available:
+            runtime.health.update(
+                last_success_at=max(received, runtime.health["last_success_at"] or received),
+                updated_at=self.utcnow(),
+                error_code=None,
+                consecutive_failures=0,
+                next_retry_at=None,
+            )
+        else:
+            runtime.health.update(updated_at=received, error_code="INVALID_BOOK")
+            runtime.health["failed_requests"] += 1
+        runtime.health["successful_requests"] += 1
+        if latency is not None:
+            runtime.health["latency_ms"] = latency
+        if book.state == DataState.SUSPICIOUS:
+            # Automatically request a fresh REST recheck, bounded and deduplicated.
+            self.request_confirmation(market.id)
+        return book
+
