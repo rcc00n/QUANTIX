@@ -63,6 +63,53 @@ def test_native_checksum_snapshot_delta_and_resynchronization():
     sequence.accept(501)
 
 
+async def test_native_websocket_disconnect_reconnects_with_new_snapshot(monkeypatch):
+    stop = asyncio.Event()
+    attempts = 0
+    received = []
+    errors = []
+
+    class Socket:
+        def __init__(self, number):
+            self.number = number
+
+        async def send(self, value):
+            assert json.loads(value)["params"]["snapshot"] is True
+
+        async def recv(self):
+            if self.number == 1:
+                raise OSError("SYNTHETIC disconnect")
+            return json.dumps(
+                {
+                    "channel": "book",
+                    "type": "snapshot",
+                    "data": [synthetic_ws_snapshot()],
+                }
+            )
+
+    class Connection:
+        async def __aenter__(self):
+            nonlocal attempts
+            attempts += 1
+            return Socket(attempts)
+
+        async def __aexit__(self, *args):
+            return False
+
+    monkeypatch.setattr(kraken_ws, "connect", lambda *args, **kwargs: Connection())
+    monkeypatch.setattr(kraken_ws, "retry_delay", lambda *args, **kwargs: 0)
+
+    async def on_book(symbol, book):
+        received.append((symbol, book))
+        stop.set()
+
+    async def on_error(code, reconnects):
+        errors.append((code, reconnects))
+
+    stream = KrakenStream(CollectorConfig(), on_book, on_error)
+    await asyncio.wait_for(stream.run(["BTC/USD"], stop), 2)
+    assert attempts == 2 and len(received) == 1
+    assert errors == [("WS_DISCONNECTED", 1)]
 
 
 def settings(config):
