@@ -1481,3 +1481,50 @@ class Collector:
                 raise RuntimeError("Collector task failed; process restart required")
 
 
+async def main():
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    if len(settings.collector_internal_token.get_secret_value()) < 32:
+        raise RuntimeError("Generate COLLECTOR_INTERNAL_TOKEN before starting the collector")
+    engine = create_async_engine(
+        settings.database_url.get_secret_value(),
+        pool_pre_ping=True,
+        # One singleton lease plus one warm transaction; four total connections
+        # remain available during bursts, with no reduction in query concurrency.
+        pool_size=2,
+        max_overflow=2,
+        pool_use_lifo=True,
+        hide_parameters=True,
+        connect_args={"server_settings": {"timezone": "UTC"}},
+    )
+    store = CollectorStore(async_sessionmaker(engine, expire_on_commit=False), settings.collector)
+    worker = Collector(settings, store)
+    loop = asyncio.get_running_loop()
+    for name in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(name, worker.stop.set)
+    try:
+        if not settings.collector.enabled:
+            log.info("collector_disabled")
+            await worker.serve()
+            return
+        async with engine.connect() as lease:
+            if (
+                await lease.scalar(text("SELECT version_num FROM alembic_version"))
+                != EXPECTED_SCHEMA_REVISION
+            ):
+                raise RuntimeError("Migrate database before starting collector")
+            if not await lease.scalar(text("SELECT pg_try_advisory_lock(731093)")):
+                raise RuntimeError("A collector already owns this database")
+            await lease.commit()
+            await store.start(f"{socket.gethostname()}:{uuid4()}")
+            try:
+                await worker.run(lease)
+            finally:
+                await store.stop()
+                await lease.execute(text("SELECT pg_advisory_unlock(731093)"))
+    finally:
+        await engine.dispose()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
