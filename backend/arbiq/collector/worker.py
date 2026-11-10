@@ -1000,3 +1000,105 @@ class Collector:
                     await runtime.ws_task
             await runtime.connector.close()
 
+    async def housekeeping(self, lease):
+        previous_states = {}
+        prune_due = 0.0
+        allocation_due = 0.0
+        memory_due = time.monotonic() + 60
+        while not self.stop.is_set():
+            await lease.execute(text("SELECT 1"))  # Losing singleton ownership is fatal.
+            await lease.commit()  # Keep the session lock without an idle transaction.
+            self.clock.check(wall=self.utcnow())
+            if time.monotonic() >= allocation_due and self.scanner:
+                await self.reload_terminal_preferences()
+                async with self.allocation_lock:
+                    selected = self.monitoring_allocation()
+                    for slug, chosen in selected.items():
+                        rt = self.runtimes[slug]
+                        if rt.exchange_id and {m.native_symbol for m in chosen} != {
+                            m.native_symbol for m in rt.markets
+                        }:
+                            identified = await self.store.set_selection(rt.exchange_id, chosen)
+                            await self.apply_selection(rt, identified)
+                    for slug in NATIVE_PROTOCOLS.keys() & self.runtimes.keys():
+                        await self.configure_native(self.runtimes[slug])
+                allocation_due = time.monotonic() + 60
+            if not self.clock.healthy:
+                await self.store.event(
+                    None, "collector.clock_jump", "Collector wall-clock drift detected", "warning"
+                )
+            while not self.confirmation_queue.empty():
+                slug, market_id = self.confirmation_queue.get_nowait()
+                runtime = self.runtimes[slug]
+                if market_id in runtime.schedules and market_id in runtime.confirmation:
+                    # Respect existing timeout/rate-limit backoff even for manual rechecks.
+                    schedule = runtime.schedules[market_id]
+                    if schedule.failures == 0:
+                        schedule.due = 0
+                self.confirmation_queue.task_done()
+            counts = {state.value: 0 for state in DataState}
+            for book in self.cache.books.values():
+                current = self.cache.get(book.market_id)
+                counts[current.state.value] += 1
+            now = self.utcnow()
+            for runtime in self.runtimes.values():
+                if runtime.exchange_id is None:
+                    continue
+                health = runtime.health.copy()
+                if health["last_success_at"] is None:
+                    state = "UNAVAILABLE" if health["error_code"] else "DEGRADED"
+                elif (
+                    now - health["last_success_at"]
+                ).total_seconds() > self.config.maximum_age_seconds:
+                    state = "STALE"
+                else:
+                    states = [
+                        self.cache.get(m.id).state for m in runtime.markets if self.cache.get(m.id)
+                    ]
+                    state = (
+                        "HEALTHY"
+                        if states
+                        and all(s == DataState.HEALTHY for s in states)
+                        and not health["error_code"]
+                        else "DEGRADED"
+                    )
+                health.update(state=state, updated_at=now)
+                runtime.health.update(state=state, updated_at=now)
+                await self.store.health(runtime.exchange_id, health)
+                if previous_states.get(runtime.slug) != state:
+                    await self.store.event(
+                        runtime.exchange_id,
+                        "exchange.connectivity_changed",
+                        "Exchange public-data connectivity changed",
+                        "info" if state == "HEALTHY" else "warning",
+                        {"state": state, "error_code": health["error_code"]},
+                    )
+                    previous_states[runtime.slug] = state
+            await self.store.heartbeat(
+                {
+                    "monitored_books": len(self.cache.books),
+                    "quality_counts": counts,
+                    "configured_exchanges": len(self.runtimes),
+                    "pipeline_timings": self.timings.snapshot(),
+                    "rejected_updates": dict(self.cache.rejected_updates),
+                    "feed_timing_summary": {
+                        slug: rt.timings.snapshot() for slug, rt in self.runtimes.items()
+                    },
+                    "clock_healthy": self.utc_clock.trusted if self.utc_clock else False,
+                    "clock": self.utc_clock.snapshot() if self.utc_clock else {},
+                    "engine": self.scanner.diagnostics() if self.scanner else {},
+                    "paper": self.paper.diagnostics() if self.paper else {},
+                }
+            )
+            self.last_heartbeat = time.monotonic()
+            if time.monotonic() >= memory_due:
+                self.memory_maintenance = await asyncio.to_thread(reclaim_unused_pages)
+                memory_due = time.monotonic() + self.config.memory_maintenance_interval_seconds
+            if time.monotonic() >= prune_due:
+                await self.store.prune()
+                prune_due = time.monotonic() + 3600
+            try:
+                await asyncio.wait_for(self.stop.wait(), 5)
+            except TimeoutError:
+                pass
+
