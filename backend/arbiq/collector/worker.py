@@ -1102,3 +1102,317 @@ class Collector:
             except TimeoutError:
                 pass
 
+    async def serve(self):
+        import hmac
+
+        token = self.settings.collector_internal_token.get_secret_value()
+
+        async def health(request):
+            ready = (
+                (self.last_heartbeat > 0 or not self.config.enabled)
+                and (not self.config.enabled or time.monotonic() - self.last_heartbeat < 30)
+                and not self.stop.is_set()
+            )
+            return web.json_response(
+                {"status": "ready" if ready else "not_ready", "mode": "paper"},
+                status=200 if ready else 503,
+            )
+
+        @web.middleware
+        async def authenticate(request, handler):
+            if request.path != "/health" and (
+                not token
+                or not hmac.compare_digest(
+                    request.headers.get("Authorization", "").encode(), f"Bearer {token}".encode()
+                )
+            ):
+                return web.json_response({"detail": "Internal authentication required"}, status=401)
+            return await handler(request)
+
+        async def book(request):
+            try:
+                market_id = UUID(request.match_info["market_id"])
+            except ValueError:
+                return web.json_response({"detail": "Invalid market ID"}, status=422)
+            value = self.cache.get(market_id)
+            if value is None:
+                return web.json_response({"detail": "No collected book available"}, status=404)
+            return web.json_response(value.model_dump(mode="json"))
+
+        async def confirm(request):
+            try:
+                market_id = UUID(request.match_info["market_id"])
+            except ValueError:
+                return web.json_response({"detail": "Invalid market ID"}, status=422)
+            result = self.request_confirmation(market_id)
+            return web.json_response(
+                {"status": result},
+                status=202 if result == "QUEUED" else 409 if result == "NOT_MONITORED" else 429,
+            )
+
+        async def diagnostics(request):
+            return web.json_response(
+                self.scanner.diagnostics() if self.scanner else {"healthy": False}
+            )
+
+        async def current_routes(request):
+            values = list(self.scanner.current.values()) if self.scanner else []
+            if request.query.get("route_id"):
+                values = [x for x in values if x["id"] == request.query["route_id"]]
+            elif request.query.get("route_ids"):
+                ids = set(request.query["route_ids"].split(","))
+                if len(ids) > 50:
+                    return web.json_response({"detail": "At most50route IDs"}, status=422)
+                values = [x for x in values if x["id"] in ids]
+            if request.query.get("summary") == "1":
+                summarized = []
+                for value in values[:500]:
+                    evidence = value.get("evidence", {})
+                    inputs = evidence.get("calculation_inputs", {})
+                    small_inputs = {"evaluated_at": inputs.get("evaluated_at")}
+                    for side in ("buy", "sell"):
+                        leg = inputs.get(side, {})
+                        fx = leg.get("fx") or {}
+                        small_inputs[side] = {
+                            "quote_currency": leg.get("quote_currency"),
+                            "fx": {"fresh_until": fx.get("fresh_until")},
+                        }
+                    summarized.append(
+                        {
+                            **{
+                                k: v
+                                for k, v in value.items()
+                                if k not in ("evidence", "budget_results", "transfer_scenario")
+                            },
+                            "evidence": {
+                                "buy_quality": evidence.get("buy_quality"),
+                                "sell_quality": evidence.get("sell_quality"),
+                                "calculation_inputs": small_inputs,
+                            },
+                        }
+                    )
+                values = summarized
+            return web.json_response(
+                {
+                    "items": values[:500],
+                    "diagnostics": self.scanner.diagnostics()
+                    if self.scanner
+                    else {"healthy": False},
+                }
+            )
+
+        async def clock_status(request):
+            return web.json_response(
+                self.utc_clock.snapshot() if self.utc_clock else {"trusted": False}
+            )
+
+        async def route_recheck(request):
+            from arbiq.db.models import ArbitrageRoute
+
+            try:
+                route_id = UUID(request.match_info["route_id"])
+            except ValueError:
+                return web.json_response({"detail": "Invalid ID"}, status=422)
+            async with self.store.sessions() as db:
+                route = await db.get(ArbitrageRoute, route_id)
+                if route is None:
+                    return web.json_response({"detail": "Route unavailable"}, status=404)
+                outcomes = [
+                    self.request_confirmation(x)
+                    for x in (route.buy_market_id, route.sell_market_id)
+                ]
+            if "QUEUED" in outcomes:
+                await self.scanner.store.transition(
+                    route_id, "RECHECKING", "FRESH_BOOKS_REQUESTED", self.utcnow()
+                )
+                for body in self.scanner.current.values():
+                    if body["id"] == str(route_id):
+                        body["status"] = "RECHECKING"
+                self.scanner.metrics["rechecked"] += 1
+                return web.json_response(
+                    {"status": "RECHECKING", "outcomes": outcomes, "actionable": False}, status=202
+                )
+            return web.json_response(
+                {"status": "RECHECK_UNAVAILABLE", "outcomes": outcomes}, status=429
+            )
+
+        async def paper_status(request):
+            return web.json_response(self.paper.diagnostics() if self.paper else {"healthy": False})
+
+        async def terminal_runtime(request):
+            now = self.utcnow()
+            books = [self.cache.get(x, now=now) for x in list(self.cache.books)]
+            books = [x for x in books if x is not None]
+            ages = (
+                [age_seconds(now, x.received_at) for x in books]
+                if self.utc_clock and self.utc_clock.trusted
+                else []
+            )
+            ages = [age for age in ages if age is not None]
+            source_ages = {}
+            if self.utc_clock and self.utc_clock.trusted:
+                for book in books:
+                    source_ages.setdefault(book.source, []).append(
+                        age_seconds(now, book.received_at)
+                    )
+            latencies = list(self.api_latencies)
+            return web.json_response(
+                {
+                    "as_of": now.isoformat(),
+                    "collector": {
+                        "healthy": self.last_heartbeat > 0
+                        and time.monotonic() - self.last_heartbeat < 30,
+                        "cache_books": len(books),
+                        "cache_capacity": self.cache.limit,
+                        "quality_counts": dict(Counter(x.state.value for x in books)),
+                        "book_sources": dict(Counter(x.source for x in books)),
+                        "transport_sources": {
+                            source: distribution(receipt_ages)
+                            for source, receipt_ages in source_ages.items()
+                        },
+                        "freshness_seconds": {
+                            "median": median(ages) if ages else None,
+                            "maximum": max(ages) if ages else None,
+                            **(
+                                distribution(ages)
+                                if self.utc_clock and self.utc_clock.trusted
+                                else {}
+                            ),
+                        },
+                        "api_latency_ms": {
+                            "sample_count": len(latencies),
+                            "mean": sum(latencies) / len(latencies) if latencies else None,
+                            "peak": max(latencies) if latencies else None,
+                            "window_limit": 600,
+                        },
+                        "recheck_queue": {
+                            "pending": len(self.confirmation_enqueued),
+                            "limit": self.confirmation_queue.maxsize,
+                            "oldest_seconds": max(
+                                (
+                                    elapsed_seconds() - t
+                                    for t in self.confirmation_enqueued.values()
+                                ),
+                                default=0,
+                            ),
+                        },
+                        "pipeline_timings": self.timings.snapshot(),
+                        "rejected_updates": dict(self.cache.rejected_updates),
+                        "scheduling_backlog": sum(
+                            s.due <= time.monotonic()
+                            for rt in self.runtimes.values()
+                            for s in rt.schedules.values()
+                        ),
+                        "applied_settings_version": self.applied_terminal_version,
+                        "applied_market_preferences": self.terminal_market_preferences,
+                        "native_metadata_cache": {
+                            slug: rt.connector.metadata_metrics
+                            for slug, rt in self.runtimes.items()
+                            if hasattr(rt.connector, "metadata_metrics")
+                        },
+                        "memory_maintenance": self.memory_maintenance,
+                    },
+                    "scanner": self.scanner.diagnostics() if self.scanner else {"healthy": False},
+                    "paper": self.paper.diagnostics() if self.paper else {"healthy": False},
+                    "telemetry": self.telemetry.sample(),
+                }
+            )
+
+        async def funding_marks(request):
+            if not self.paper or not self.utc_clock or not self.utc_clock.trusted:
+                return web.json_response({"detail": "Trusted market UTC unavailable"}, status=503)
+            try:
+                body = await request.json()
+                items = body["items"]
+                if not isinstance(items, list) or not 1 <= len(items) <= 100:
+                    raise ValueError("Bounded items required")
+                parsed = []
+                for item in items:
+                    quantity = exact_decimal(item["quantity"])
+                    if quantity <= 0:
+                        raise ValueError("Positive quantity required")
+                    parsed.append((UUID(item["exchange_id"]), UUID(item["asset_id"]), quantity))
+            except (ValueError, TypeError, KeyError):
+                return web.json_response({"detail": "Invalid bounded mark request"}, status=422)
+            now = self.utcnow()
+            result = []
+            for exchange, asset, quantity in parsed:
+                mark = self.paper.market.mark(exchange, asset, quantity, now, research=True)
+                result.append(
+                    {
+                        "exchange_id": str(exchange),
+                        "asset_id": str(asset),
+                        "quantity": str(quantity),
+                        **safe_json(asdict(mark)),
+                    }
+                )
+            return web.json_response(
+                {"items": result, "clock": self.utc_clock.snapshot(), "as_of": now.isoformat()}
+            )
+
+        async def portfolio(request):
+            from arbiq.db.models import PaperSession
+            from arbiq.paper_trading.models import PaperControl
+            from arbiq.portfolio.models import PortfolioPosition
+            from arbiq.portfolio.valuation import snapshot
+
+            try:
+                session_id = UUID(request.match_info["session_id"])
+            except ValueError:
+                return web.json_response({"detail": "Invalid session"}, status=422)
+            async with self.store.sessions() as db:
+                control = await db.get(PaperControl, session_id)
+                session = await db.get(PaperSession, session_id)
+                if not control or not session:
+                    return web.json_response({"detail": "Session not found"}, status=404)
+                now = self.utcnow()
+                positions = list(
+                    await db.scalars(
+                        select(PortfolioPosition).where(PortfolioPosition.session_id == session_id)
+                    )
+                )
+                prices = self.paper.market.prices(
+                    positions, now, control.classification == "RESEARCH"
+                )
+                benchmark = {}
+                for h in session.benchmark_snapshot.get("holdings", []):
+                    key = (UUID(h["exchange_id"]), UUID(h["asset_id"]))
+                    benchmark[key] = self.paper.market.mark(
+                        *key, Decimal(h["quantity"]), now, control.classification == "RESEARCH"
+                    )
+                value = await snapshot(
+                    db,
+                    session_id,
+                    prices,
+                    now,
+                    research_only=control.classification == "RESEARCH",
+                    persist=False,
+                    benchmark_prices=benchmark,
+                )
+                return web.json_response(value)
+
+        app = web.Application(middlewares=[authenticate], client_max_size=32768)
+        app.router.add_get("/health", health)
+        app.router.add_get("/clock", clock_status)
+
+        async def feed_status(request):
+            return web.json_response(self.market_status())
+
+        app.router.add_get("/feeds/status", feed_status)
+        app.router.add_get("/paper/status", paper_status)
+        app.router.add_post("/paper/funding/marks", funding_marks)
+        app.router.add_get("/terminal/runtime", terminal_runtime)
+        app.router.add_get("/paper/portfolios/{session_id}", portfolio)
+        app.router.add_get("/engine/current", current_routes)
+        app.router.add_get("/engine/diagnostics", diagnostics)
+        app.router.add_post("/engine/routes/{route_id}/recheck", route_recheck)
+        app.router.add_get("/books/{market_id}", book)
+        app.router.add_post("/books/{market_id}/confirm", confirm)
+        runner = web.AppRunner(app, access_log=None)
+        await runner.setup()
+        await web.TCPSite(runner, "0.0.0.0", 8001).start()
+        try:
+            await self.stop.wait()
+        finally:
+            await runner.cleanup()
+
