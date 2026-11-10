@@ -1416,3 +1416,68 @@ class Collector:
         finally:
             await runner.cleanup()
 
+    async def run(self, lease):
+        self.utc_clock = TrustedClock()
+        self.cache.now = self.utcnow
+        self.scanner = ArbitrageEngine(self)
+        self.paper = PaperCoordinator(self)
+        supported, unsupported = available_candidates(
+            self.config.exchange_ids, self.config.exclude_exchanges
+        )
+        await self.store.disable_unconfigured(set(supported + unsupported))
+        for slug in supported:
+            self.runtimes[slug] = ExchangeRuntime(slug, PublicConnector(slug, self.config))
+            self.runtimes[slug].connector.utcnow = self.utcnow
+            self.runtimes[slug].connector._request_gate = self.gate
+            self.runtimes[slug].connector._metadata_gate = self.metadata_gate
+        for slug in unsupported:
+            exchange_id = await self.store.register_exchange(
+                slug,
+                slug,
+                {
+                    "public_market_data_supported": False,
+                    "canadian_eligibility": eligibility(slug),
+                    "error": "UNSUPPORTED_ADAPTER",
+                },
+            )
+            await self.store.event(
+                exchange_id,
+                "exchange.unsupported",
+                "Configured adapter absent from installed CCXT",
+                "warning",
+            )
+        self.tasks = [asyncio.create_task(self.run_exchange(slug), name=slug) for slug in supported]
+        self.tasks.extend(
+            [
+                asyncio.create_task(self.housekeeping(lease), name="housekeeping"),
+                asyncio.create_task(self.synchronize_clock(), name="trusted_utc"),
+                asyncio.create_task(self.scanner.run(), name="arbitrage_scanner"),
+                asyncio.create_task(self.paper.run(), name="paper_simulator"),
+                asyncio.create_task(self.serve(), name="internal_api"),
+            ]
+        )
+
+        async def fail_closed(task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.error(
+                    "collector_task_failed", task=task.get_name(), error_type=type(exc).__name__
+                )
+                self.stop.set()
+                raise
+
+        watchers = [asyncio.create_task(fail_closed(task)) for task in self.tasks]
+        try:
+            await self.stop.wait()
+        finally:
+            for task in self.tasks:
+                task.cancel()
+            await asyncio.gather(*self.tasks, return_exceptions=True)
+            results = await asyncio.gather(*watchers, return_exceptions=True)
+            if any(isinstance(value, Exception) for value in results):
+                raise RuntimeError("Collector task failed; process restart required")
+
+
