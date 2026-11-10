@@ -534,3 +534,88 @@ class Collector:
                     )
         runtime.ws_last.clear()
 
+    async def configure_native(self, runtime):
+        selected = native_symbols(
+            runtime.slug,
+            {slug: other.markets for slug, other in self.runtimes.items()},
+            self.config.priority_assets,
+            self.config.websocket_fast_markets_per_exchange
+            if runtime.slug in self.config.websocket_exchanges
+            else 0,
+        )
+        if {key: m.id for key, m in selected.items()} == {
+            key: m.id for key, m in runtime.native_symbols.items()
+        }:
+            return
+        runtime.native_generation += 1
+        generation = runtime.native_generation
+        self.retire_native(runtime)
+        if runtime.ws_task:
+            runtime.ws_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await runtime.ws_task
+        runtime.ws_task = runtime.native_stream = None
+        runtime.native_symbols = selected
+        runtime.native_last_error = None
+        runtime.health["connection_mode"] = "REST fallback" if selected else "REST"
+        if not selected:
+            return
+
+        async def on_book(symbol, raw):
+            market = next((m for m in runtime.markets if m.id == selected[symbol].id), None)
+            if (
+                generation != runtime.native_generation
+                or market is None
+                or market.id not in runtime.native_synchronized
+            ):
+                return
+            raw["symbol"] = market.native_symbol
+            raw["stream_integrity"]["collector_integrity_epoch"] = runtime.native_integrity_epoch
+            received = raw["_collector_received_at"]
+            book = await self.accept(
+                runtime, market, raw, received, received, None, f"{runtime.slug}_ws"
+            )
+            if (
+                generation == runtime.native_generation
+                and market.id in runtime.native_synchronized
+                and book is not None
+                and book.state in {DataState.HEALTHY, DataState.DEGRADED}
+                and book.exchange_timestamp is not None
+            ):
+                runtime.ws_last[market.id] = time.monotonic()
+                runtime.health["connection_mode"] = "WebSocket + REST"
+
+        async def on_error(code, reconnects):
+            if generation != runtime.native_generation:
+                return
+            self.retire_native(runtime)
+            runtime.native_last_error = code
+            runtime.health.update(connection_mode="REST fallback", reconnects=reconnects)
+            await self.store.event(
+                runtime.exchange_id,
+                "exchange.websocket_resync",
+                "Native depth invalidated, REST fallback active",
+                "warning",
+                {"error_code": code, "source": f"{runtime.slug}_ws"},
+            )
+
+        async def on_message(synchronized, received, received_elapsed):
+            if generation == runtime.native_generation:
+                runtime.native_synchronized = frozenset(selected[key].id for key in synchronized)
+                runtime.ws_synchronized = len(synchronized) == len(selected)
+                if runtime.ws_synchronized:
+                    runtime.native_last_error = None
+                runtime.ws_last_message_at = received
+                runtime.ws_last_message_elapsed = received_elapsed
+
+        runtime.native_stream = NativeStream(
+            self.config,
+            NATIVE_PROTOCOLS[runtime.slug],
+            on_book,
+            on_error,
+            on_message,
+            self.utcnow,
+            clock_trusted=lambda: self.utc_clock is not None and self.utc_clock.trusted,
+        )
+        runtime.ws_task = asyncio.create_task(runtime.native_stream.run(list(selected), self.stop))
+
