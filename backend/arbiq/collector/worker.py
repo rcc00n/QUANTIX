@@ -773,3 +773,26 @@ class Collector:
             self.request_confirmation(market.id)
         return book
 
+    def request_confirmation(self, market_id: UUID) -> str:
+        runtime = next((rt for rt in self.runtimes.values() if market_id in rt.schedules), None)
+        if runtime is None:
+            return "NOT_MONITORED"
+        now = time.monotonic()
+        if (
+            market_id in runtime.confirmation
+            or now - runtime.last_confirmation.get(market_id, -1000) < 30
+        ):
+            return "COOLDOWN"
+        if (
+            self.confirmation_queue.full()
+            or len(self.confirmation_enqueued) >= self.confirmation_queue.maxsize
+        ):
+            return "QUEUE_FULL"
+        runtime.last_confirmation[market_id] = now
+        runtime.confirmation.add(market_id)
+        self.confirmation_queue.put_nowait((runtime.slug, market_id))
+        self.confirmation_enqueued[market_id] = elapsed_seconds()
+        if runtime.schedules[market_id].failures == 0:
+            runtime.schedules[market_id].due = 0
+        return "QUEUED"
+
