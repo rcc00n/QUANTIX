@@ -918,3 +918,85 @@ class Collector:
                 runtime.confirmation.discard(market.id)
                 self.confirmation_enqueued.pop(market.id, None)
 
+    async def run_exchange(self, slug: str):
+        runtime = self.runtimes[slug]
+        try:
+            runtime.exchange_id = await self.store.register_exchange(
+                slug, runtime.connector.adapter.name, capabilities(runtime.connector.adapter)
+            )
+            while not self.stop.is_set():
+                allowed = (self.terminal_market_preferences or {}).get("enabled_exchanges", [])
+                if allowed and slug not in allowed:
+                    try:
+                        await asyncio.wait_for(self.stop.wait(), 2)
+                    except TimeoutError:
+                        pass
+                    continue
+                now = time.monotonic()
+                if now < runtime.cooldown_until:
+                    try:
+                        await asyncio.wait_for(self.stop.wait(), 1)
+                    except TimeoutError:
+                        pass
+                    continue
+                if now >= runtime.discovery.due:
+                    try:
+                        await self.discover(runtime)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        code = classify_error(exc)
+                        runtime.discovery.failure(self.config, code)
+                        self.apply_exchange_cooldown(runtime, code, runtime.discovery.due)
+                        runtime.discovery.due = max(runtime.discovery.due, runtime.cooldown_until)
+                        runtime.health.update(
+                            error_code=code,
+                            updated_at=self.utcnow(),
+                            state="DEGRADED" if runtime.markets else "UNAVAILABLE",
+                            next_retry_at=self.utcnow()
+                            + timedelta(seconds=max(0, runtime.discovery.due - time.monotonic())),
+                        )
+                        runtime.health["failed_requests"] += 1
+                        await self.store.event(
+                            runtime.exchange_id,
+                            "exchange.discovery_failed",
+                            "Public spot discovery failed",
+                            "warning",
+                            {"error_code": code},
+                        )
+                        log.warning("public_discovery_failed", exchange=slug, error_code=code)
+                due = [
+                    m for m in runtime.markets if runtime.schedules[m.id].due <= time.monotonic()
+                ]
+                if due:
+                    market = min(due, key=lambda m: runtime.schedules[m.id].due)
+                    fresh_ws = (
+                        self.native_book_fresh(runtime, market.id, self.utcnow())
+                        if runtime.slug in NATIVE_PROTOCOLS
+                        else (
+                            time.monotonic() - runtime.ws_last.get(market.id, -10000)
+                            < self.config.maximum_age_seconds / 2
+                        )
+                    )
+                    if fresh_ws and market.id not in runtime.confirmation:
+                        runtime.transport_counts["rest_suppressed"] += 1
+                        runtime.schedules[market.id].success(self.config.fast_interval_seconds)
+                    else:
+                        await self.fetch(runtime, market)
+                if due:
+                    await asyncio.sleep(0)  # Connector pacing owns the request rate.
+                else:
+                    delay = min(
+                        (s.due - time.monotonic() for s in runtime.schedules.values()), default=1
+                    )
+                    try:
+                        await asyncio.wait_for(self.stop.wait(), min(1, max(0.01, delay)))
+                    except TimeoutError:
+                        pass
+        finally:
+            if runtime.ws_task:
+                runtime.ws_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await runtime.ws_task
+            await runtime.connector.close()
+
