@@ -796,3 +796,125 @@ class Collector:
             runtime.schedules[market_id].due = 0
         return "QUEUED"
 
+    async def fetch(self, runtime, market):
+        schedule = runtime.schedules.get(market.id)
+        if schedule is None:
+            return
+        if time.monotonic() < runtime.cooldown_until:
+            schedule.due = max(schedule.due, runtime.cooldown_until)
+            return
+        confirmation = market.id in runtime.confirmation
+        runtime.transport_counts["rest_attempts"] += 1
+        if market.id in {m.id for m in runtime.native_symbols.values()}:
+            runtime.transport_counts["rest_on_stream_market"] += 1
+        request_start_mono = time.monotonic()
+        runtime.timings.add(
+            "scheduling_lag_ms",
+            max(0, time.monotonic() - schedule.due) * 1000 if schedule.due else None,
+        )
+        started = self.utcnow()
+        runtime.health["last_attempt_at"] = started
+        try:
+            # Native facade acquires the shared gate after pacing; generic adapters
+            # still receive the same hard concurrency bound at this boundary.
+            gate = (
+                contextlib.nullcontext()
+                if getattr(runtime.connector, "_request_gate", None) is self.gate
+                else self.gate
+            )
+            async with gate:
+                raw = await runtime.connector.fetch_raw_book(market.native_symbol)
+            received = self.utcnow()
+            if runtime.schedules.get(market.id) is not schedule:
+                await self.store.event(
+                    runtime.exchange_id,
+                    "collector.late_deselected_response",
+                    "Late response arrived after this market was deselected",
+                    details={"market_id": str(market.id), "source": "rest"},
+                )
+                return
+            current = self.cache.books.get(market.id)
+            if (
+                not confirmation
+                and current is not None
+                and current.received_at >= started
+                and self.native_book_fresh(runtime, market.id, received)
+            ):
+                runtime.transport_counts["late_rest_superseded"] += 1
+            else:
+                await self.accept(
+                    runtime,
+                    market,
+                    raw,
+                    received,
+                    started,
+                    runtime.connector.last_latency_ms,
+                    "rest",
+                    confirmation,
+                )
+            liquid = market.quote_volume is not None and market.quote_volume >= Decimal("1000000")
+            interval = (
+                self.config.fast_interval_seconds if liquid else self.config.slow_interval_seconds
+            )
+            if runtime.slug in {"bitstamp", "coinbaseexchange"}:
+                interval = max(interval, self.config.slow_interval_seconds)
+            schedule.success(
+                interval, started=getattr(runtime.connector, "_last_request", request_start_mono)
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            code = classify_error(exc)
+            schedule.failure(self.config, code)
+            self.apply_exchange_cooldown(runtime, code, schedule.due)
+            if runtime.schedules.get(market.id) is not schedule:
+                return
+            if runtime.cooldown_until > time.monotonic():
+                schedule.due = max(schedule.due, runtime.cooldown_until)
+            if code == "MALFORMED_RESPONSE":
+                await self.store.malformed(
+                    market.id,
+                    getattr(runtime.connector, "last_public_excerpt", ""),
+                    getattr(runtime.connector, "last_public_sha256", ""),
+                )
+                if runtime.schedules.get(market.id) is not schedule:
+                    return
+            previous = self.cache.get(market.id)
+            if previous is not None and (
+                confirmation or not self.native_book_fresh(runtime, market.id, self.utcnow())
+            ):
+                failed = previous.classified(
+                    DataState.DEGRADED if previous.state == DataState.HEALTHY else previous.state,
+                    reasons=tuple(dict.fromkeys((*previous.reasons, "last_request_failed"))),
+                    verification={
+                        **previous.verification,
+                        "last_error_code": code,
+                        "last_failure_at": self.utcnow().isoformat(),
+                    },
+                )
+                self.cache.books[market.id] = failed
+                await self.store.save_book(failed, force=True)
+                if runtime.schedules.get(market.id) is not schedule:
+                    return
+            runtime.health["failed_requests"] += 1
+            runtime.health["consecutive_failures"] += 1
+            runtime.health.update(
+                error_code=code,
+                state="DEGRADED" if runtime.health["last_success_at"] else "UNAVAILABLE",
+                updated_at=self.utcnow(),
+                next_retry_at=self.utcnow()
+                + timedelta(seconds=max(0, schedule.due - time.monotonic())),
+            )
+            await self.store.event(
+                runtime.exchange_id,
+                "exchange.request_failed",
+                "Public order book request failed",
+                "warning",
+                {"error_code": code},
+            )
+            log.warning("public_request_failed", exchange=runtime.slug, error_code=code)
+        finally:
+            if confirmation and runtime.schedules.get(market.id) is schedule:
+                runtime.confirmation.discard(market.id)
+                self.confirmation_enqueued.pop(market.id, None)
+
