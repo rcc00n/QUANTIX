@@ -226,6 +226,48 @@ async def test_deselected_rest_fetch_cannot_mutate_a_reselected_market(result):
     store.save_book.assert_not_awaited()
 
 
+async def test_worker_enforces_global_concurrency_and_handles_timeout():
+    config = CollectorConfig(max_concurrency=2)
+    store = AsyncMock()
+    collector = Collector(settings(config), store)
+    active = 0
+    maximum = 0
+
+    class Connector:
+        last_latency_ms = 10
+
+        async def fetch_raw_book(self, symbol):
+            nonlocal active, maximum
+            active += 1
+            maximum = max(maximum, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return synthetic_raw()
+
+    requests = []
+    for index in range(6):
+        market = normalize_market(f"synthetic-{index}", synthetic_market(), {}, precision_mode=4)
+        from dataclasses import replace
+
+        market = replace(market, id=uuid4())
+        runtime = ExchangeRuntime(
+            f"synthetic-{index}",
+            Connector(),
+            exchange_id=uuid4(),
+            markets=[market],
+            schedules={market.id: Schedule()},
+        )
+        collector.runtimes[runtime.slug] = runtime
+        requests.append(collector.fetch(runtime, market))
+    await asyncio.gather(*requests)
+    assert maximum == 2 and store.save_book.await_count == 6
+    runtime = next(iter(collector.runtimes.values()))
+    market = runtime.markets[0]
+    runtime.connector.fetch_raw_book = AsyncMock(side_effect=TimeoutError("synthetic timeout"))
+    await collector.fetch(runtime, market)
+    assert runtime.health["error_code"] == "TIMEOUT"
+    assert runtime.schedules[market.id].failures == 1
+    assert store.event.await_count >= 1
 
 
 
