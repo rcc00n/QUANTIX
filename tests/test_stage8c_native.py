@@ -345,6 +345,27 @@ async def stream_book(fixture, *, stamp=NOW):
     return fixture.collector.cache.books[fixture.btc.id]
 
 
+async def test_heartbeat_keeps_connection_live_without_overriding_source_age_or_clock_trust(
+    collector_fixture,
+):
+    f = collector_fixture
+    snapshot = await stream_book(f, stamp=None)
+    assert snapshot.exchange_timestamp is None
+    assert not f.collector.native_book_fresh(f.runtime, f.btc.id, f.simulation.now)
+    book = await stream_book(f)
+    assert book.state is DataState.HEALTHY and book.received_at == NOW
+    assert book.symbol == "BTC/USD" and book.source == f"{EXCHANGE}_ws"
+    assert f.collector.native_book_fresh(f.runtime, f.btc.id, f.simulation.now)
+    f.collector.utc_clock.trusted = False
+    assert not f.collector.native_book_fresh(f.runtime, f.btc.id, f.simulation.now)
+    f.collector.utc_clock.trusted = True
+    f.simulation.now += timedelta(seconds=31)
+    await f.runtime.native_stream.on_message(
+        frozenset({SYMBOL}), f.simulation.now, elapsed_seconds()
+    )
+    assert f.runtime.ws_synchronized and f.runtime.ws_last_message_at == f.simulation.now
+    assert f.collector.cache.books[f.btc.id] is book
+    assert not f.collector.native_book_fresh(f.runtime, f.btc.id, f.simulation.now)
 
 
 
