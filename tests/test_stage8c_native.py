@@ -256,6 +256,27 @@ def listed(slug, base, quote="USD"):
     )
 
 
+def test_native_selection_preserves_market_set_and_groups_coinbase_aliases():
+    priorities = ["BTC", "ETH", "SOL", "XRP"]
+    listed_markets = [listed(EXCHANGE, asset) for asset in (*priorities, "LTC")]
+    monitored = {
+        EXCHANGE: listed_markets,
+        "coinbase": [listed("coinbase", asset) for asset in priorities],
+    }
+    assert native_symbols(EXCHANGE, monitored, priorities, 2) == {}
+    monitored["kraken"] = [listed("kraken", asset) for asset in priorities]
+    market_ids = tuple(m.id for m in monitored[EXCHANGE])
+    selected = native_symbols(EXCHANGE, monitored, priorities, 2)
+    assert list(selected) == [SYMBOL, ETH]
+    assert tuple(m.id for m in monitored[EXCHANGE]) == market_ids
+    fast = {m.id for m in selected.values()}
+    assert [tier(m, priorities, fast) for m in listed_markets] == [
+        "FAST_LANE",
+        "FAST_LANE",
+        "STANDARD",
+        "STANDARD",
+        "RESEARCH",
+    ]
 
 
 class ControlledNativeStream:
