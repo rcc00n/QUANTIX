@@ -368,6 +368,50 @@ async def test_heartbeat_keeps_connection_live_without_overriding_source_age_or_
     assert not f.collector.native_book_fresh(f.runtime, f.btc.id, f.simulation.now)
 
 
+async def test_retirement_revokes_stream_preserves_rest_backoff_and_requires_new_book(
+    collector_fixture, monkeypatch
+):
+    f = collector_fixture
+    monkeypatch.setattr(worker, "time", SimpleNamespace(monotonic=lambda: 1000.0))
+    stream = f.runtime.native_stream
+    published = await stream_book(f)
+    epoch = published.raw_evidence["stream_integrity"]["collector_integrity_epoch"]
+    eth_rest = raw_book("ETH/USD")
+    await f.collector.accept(f.runtime, f.eth, eth_rest, NOW, NOW, 10, "rest")
+    rest = f.collector.cache.books[f.eth.id]
+    f.runtime.schedules[f.btc.id].due = 1100
+    f.runtime.schedules[f.eth.id] = Schedule(due=1200, failures=1)
+    f.runtime.cooldown_until = 1005
+    f.collector.scanner = SimpleNamespace(changed=Mock())
+
+    await stream.on_error("SYNTHETIC_INTEGRITY_FAILURE", 1)
+    invalidated = f.collector.cache.books[f.btc.id]
+    assert invalidated.state is DataState.STALE
+    assert "stream_unsynchronized" in invalidated.reasons
+    f.collector.scanner.changed.assert_called_once_with(invalidated)
+    assert f.collector.cache.books[f.eth.id] is rest
+    assert f.runtime.schedules[f.btc.id].due == 1005
+    assert f.runtime.schedules[f.eth.id] == Schedule(due=1200, failures=1)
+    assert f.runtime.health["connection_mode"] == "REST fallback"
+    assert not f.runtime.native_synchronized and not f.runtime.ws_last
+
+    f.runtime.cooldown_until = 0
+    f.runtime.connector.fetch_raw_book.return_value = raw_book("BTC/USD", stamp=None, amount="8")
+    f.simulation.now += timedelta(milliseconds=500)
+    await f.collector.fetch(f.runtime, f.btc)
+    assert f.collector.cache.books[f.btc.id].source == "rest"
+    assert not f.runtime.native_synchronized
+
+    f.simulation.now += timedelta(seconds=1)
+    await stream.on_message(frozenset({SYMBOL}), f.simulation.now, elapsed_seconds())
+    assert not f.collector.native_book_fresh(f.runtime, f.btc.id, f.simulation.now)
+    # The old cache stays revoked through resubscription until there is new priced evidence.
+    recovered = await stream_book(f, stamp=f.simulation.now)
+    assert f.collector.native_book_fresh(f.runtime, f.btc.id, f.simulation.now)
+    assert recovered.raw_evidence["stream_integrity"]["collector_integrity_epoch"] > epoch
+    f.runtime.schedules[f.btc.id] = Schedule(due=1200, failures=1)
+    await stream.on_error("SYNTHETIC_SECOND_FAILURE", 2)
+    assert f.runtime.schedules[f.btc.id] == Schedule(due=1200, failures=1)
 
 
 
