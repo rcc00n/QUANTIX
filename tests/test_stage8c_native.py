@@ -188,6 +188,48 @@ async def test_latest_depth_queue_coalesces_by_symbol_and_does_not_republish_hea
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+@pytest.mark.parametrize(
+    "first_synchronized,activity,endpoint,code",
+    [
+        (False, True, 2, "WS_SNAPSHOT_TIMEOUT"),
+        (True, False, 15, "WS_IDLE_TIMEOUT"),
+        (True, False, 31, "WS_PONG_TIMEOUT"),
+    ],
+)
+async def test_transport_deadlines_use_elapsed_clock(
+    monkeypatch, first_synchronized, activity, endpoint, code
+):
+    tick = iter([0, endpoint] if code != "WS_PONG_TIMEOUT" else [0, 20, 31])
+    current = 0
+
+    class TimedSocket(ScriptedSocket):
+        async def recv(self, *, decode):
+            nonlocal current
+            data = await super().recv(decode=decode)
+            current = next(tick)
+            return data
+
+    socket = TimedSocket("first", "after", "after")
+    symbols = frozenset({SYMBOL})
+    protocol = ScriptedProtocol(
+        {
+            "first": StreamFrame(synchronized=symbols if first_synchronized else frozenset()),
+            "after": StreamFrame(
+                synchronized=symbols if first_synchronized else frozenset(), activity=activity
+            ),
+        }
+    )
+    if code == "WS_PONG_TIMEOUT":
+        protocol.ping_message = "ping"
+    monkeypatch.setattr(native_stream, "elapsed_seconds", lambda: current)
+    config = CollectorConfig(
+        websocket_snapshot_timeout_seconds=2,
+        websocket_idle_timeout_seconds=45 if code == "WS_PONG_TIMEOUT" else 15,
+    )
+    stream = NativeStream(config, Mock(), AsyncMock(), AsyncMock(), AsyncMock(), lambda: NOW)
+    with pytest.raises(StreamInvalid, match=code):
+        await asyncio.wait_for(stream.receive(socket, protocol, symbols), 2)
+    assert socket.sent == (["ping"] if code == "WS_PONG_TIMEOUT" else [])
 
 
 
