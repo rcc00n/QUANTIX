@@ -270,6 +270,41 @@ async def test_worker_enforces_global_concurrency_and_handles_timeout():
     assert store.event.await_count >= 1
 
 
+async def test_anomaly_recheck_queue_is_bounded_deduplicated_and_survives_first_fetch():
+    store = AsyncMock()
+    collector = Collector(settings(CollectorConfig()), store)
+    from dataclasses import replace
+
+    market = replace(
+        normalize_market("synthetic-c", synthetic_market(), {}, precision_mode=4),
+        id=uuid4(),
+    )
+    raw = synthetic_raw()
+    raw["bids"] = [[str(200 - i), "1"] for i in range(10)]
+    raw["asks"] = [[str(201 + i), "1"] for i in range(10)]
+    connector = type(
+        "SyntheticConnector",
+        (),
+        {"last_latency_ms": 10, "fetch_raw_book": AsyncMock(return_value=raw)},
+    )()
+    runtime = ExchangeRuntime(
+        "synthetic-c",
+        connector,
+        exchange_id=uuid4(),
+        markets=[market],
+        schedules={market.id: Schedule()},
+    )
+    collector.runtimes[runtime.slug] = runtime
+    for exchange in ("synthetic-a", "synthetic-b"):
+        collector.cache.put(synthetic_capture(exchange=exchange))
+    await collector.fetch(runtime, market)
+    assert market.id in runtime.confirmation
+    assert collector.request_confirmation(market.id) == "COOLDOWN"
+    assert collector.confirmation_queue.qsize() == 1
+    await collector.fetch(runtime, market)
+    assert collector.cache.get(market.id).verification["fresh_rest_recheck"] is True
+    assert market.id not in runtime.confirmation
+    assert collector.request_confirmation(uuid4()) == "NOT_MONITORED"
 
 
 
