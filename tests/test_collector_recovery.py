@@ -363,3 +363,32 @@ async def test_rate_limit_retry_after_cools_down_the_entire_exchange():
     assert runtime.schedules[markets[1].id].due >= runtime.cooldown_until
 
 
+async def test_malformed_transport_preserves_bounded_public_evidence():
+    from dataclasses import replace
+
+    store = AsyncMock()
+    collector = Collector(settings(CollectorConfig()), store)
+    market = replace(
+        normalize_market("synthetic", synthetic_market(), {}, precision_mode=4),
+        id=uuid4(),
+    )
+    connector = type(
+        "SyntheticConnector",
+        (),
+        {
+            "last_public_excerpt": "SYNTHETIC malformed body",
+            "last_public_sha256": "a" * 64,
+            "fetch_raw_book": AsyncMock(side_effect=ValueError("SYNTHETIC")),
+        },
+    )()
+    runtime = ExchangeRuntime(
+        "synthetic",
+        connector,
+        exchange_id=uuid4(),
+        markets=[market],
+        schedules={market.id: Schedule()},
+    )
+    collector.runtimes[runtime.slug] = runtime
+    await collector.fetch(runtime, market)
+    store.malformed.assert_awaited_once_with(market.id, "SYNTHETIC malformed body", "a" * 64)
+    assert runtime.health["error_code"] == "MALFORMED_RESPONSE"
