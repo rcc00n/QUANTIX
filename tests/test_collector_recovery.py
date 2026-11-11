@@ -307,6 +307,20 @@ async def test_anomaly_recheck_queue_is_bounded_deduplicated_and_survives_first_
     assert collector.request_confirmation(uuid4()) == "NOT_MONITORED"
 
 
+async def test_invalid_response_never_marks_a_feed_as_live_verified():
+    store = AsyncMock()
+    collector = Collector(settings(CollectorConfig()), store)
+    from dataclasses import replace
+
+    market = replace(
+        normalize_market("synthetic", synthetic_market(), {}, precision_mode=4),
+        id=uuid4(),
+    )
+    runtime = ExchangeRuntime("synthetic", None)
+    now = datetime.now(UTC)
+    await collector.accept(runtime, market, {}, now, now, 10, "rest")
+    assert runtime.health["last_success_at"] is None
+    assert runtime.health["error_code"] == "INVALID_BOOK"
 
 
 
