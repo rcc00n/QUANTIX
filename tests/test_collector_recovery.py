@@ -173,6 +173,57 @@ async def test_exchange_keeps_polling_the_prior_selection_while_watermarks_load(
     assert collector.cache.watermarks[selected.id] == (now, now)
 
 
+@pytest.mark.parametrize("result", ["success", "timeout", "malformed"])
+async def test_deselected_rest_fetch_cannot_mutate_a_reselected_market(result):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    slug = "synthetic-venue"
+    market = replace(normalize_market(slug, synthetic_market(), {}, precision_mode=4), id=uuid4())
+
+    async def fetch_raw_book(symbol):
+        if result == "malformed":
+            raise ValueError("synthetic malformed response")
+        entered.set()
+        await release.wait()
+        if result == "timeout":
+            raise TimeoutError("synthetic late timeout")
+        return synthetic_raw()
+
+    async def malformed(*_args):
+        assert result == "malformed"
+        entered.set()
+        await release.wait()
+
+    store = SimpleNamespace(
+        latest_watermarks=AsyncMock(return_value={}),
+        event=AsyncMock(),
+        retain_runtime_keys=Mock(),
+        save_book=AsyncMock(),
+        malformed=malformed,
+    )
+    collector = Collector(settings(CollectorConfig()), store)
+    runtime = ExchangeRuntime(
+        slug,
+        SimpleNamespace(fetch_raw_book=fetch_raw_book, last_latency_ms=10),
+        markets=[market],
+        schedules={market.id: Schedule()},
+    )
+    collector.runtimes[slug] = runtime
+    assert collector.request_confirmation(market.id) == "QUEUED"
+    task = asyncio.create_task(collector.fetch(runtime, market))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await collector.apply_selection(runtime, [])
+        await collector.apply_selection(runtime, [market])
+        assert collector.request_confirmation(market.id) == "QUEUED"
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 2)
+    assert collector.cache.get(market.id) is None
+    assert market.id in runtime.confirmation and market.id in collector.confirmation_enqueued
+    assert runtime.schedules[market.id].failures == 0
+    assert runtime.health["error_code"] is None
+    store.save_book.assert_not_awaited()
 
 
 
