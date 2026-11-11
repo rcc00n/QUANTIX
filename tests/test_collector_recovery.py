@@ -323,5 +323,43 @@ async def test_invalid_response_never_marks_a_feed_as_live_verified():
     assert runtime.health["error_code"] == "INVALID_BOOK"
 
 
+async def test_rate_limit_retry_after_cools_down_the_entire_exchange():
+    import time
+    from dataclasses import replace
+
+    import ccxt
+
+    store = AsyncMock()
+    collector = Collector(settings(CollectorConfig()), store)
+    markets = [
+        replace(
+            normalize_market("synthetic", synthetic_market(base), {}, precision_mode=4),
+            id=uuid4(),
+        )
+        for base in ("BTC", "ETH")
+    ]
+    connector = type(
+        "SyntheticConnector",
+        (),
+        {
+            "last_latency_ms": None,
+            "retry_after_seconds": 120,
+            "fetch_raw_book": AsyncMock(side_effect=ccxt.RateLimitExceeded("SYNTHETIC rate limit")),
+        },
+    )()
+    runtime = ExchangeRuntime(
+        "synthetic",
+        connector,
+        exchange_id=uuid4(),
+        markets=markets,
+        schedules={market.id: Schedule() for market in markets},
+    )
+    collector.runtimes[runtime.slug] = runtime
+    before = time.monotonic()
+    await collector.fetch(runtime, markets[0])
+    await collector.fetch(runtime, markets[1])
+    assert connector.fetch_raw_book.await_count == 1
+    assert runtime.cooldown_until >= before + 120
+    assert runtime.schedules[markets[1].id].due >= runtime.cooldown_until
 
 
