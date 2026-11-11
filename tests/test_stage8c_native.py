@@ -232,6 +232,21 @@ async def test_transport_deadlines_use_elapsed_clock(
     assert socket.sent == (["ping"] if code == "WS_PONG_TIMEOUT" else [])
 
 
+async def test_future_native_timestamp_is_rejected_before_health_or_depth_publication():
+    synchronized = frozenset({SYMBOL})
+    protocol = ScriptedProtocol(
+        {
+            "future": StreamFrame(
+                ((SYMBOL, raw_book(stamp=NOW + timedelta(seconds=1))),), synchronized
+            )
+        }
+    )
+    traffic = AsyncMock()
+    stream = NativeStream(CollectorConfig(), Mock(), AsyncMock(), AsyncMock(), traffic, lambda: NOW)
+    with pytest.raises(StreamInvalid, match="WS_INVALID_SOURCE_TIME"):
+        await asyncio.wait_for(stream.receive(ScriptedSocket("future"), protocol, synchronized), 2)
+    traffic.assert_not_awaited()
+    assert stream.pending == {}
 
 
 def listed(slug, base, quote="USD"):
