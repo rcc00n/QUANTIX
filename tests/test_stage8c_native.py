@@ -143,6 +143,49 @@ async def test_disconnect_and_invalid_delta_reconnect_only_with_fresh_native_sna
     assert stream.pending == {}
 
 
+async def test_latest_depth_queue_coalesces_by_symbol_and_does_not_republish_heartbeats():
+    synchronized = frozenset({SYMBOL, ETH})
+    latest = raw_book(amount="7")
+    frames = {
+        "a": StreamFrame(((SYMBOL, raw_book()),), synchronized),
+        "b": StreamFrame(((ETH, raw_book(ETH)),), synchronized),
+        "newer": StreamFrame(((SYMBOL, latest),), synchronized),
+        "duplicate": StreamFrame(((SYMBOL, latest),), synchronized),
+        "heartbeat": StreamFrame(synchronized=synchronized),
+        "unsupported": StreamFrame(synchronized=synchronized, activity=False),
+    }
+    socket = ScriptedSocket(*frames)
+    all_published = asyncio.Event()
+    outputs = []
+
+    async def on_book(symbol, raw):
+        outputs.append((symbol, raw))
+        if len(outputs) == 2:
+            all_published.set()
+
+    traffic = AsyncMock()
+    stream = NativeStream(CollectorConfig(), Mock(), on_book, AsyncMock(), traffic, lambda: NOW)
+    receive = asyncio.create_task(stream.receive(socket, ScriptedProtocol(frames), synchronized))
+    publisher = None
+    try:
+        await asyncio.wait_for(socket.drained.wait(), 2)
+        assert set(stream.pending) == set(synchronized)
+        assert stream.counts["coalesced_depth"] == 1
+        assert stream.counts["unchanged_depth"] == 1
+        assert traffic.await_count == 5  # Includes heartbeat and ignores unsupported traffic.
+        publisher = asyncio.create_task(stream.publish())
+        await asyncio.wait_for(all_published.wait(), 2)
+        assert [(name, raw["bids"][0][1]) for name, raw in outputs] == [(SYMBOL, "7"), (ETH, "1")]
+        for _, raw in outputs:
+            assert raw["_collector_received_at"] == NOW
+            assert raw["_stream_queue_ms"] >= 0
+        assert stream.counts["published_depth"] == 2
+        assert stream.pending == {}
+    finally:
+        tasks = [task for task in (receive, publisher) if task is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 
