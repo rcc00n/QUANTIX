@@ -42,6 +42,13 @@ def test_untrusted_clock_never_establishes_freshness(trusted):
     )
 
 
+@pytest.mark.parametrize("offset", [0.001, 1, 80])
+def test_future_source_never_has_zero_or_negative_fresh_age(offset):
+    future = NOW + timedelta(seconds=offset)
+    b = capture(exchange_timestamp=future)
+    assert age_seconds(NOW, future) is None
+    assert fresh_view(b, NOW, 60).state == DataState.SUSPICIOUS
+    assert freshness(b, NOW, CollectorConfig(), CLOCK)["classification"] == "CLOCK_UNTRUSTED"
 
 
 
