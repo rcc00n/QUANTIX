@@ -414,6 +414,21 @@ async def test_retirement_revokes_stream_preserves_rest_backoff_and_requires_new
     assert f.runtime.schedules[f.btc.id] == Schedule(due=1200, failures=1)
 
 
+async def test_reselection_cancels_old_subscription_and_ignores_old_callbacks(collector_fixture):
+    f = collector_fixture
+    await stream_book(f)
+    prior, task = f.runtime.native_stream, f.runtime.ws_task
+    f.runtime.markets = [f.eth]
+    f.runtime.schedules.pop(f.btc.id)
+    await f.collector.configure_native(f.runtime)
+    assert task.cancelled()
+    assert list(f.runtime.native_symbols) == [ETH]
+    await prior.on_message(frozenset({SYMBOL}), NOW, elapsed_seconds())
+    await prior.on_book(SYMBOL, raw_book())
+    await prior.on_error("SYNTHETIC_LATE_FAILURE", 99)
+    assert not f.runtime.native_synchronized
+    assert f.runtime.health["reconnects"] == 0
+    assert f.collector.cache.books[f.btc.id].state is DataState.STALE
 
 
 
