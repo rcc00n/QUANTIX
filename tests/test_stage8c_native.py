@@ -431,6 +431,45 @@ async def test_reselection_cancels_old_subscription_and_ignores_old_callbacks(co
     assert f.collector.cache.books[f.btc.id].state is DataState.STALE
 
 
+async def test_scanner_does_not_publish_a_route_if_stream_retires_during_sizing(monkeypatch):
+    scanner, buy, sell, _ = engine_fixture()
+    rt, _ = scanner.market_map[buy.id]
+    rt.native_integrity_epoch = 1
+    book = scanner.collector.cache.books[buy.id]
+    source = f"{rt.slug}_ws"
+    scanner.collector.cache.books[buy.id] = book.model_copy(
+        update={
+            "source": source,
+            "normalized": book.normalized.model_copy(update={"source": source}),
+        }
+    )
+    key = hashlib.sha256(f"{buy.id}:{sell.id}".encode()).hexdigest()
+    route_id = uuid4()
+    scanner.current[key] = {"id": str(route_id), "status": "RESEARCH_ONLY"}
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def pause_sizing(fn, *args, **kwargs):
+        entered.set()
+        await release.wait()
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(scanner_module, "asyncio", SimpleNamespace(to_thread=pause_sizing))
+    pending = asyncio.create_task(
+        scanner.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    )
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        rt.native_integrity_epoch += 1
+    finally:
+        release.set()
+        await asyncio.wait_for(pending, 2)
+    assert scanner.metrics["unsynchronized_pairs_skipped"] == 1
+    assert scanner.current[key]["status"] == "INVALIDATED"
+    assert scanner.current[key]["actionable"] is False
+    assert scanner.store.saved == []
+    scanner.store.transition.assert_awaited_once_with(
+        route_id, "INVALIDATED", "STREAM_BOOK_UNSYNCHRONIZED", NOW
+    )
 
 
 
