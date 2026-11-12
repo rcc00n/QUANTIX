@@ -500,3 +500,24 @@ async def test_late_rest_completion_preserves_newer_fresh_native_book(collector_
     assert f.runtime.health["failed_requests"] == int(failure)
 
 
+@pytest.mark.parametrize("confirmation", [False, True])
+async def test_rest_polling_retains_other_markets_and_required_confirmation(
+    collector_fixture, confirmation
+):
+    f = collector_fixture
+    await stream_book(f)
+    if confirmation:
+        f.runtime.confirmation.add(f.btc.id)
+
+    async def fetch(symbol):
+        f.collector.stop.set()
+        return raw_book(symbol, stamp=None, amount="5")
+
+    f.runtime.connector.fetch_raw_book.side_effect = fetch
+    await asyncio.wait_for(f.collector.run_exchange(EXCHANGE), 2)
+    symbol = "BTC/USD" if confirmation else "ETH/USD"
+    f.runtime.connector.fetch_raw_book.assert_awaited_once_with(symbol)
+    assert f.runtime.transport_counts["rest_suppressed"] == int(not confirmation)
+    market_id = f.btc.id if confirmation else f.eth.id
+    assert f.collector.cache.books[market_id].source == "rest"
+    assert f.btc.id not in f.runtime.confirmation
