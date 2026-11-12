@@ -472,5 +472,31 @@ async def test_scanner_does_not_publish_a_route_if_stream_retires_during_sizing(
     )
 
 
+@pytest.mark.parametrize("failure", [False, True])
+async def test_late_rest_completion_preserves_newer_fresh_native_book(collector_fixture, failure):
+    f = collector_fixture
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def fetch(_symbol):
+        entered.set()
+        await release.wait()
+        if failure:
+            raise TimeoutError("SYNTHETIC REST failure")
+        return raw_book("BTC/USD", stamp=None, amount="9")
+
+    f.runtime.connector.fetch_raw_book.side_effect = fetch
+    polling = asyncio.create_task(f.collector.fetch(f.runtime, f.btc))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        f.simulation.now += timedelta(seconds=1)
+        latest = await stream_book(f, stamp=f.simulation.now)
+    finally:
+        release.set()
+        await asyncio.wait_for(polling, 2)
+    assert f.collector.cache.books[f.btc.id] is latest
+    assert latest.state is DataState.HEALTHY
+    assert f.runtime.transport_counts["late_rest_superseded"] == int(not failure)
+    assert f.runtime.schedules[f.btc.id].failures == int(failure)
+    assert f.runtime.health["failed_requests"] == int(failure)
 
 
