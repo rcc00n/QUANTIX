@@ -107,6 +107,38 @@ def summary(data):
     }
 
 
+@router.get("/overview")
+async def overview(request: Request, db: DB, user: AuthenticatedUser):
+    value = summary(await runtime(request, db, user))
+    config = request.app.state.settings.arbitrage
+    routes = list(
+        await db.scalars(select(ArbitrageRoute).order_by(ArbitrageRoute.updated_at.desc()).limit(8))
+    )
+    # Summary uses retained projections, never promotes these into fresh quotes.
+    remove = {"evidence", "costs", "budget_results", "maximum_executable", "transfer_scenario"}
+    value["recent_opportunities"] = [
+        {
+            k: v
+            for k, v in project(
+                row, config.default_budget_cad, value["scanner"], config.maximum_book_age_seconds
+            ).items()
+            if k not in remove
+        }
+        for row in routes
+    ]
+    trades = list(
+        await db.scalars(
+            select(PaperTrade)
+            .join(PaperSession)
+            .where(PaperSession.user_id == user.id)
+            .order_by(PaperTrade.requested_at.desc())
+            .limit(8)
+        )
+    )
+    value["recent_simulations"] = [trade_dto(x) for x in trades]
+    return value
+
+
 def initialize_terminal(app):
     app.state.terminal_cache = TerminalCache()
     app.state.process_telemetry = ProcessTelemetry()
