@@ -62,6 +62,16 @@ def test_missing_source_is_never_invented():
     assert b.state == DataState.DEGRADED
 
 
+def test_source_age_continues_to_expire_in_cache():
+    b = capture()
+    assert fresh_view(b, NOW + timedelta(seconds=61), 60).state == DataState.STALE
+    # Preserve a stricter collector-applied policy when API defaults are broader.
+    assert (
+        freshness(capture(5, state=DataState.STALE), NOW, CollectorConfig(), CLOCK)[
+            "classification"
+        ]
+        == "STALE"
+    )
 
 
 
