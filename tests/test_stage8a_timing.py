@@ -51,6 +51,15 @@ def test_future_source_never_has_zero_or_negative_fresh_age(offset):
     assert freshness(b, NOW, CollectorConfig(), CLOCK)["classification"] == "CLOCK_UNTRUSTED"
 
 
+def test_missing_source_is_never_invented():
+    raw = synthetic_raw(NOW)
+    raw.pop("timestamp")
+    b = synthetic_capture(raw=raw, received_at=NOW)
+    result = freshness(b, NOW, CollectorConfig(), CLOCK)
+    assert b.exchange_timestamp is None
+    assert result["source_age_seconds"] is None
+    assert "RECEIPT_AGE_ONLY" in result["reason"]
+    assert b.state == DataState.DEGRADED
 
 
 
