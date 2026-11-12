@@ -139,6 +139,66 @@ async def overview(request: Request, db: DB, user: AuthenticatedUser):
     return value
 
 
+@router.get("/health")
+async def health(request: Request, db: DB, user: AuthenticatedUser):
+    data = await runtime(request, db, user)
+    value = summary(data)
+    revision = await db.scalar(text("SELECT version_num FROM alembic_version"))
+    events = list(
+        await db.scalars(select(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(30))
+    )
+    sampler = request.app.state.process_telemetry
+    latency = list(request.app.state.http_latencies)
+    delivery_rows = list(
+        await db.scalars(
+            select(NotificationEvent.details)
+            .where(NotificationEvent.event_type == "delivery.delivered")
+            .order_by(NotificationEvent.created_at.desc())
+            .limit(600)
+        )
+    )
+    return {
+        **value,
+        "database": "connected",
+        "schema_revision": revision,
+        "uptime_seconds": sampler.sample()["uptime_seconds"],
+        "telemetry": {
+            "api": sampler.sample(),
+            "api_memory_maintenance": request.app.state.memory_maintenance,
+            "collector": data.get("telemetry"),
+            "postgres_process": None,
+            "frontend_process": None,
+            "unavailable_reason": "No Docker socket or host-agent access granted to application",
+        },
+        "api_response_latency_ms": {
+            **distribution(latency),
+            "sample_count": len(latency),
+            "mean": round(mean(latency), 3) if latency else None,
+            "peak": round(max(latency), 3) if latency else None,
+            "window_limit": 1000,
+        },
+        "notification_timings": {
+            "queue_to_provider_ack_ms": distribution(
+                row.get("queue_to_provider_ack_ms") for row in delivery_rows
+            ),
+            "provider_request_ms": distribution(
+                row.get("request_duration_ms") for row in delivery_rows
+            ),
+            "scope": "last_600_retained_delivered_events; no device-receipt measurement",
+        },
+        "events": [
+            {
+                "id": str(x.id),
+                "created_at": x.created_at,
+                "event_type": x.event_type,
+                "severity": x.severity,
+                "message": x.message,
+            }
+            for x in events
+        ],
+    }
+
+
 def initialize_terminal(app):
     app.state.terminal_cache = TerminalCache()
     app.state.process_telemetry = ProcessTelemetry()
