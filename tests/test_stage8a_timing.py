@@ -34,6 +34,12 @@ def test_explicit_freshness_boundaries(age, expected):
     assert freshness(capture(age), NOW, CollectorConfig(), CLOCK)["classification"] == expected
 
 
+@pytest.mark.parametrize("trusted", [False, None])
+def test_untrusted_clock_never_establishes_freshness(trusted):
+    assert (
+        freshness(capture(), NOW, CollectorConfig(), {"trusted": trusted})["classification"]
+        == "CLOCK_UNTRUSTED"
+    )
 
 
 
