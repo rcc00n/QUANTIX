@@ -272,6 +272,28 @@ async def test_alert_freshness_rechecked_after_slow_persistence_lookup(monkeypat
     assert db.info["last_alert_checked_at"] == completed
 
 
+async def test_rejected_response_never_republishes_previous_book_to_paper_or_scanner():
+    from dataclasses import replace
+
+    from arbiq.market_data.discovery import normalize_market
+    from test_market_data import synthetic_market
+
+    store = AsyncMock()
+    collector = Collector(settings(CollectorConfig()), store)
+    collector.utcnow = lambda: NOW
+    collector.scanner = SimpleNamespace(changed=AsyncMock())
+    collector.paper = SimpleNamespace(observe=AsyncMock())
+    m = replace(
+        normalize_market("synthetic", synthetic_market(), {}, precision_mode=4),
+        id=uuid4(),
+    )
+    rt = ExchangeRuntime("synthetic", SimpleNamespace(last_timing={}), exchange_id=uuid4())
+    collector.cache.put(capture(market_id=m.id))
+    await collector.accept(rt, m, synthetic_raw(NOW - timedelta(seconds=10)), NOW, NOW, 10, "rest")
+    collector.scanner.changed.assert_not_called()
+    collector.paper.observe.assert_not_called()
+    store.save_book.assert_not_called()
+    assert store.event.await_args.args[1] == "collector.update_rejected"
 
 
 
