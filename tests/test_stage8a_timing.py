@@ -108,6 +108,30 @@ def test_exact_stream_duplicate_does_not_refresh_receipt_but_rest_can_reobserve(
     assert cache.put(rest).received_at == rest.received_at
 
 
+@pytest.mark.parametrize(
+    "invalid, source",
+    [("source", "rest"), ("receipt", "rest"), ("receipt", "kraken_ws")],
+)
+def test_cache_recovers_after_untrusted_future_observation(invalid, source):
+    cache = BookCache(CollectorConfig())
+    fields = {"ingestion_index": 1, "state": DataState.SUSPICIOUS, "source": source}
+    if invalid == "source":
+        fields.update(
+            exchange_timestamp=NOW + timedelta(seconds=80),
+            reasons=("invalid_or_future_timestamp",),
+        )
+    else:
+        fields.update(
+            received_at=NOW + timedelta(seconds=80),
+            verification={"clock": {"trusted": False}},
+            reasons=("collector_clock_jump",),
+        )
+    cache.put(capture(**fields))
+    recovered = cache.put(capture(ingestion_index=2, source=source))
+    assert recovered.state == DataState.HEALTHY
+    assert recovered.received_at == NOW
+    assert recovered.exchange_timestamp == NOW
+    assert not cache.rejected_updates
 
 
 
