@@ -100,6 +100,12 @@ def test_old_observation_cannot_replace_newer_trusted_cache(out_of_order):
     assert sum(cache.rejected_updates.values()) == 1
 
 
+def test_exact_stream_duplicate_does_not_refresh_receipt_but_rest_can_reobserve():
+    cache = BookCache(CollectorConfig())
+    b = cache.put(capture(source="kraken_ws"))
+    assert cache.put(b.model_copy(update={"received_at": NOW + timedelta(seconds=1)})) is b
+    rest = b.model_copy(update={"source": "rest", "received_at": NOW + timedelta(seconds=1)})
+    assert cache.put(rest).received_at == rest.received_at
 
 
 
