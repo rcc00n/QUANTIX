@@ -134,6 +134,17 @@ def test_cache_recovers_after_untrusted_future_observation(invalid, source):
     assert not cache.rejected_updates
 
 
+def test_quantile_sample_requirements_and_bounded_memory():
+    assert distribution([1] * 19)["p95"] is None
+    assert distribution([1] * 99)["p99"] is None
+    assert distribution(range(1, 101))["p99"] == 99
+    values = Timings(limit=3)
+    for n in range(10):
+        values.add("SYNTHETIC_ms", n)
+    values.add("SYNTHETIC_ms", float("nan"))
+    values.add("SYNTHETIC_ms", -1)
+    assert values.snapshot()["SYNTHETIC_ms"]["sample_count"] == 3
+    assert values.snapshot()["SYNTHETIC_ms"]["p50"] == 8
 
 
 
