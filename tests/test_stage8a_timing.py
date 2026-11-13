@@ -370,6 +370,17 @@ def test_restart_watermarks_reject_older_data_without_restoring_a_live_book():
     assert not cache.watermarks
 
 
+def test_request_start_schedule_prevents_processing_drift_without_catch_up_bursts(
+    monkeypatch,
+):
+    from arbiq.collector.scheduling import Schedule
+
+    monkeypatch.setattr("arbiq.collector.scheduling.time.monotonic", lambda: 103.0)
+    schedule = Schedule()
+    schedule.success(10, started=100.0)
+    assert schedule.due == 110.0
+    schedule.success(10, started=90.0)
+    assert schedule.due == 103.0  # No negative deadline or extra catch-up request.
 
 
 
