@@ -336,6 +336,24 @@ async def test_source_skew_rejected_even_when_both_receipts_are_simultaneous():
     assert "LEG_SOURCE_TIME_SKEW_EXCEEDED" in engine.store.saved[0][1]["reasons"]
 
 
+def test_live_connector_status_has_separate_snapshot_receipt_and_source_times():
+    collector = Collector(settings(CollectorConfig()), AsyncMock())
+    collector.utcnow = lambda: NOW
+    collector.utc_clock = SimpleNamespace(snapshot=lambda: CLOCK)
+    m = SimpleNamespace(
+        id=uuid4(),
+        native_symbol="SYNTHETIC/USD",
+        base=SimpleNamespace(symbol="SYNTHETIC"),
+        active=True,
+        quote_volume=None,
+    )
+    collector.runtimes["synthetic"] = ExchangeRuntime("synthetic", None, markets=[m])
+    collector.cache.put(capture(5, market_id=m.id))
+    row = collector.market_status()["items"]["synthetic"]
+    assert row["status_generated_at"] == NOW.isoformat()
+    assert row["last_collector_received_at"] == (NOW - timedelta(seconds=5)).isoformat()
+    assert row["freshness_counts"]["AGING"] == 1
+    assert row["source"] == "live_collector"
 
 
 
