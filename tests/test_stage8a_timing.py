@@ -162,6 +162,20 @@ def test_paper_observation_also_fails_closed_on_any_future_source(offset):
     assert accepted is False and reason == "SOURCE_STALE_OR_FUTURE"
 
 
+def test_recheck_pending_cap_includes_work_drained_from_dispatch_queue():
+    from arbiq.collector.scheduling import Schedule
+
+    collector = Collector(settings(CollectorConfig()), AsyncMock())
+    ids = [uuid4() for _ in range(33)]
+    collector.runtimes["synthetic"] = ExchangeRuntime(
+        "synthetic", None, schedules={m: Schedule(due=1000000000) for m in ids}
+    )
+    for mid in ids[:32]:
+        assert collector.request_confirmation(mid) == "QUEUED"
+        collector.confirmation_queue.get_nowait()  # Work remains pending at venue.
+        collector.confirmation_queue.task_done()
+    assert collector.request_confirmation(ids[-1]) == "QUEUE_FULL"
+    assert len(collector.confirmation_enqueued) == 32
 
 
 
