@@ -326,6 +326,14 @@ async def test_both_book_ages_synchronization_and_evaluation_latency_are_pinned(
     assert timing["actionable"] is False
 
 
+async def test_source_skew_rejected_even_when_both_receipts_are_simultaneous():
+    engine, buy, sell, _ = engine_fixture()
+    b = engine.collector.cache.books[buy.id]
+    engine.collector.cache.books[buy.id] = b.model_copy(
+        update={"exchange_timestamp": NOW - timedelta(seconds=15)}
+    )
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    assert "LEG_SOURCE_TIME_SKEW_EXCEEDED" in engine.store.saved[0][1]["reasons"]
 
 
 
