@@ -316,6 +316,14 @@ async def test_late_processing_completion_cannot_regress_connector_success_time(
     assert rt.health["updated_at"] == completed
 
 
+async def test_both_book_ages_synchronization_and_evaluation_latency_are_pinned():
+    engine, buy, sell, _ = engine_fixture()
+    await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
+    timing = engine.store.saved[0][1]["evidence"]["timing"]
+    assert float(timing["buy_book_age_seconds"]) == float(timing["sell_book_age_seconds"]) == 0
+    assert float(timing["cross_book_source_skew_seconds"]) == 0
+    assert float(timing["route_evaluation_ms"]) >= 0
+    assert timing["actionable"] is False
 
 
 
