@@ -74,6 +74,14 @@ def test_source_age_continues_to_expire_in_cache():
     )
 
 
+def test_cache_preserves_clock_and_pipeline_in_the_legacy_evidence_envelope():
+    book = capture().with_pipeline(collector_processed_at=NOW.isoformat())
+    cached = BookCache(CollectorConfig()).put(book)
+    assert cached.verification["clock"] == CLOCK
+    assert cached.pipeline["collector_processed_at"] == NOW.isoformat()
+    payload = cached.model_dump(mode="json")
+    assert "pipeline" not in payload  # Old strict CapturedBook reader remains compatible.
+    assert payload["verification"]["pipeline"]["collector_processed_at"] == NOW.isoformat()
 
 
 
