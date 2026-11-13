@@ -411,3 +411,22 @@ async def test_request_pacing_does_not_occupy_another_venues_network_slot():
     assert first.last_timing["pacing_wait_ms"] >= 50
 
 
+async def test_fair_pending_comparisons_drain_and_unchanged_inputs_are_skipped():
+    import asyncio
+
+    engine, buy, sell, _ = engine_fixture()
+    # Keep real evaluation path and both directions, without any public network.
+    task = asyncio.create_task(engine.run())
+    try:
+        engine.changed(engine.collector.cache.books[buy.id])
+        await asyncio.sleep(0.05)
+        count = engine.metrics["comparison_attempts"]
+        engine.changed(engine.collector.cache.books[buy.id])
+        await asyncio.sleep(0.05)
+        assert count == 2
+        assert engine.metrics["comparison_attempts"] == count
+        assert engine.metrics["identical_comparisons_skipped"] == 2
+        assert len(engine.jobs) == 0
+    finally:
+        engine.collector.stop.set()
+        await task
