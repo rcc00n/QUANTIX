@@ -214,6 +214,42 @@ async def test_one_collector_outage_probe_per_terminal_request():
     assert value["feeds"] == []
 
 
+async def test_notification_batch_reference_is_distinct_from_observed_enqueue(
+    database_url,
+):
+    from arbiq.notifications.models import NotificationEvent
+    from arbiq.notifications.service import enqueue
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+    from test_notifications import synthetic_owner, synthetic_pair
+
+    engine = create_async_engine(database_url)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as db:
+            user = await synthetic_owner(db)
+            binding = await synthetic_pair(db, user)
+            db.info["notification_clock"] = SimpleNamespace(
+                utcnow=lambda: NOW, snapshot=lambda: {"trusted": True}
+            )
+            logical_start = NOW - timedelta(seconds=45)
+            row = await enqueue(
+                db,
+                binding,
+                key=f"synthetic-stage8a:{uuid4()}",
+                kind="test",
+                message="SYNTHETIC enqueue timing only",
+                now=logical_start,
+                expires_at=NOW + timedelta(minutes=1),
+            )
+            event = await db.scalar(
+                select(NotificationEvent).where(NotificationEvent.outbox_id == row.id)
+            )
+            assert row.created_at == NOW
+            assert event.details["queue_requested_at"] == logical_start.isoformat()
+            assert event.details["queue_insert_observed_at"] == NOW.isoformat()
+            await db.rollback()
+    finally:
+        await engine.dispose()
 
 
 
