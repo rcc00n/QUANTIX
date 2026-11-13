@@ -383,5 +383,31 @@ def test_request_start_schedule_prevents_processing_drift_without_catch_up_burst
     assert schedule.due == 103.0  # No negative deadline or extra catch-up request.
 
 
+async def test_request_pacing_does_not_occupy_another_venues_network_slot():
+    import asyncio
+    import time
+
+    from arbiq.connectors.ccxt_public import PublicConnector
+
+    # Mock native methods; no network or metadata download occurs.
+    config = CollectorConfig(minimum_request_interval_seconds=0.1)
+    first, second = (
+        PublicConnector("bitget", config),
+        PublicConnector("bitstamp", config),
+    )
+    gate = asyncio.Semaphore(1)
+    order = []
+    for connector in (first, second):
+        connector._request_gate = gate
+        connector.open = AsyncMock()
+    first._last_request = time.monotonic()
+
+    async def request(name):
+        order.append(name)
+        return {}
+
+    await asyncio.gather(first._call(request, "paced"), second._call(request, "ready"))
+    assert order == ["ready", "paced"]
+    assert first.last_timing["pacing_wait_ms"] >= 50
 
 
