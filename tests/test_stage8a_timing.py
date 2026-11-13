@@ -178,6 +178,40 @@ def test_recheck_pending_cap_includes_work_drained_from_dispatch_queue():
     assert len(collector.confirmation_enqueued) == 32
 
 
+async def test_one_collector_outage_probe_per_terminal_request():
+    from arbiq.api.terminal import TerminalCache, runtime
+
+    calls = []
+
+    class OfflineResponse:
+        async def __aenter__(self):
+            raise TimeoutError("SYNTHETIC offline collector")
+
+        async def __aexit__(self, *args):
+            return None
+
+    def get(path):
+        calls.append(path)
+        return OfflineResponse()
+
+    req = SimpleNamespace(
+        state=SimpleNamespace(),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                terminal_cache=TerminalCache(), collector_http=SimpleNamespace(get=get)
+            )
+        ),
+    )
+    db = SimpleNamespace(
+        scalar=AsyncMock(return_value=None),
+        execute=AsyncMock(return_value=SimpleNamespace(all=lambda: [])),
+    )
+    value = await runtime(req, db, None)
+    assert calls == ["/terminal/runtime"]
+    assert value["collector"]["healthy"] is False
+    assert value["scanner"]["clock"]["trusted"] is False
+    assert value["as_of"] is None
+    assert value["feeds"] == []
 
 
 
