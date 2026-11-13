@@ -356,6 +356,18 @@ def test_live_connector_status_has_separate_snapshot_receipt_and_source_times():
     assert row["source"] == "live_collector"
 
 
+def test_restart_watermarks_reject_older_data_without_restoring_a_live_book():
+    cache = BookCache(CollectorConfig())
+    book = capture()
+    cache.seed_watermarks({book.market_id: (NOW, NOW)})
+    assert cache.get(book.market_id) is None
+    assert (
+        cache.put(book.model_copy(update={"exchange_timestamp": NOW - timedelta(seconds=1)}))
+        is None
+    )
+    assert cache.rejected_updates["BEFORE_RESTART_WATERMARK"] == 1
+    assert cache.put(book).received_at == NOW
+    assert not cache.watermarks
 
 
 
