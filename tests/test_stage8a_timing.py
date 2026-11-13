@@ -252,6 +252,24 @@ async def test_notification_batch_reference_is_distinct_from_observed_enqueue(
         await engine.dispose()
 
 
+async def test_alert_freshness_rechecked_after_slow_persistence_lookup(monkeypatch):
+    from arbiq.signals.engine import evaluate_source
+    from test_notifications import NOW as ALERT_NOW
+    from test_notifications import policy, synthetic_evidence, synthetic_result
+
+    monkeypatch.setattr("arbiq.signals.engine.persistence", AsyncMock(return_value=0))
+    completed = ALERT_NOW + timedelta(seconds=45)
+    db = SimpleNamespace(
+        info={
+            "notification_clock": SimpleNamespace(
+                utcnow=lambda: completed, snapshot=lambda: {"trusted": True}
+            )
+        }
+    )
+    source = SimpleNamespace(result=synthetic_result(), evidence=synthetic_evidence())
+    gate = await evaluate_source(db, source, policy(), ALERT_NOW, True)
+    assert gate.eligible is False and "QUOTE_STALE" in gate.reasons
+    assert db.info["last_alert_checked_at"] == completed
 
 
 
