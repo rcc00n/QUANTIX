@@ -296,6 +296,24 @@ async def test_rejected_response_never_republishes_previous_book_to_paper_or_sca
     assert store.event.await_args.args[1] == "collector.update_rejected"
 
 
+async def test_late_processing_completion_cannot_regress_connector_success_time():
+    from dataclasses import replace
+
+    from arbiq.market_data.discovery import normalize_market
+    from test_market_data import synthetic_market
+
+    collector = Collector(settings(CollectorConfig()), AsyncMock())
+    completed = NOW + timedelta(seconds=1)
+    collector.utcnow = lambda: completed
+    m = replace(
+        normalize_market("synthetic", synthetic_market(), {}, precision_mode=4),
+        id=uuid4(),
+    )
+    rt = ExchangeRuntime("synthetic", SimpleNamespace(last_timing={}), exchange_id=uuid4())
+    rt.health["last_success_at"] = completed
+    await collector.accept(rt, m, synthetic_raw(NOW), NOW, NOW, 10, "rest")
+    assert rt.health["last_success_at"] == completed
+    assert rt.health["updated_at"] == completed
 
 
 
