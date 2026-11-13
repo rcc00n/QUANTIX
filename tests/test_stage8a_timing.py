@@ -147,6 +147,19 @@ def test_quantile_sample_requirements_and_bounded_memory():
     assert values.snapshot()["SYNTHETIC_ms"]["p50"] == 8
 
 
+@pytest.mark.parametrize("offset", [0.001, 1, 80])
+def test_paper_observation_also_fails_closed_on_any_future_source(offset):
+    from arbiq.paper_trading.execution import evidence_eligibility
+
+    accepted, reason = evidence_eligibility(
+        capture(exchange_timestamp=NOW + timedelta(seconds=offset)),
+        now=NOW,
+        eligible_at=NOW,
+        maximum_age=30,
+        research=True,
+        clock_trusted=True,
+    )
+    assert accepted is False and reason == "SOURCE_STALE_OR_FUTURE"
 
 
 
