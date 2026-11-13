@@ -84,6 +84,20 @@ def test_cache_preserves_clock_and_pipeline_in_the_legacy_evidence_envelope():
     assert payload["verification"]["pipeline"]["collector_processed_at"] == NOW.isoformat()
 
 
+@pytest.mark.parametrize("out_of_order", ["source", "receipt", "index"])
+def test_old_observation_cannot_replace_newer_trusted_cache(out_of_order):
+    cache = BookCache(CollectorConfig())
+    first = capture(ingestion_index=10)
+    first = cache.put(first)
+    fields = {"ingestion_index": 11, "received_at": NOW + timedelta(seconds=1)}
+    if out_of_order == "source":
+        fields["exchange_timestamp"] = NOW - timedelta(seconds=1)
+    if out_of_order == "receipt":
+        fields["received_at"] = NOW - timedelta(seconds=1)
+    if out_of_order == "index":
+        fields["ingestion_index"] = 9
+    assert cache.put(first.model_copy(update=fields)) is first
+    assert sum(cache.rejected_updates.values()) == 1
 
 
 
