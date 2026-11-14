@@ -264,5 +264,64 @@ async def test_retention_prunes_only_transient_rows_and_enforces_row_budget(
         await engine.dispose()
 
 
+def test_market_dashboard_api_authentication_catalog_and_stale_fallback(database_url):
+    async def seed():
+        engine, _sessions, store, slug, _exchange_id, market = await seed_store(database_url)
+        try:
+            book = synthetic_capture(
+                market_id=market.id,
+                exchange=slug,
+                received_at=datetime(2020, 1, 1, tzinfo=UTC),
+            )
+            await store.save_book(book, force=True)
+            async with _sessions() as db:
+                db.add(
+                    CollectorRun(
+                        worker_id=f"synthetic-future-stopped-{uuid4()}",
+                        status="stopped",
+                        created_at=datetime(2099, 1, 1, tzinfo=UTC),
+                        heartbeat_at=datetime(2020, 1, 1, tzinfo=UTC),
+                        config_snapshot={},
+                        metrics={},
+                    )
+                )
+                await db.commit()
+            return slug, str(market.id)
+        finally:
+            await engine.dispose()
+
+    slug, market_id = asyncio.run(seed())
+    username = f"synthetic-api-{uuid4().hex}"
+    config = Settings(
+        _env_file=None,
+        database_url=database_url,
+        admin_username=username,
+        admin_password_hash=hash_password("synthetic-api-password"),
+        collector_internal_token="",
+    )
+    with TestClient(create_app(config), client=(f"synthetic-{uuid4().hex}", 12345)) as client:
+        assert client.get(f"/api/v1/markets/{market_id}/book").status_code == 401
+        assert (
+            client.post(
+                "/api/v1/auth/login",
+                json={"username": username, "password": "synthetic-api-password"},
+            ).status_code
+            == 200
+        )
+        feeds = client.get("/api/v1/exchanges").json()
+        assert any(feed["slug"] == slug for feed in feeds)
+        catalog = client.get(f"/api/v1/exchanges/{slug}/markets?monitored_only=true").json()
+        assert catalog["total"] == 1 and catalog["markets"][0]["symbol"] == "BTC/USD"
+        response = client.get(f"/api/v1/markets/{market_id}/book")
+        assert response.status_code == 200
+        book = response.json()
+        assert book["state"] == "STALE" and book["storage_origin"] == "persisted_cache"
+        assert book["actionable"] is False and book["exchange_timestamp"]
+        assert client.get(f"/api/v1/exchanges/{slug}/quality").status_code == 200
+        assert (
+            client.get("/api/v1/market-data/status").json()["arbitrage_engine"] == "depth_scanner"
+        )
+        assert client.post(f"/api/v1/markets/{market_id}/confirm").status_code == 503
+        assert client.get("/api/v1/exchanges/synthetic-missing/markets").status_code == 404
 
 
