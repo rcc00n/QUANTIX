@@ -226,3 +226,55 @@ async def test_rebalance_preview_keeps_research_balances_and_ledger_unchanged(
         assert await reconcile(db, sid)
 
 
+async def test_trade_export_contains_bounded_ledger_provenance(private_api):
+    from uuid import UUID
+
+    from arbiq.db.models import PaperTrade, SimulationEvent
+
+    c, dbs, _ = private_api
+    p = c.post("/api/v1/paper/sessions", json={}).json()
+    now = datetime(2026, 11, 22, 6, tzinfo=UTC)
+    async with dbs() as db:
+        trade = PaperTrade(
+            session_id=UUID(p["id"]),
+            opportunity_id=None,
+            status="MISSED",
+            classification="VALIDATED",
+            mode="PRE_FUNDED",
+            strategy_version_id=UUID(p["strategy_version_id"]),
+            requested_at=now,
+            reaction_delay_ms=30000,
+            eligible_at=now,
+            completed_at=now,
+            reason="SYNTHETIC_MISSING_EVIDENCE",
+            calculation_version="SYNTHETIC",
+            assumptions={"synthetic": True},
+            state={},
+        )
+        db.add(trade)
+        await db.flush()
+        # SYNTHETIC same-UTC events deliberately inserted in reverse logical order.
+        for event in ("SCHEDULED", "ELIGIBILITY_CHECK", "CANDIDATE"):
+            db.add(
+                SimulationEvent(
+                    trade_id=trade.id,
+                    event_type=event,
+                    reason="SYNTHETIC_TIED_TIMESTAMP",
+                    occurred_at=now,
+                    provenance={"synthetic": True},
+                )
+            )
+        await db.commit()
+        tid = trade.id
+    response = c.get("/api/v1/paper/trades/" + str(tid))
+    assert response.status_code == 200
+    value = response.json()
+    assert value["schema_version"] == "paper-trade-evidence-v1"
+    assert value["ledger_entries"] == [] and value["observations"] == []
+    assert value["session_provenance"]["initial_equity_cad"] == "10000.000000000000000000"
+    assert value["paper_only"] is True
+    assert [e["event_type"] for e in value["events"]] == [
+        "CANDIDATE",
+        "ELIGIBILITY_CHECK",
+        "SCHEDULED",
+    ]
