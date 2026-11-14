@@ -92,6 +92,84 @@ async def test_selection_only_rewrites_rows_with_a_changed_monitor_flag(database
         await engine.dispose()
 
 
+async def test_store_discovery_upserts_restart_idempotency_and_evidence(database_url):
+    engine, sessions, store, slug, exchange_id, market = await seed_store(database_url)
+    try:
+        again = await store.save_markets(exchange_id, [market], [market])
+        assert again[0].id == market.id
+        book = synthetic_capture(market_id=market.id, exchange=slug)
+        await store.save_book(book, force=True)
+        await store.save_book(book, force=True)
+        restarted = CollectorStore(sessions, CollectorConfig())
+        await restarted.start(f"synthetic-restart-{uuid4()}")
+        await restarted.save_book(book, force=True)
+        async with sessions() as db:
+            assert (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(Market)
+                    .where(Market.exchange_id == exchange_id)
+                )
+                == 1
+            )
+            assert (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(LatestMarketBook)
+                    .where(LatestMarketBook.market_id == market.id)
+                )
+                == 1
+            )
+            assert (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(MarketDataSample)
+                    .where(MarketDataSample.market_id == market.id)
+                )
+                == 1
+            )
+            assert (
+                await db.scalar(
+                    select(func.count())
+                    .select_from(MarketQualityEvent)
+                    .where(MarketQualityEvent.market_id == market.id)
+                )
+                == 1
+            )
+            event = await db.scalar(
+                select(MarketQualityEvent).where(MarketQualityEvent.market_id == market.id)
+            )
+            assert event.evidence["raw"]["bids"][0][0] == "100"
+        causal = book.model_copy(update={"ingestion_index": 1})
+        await restarted.save_book(causal, force=True)
+        after_clock_step = book.model_copy(
+            update={
+                "ingestion_index": 2,
+                "received_at": book.received_at - timedelta(seconds=90),
+                "state": book.state.__class__.SUSPICIOUS,
+                "reasons": ("collector_clock_jump",),
+            }
+        )
+        await restarted.save_book(after_clock_step, force=True)
+        async with sessions() as db:
+            latest = await db.get(LatestMarketBook, market.id)
+            assert latest.payload["ingestion_index"] == 1
+        # Changed identity behind the same symbol must not rewrite historical FKs.
+        conflict = normalize_market(
+            slug,
+            synthetic_market(),
+            {"BTC": {"name": "Wrapped Bitcoin"}},
+            precision_mode=4,
+        )
+        assert not await restarted.save_markets(exchange_id, [conflict], [conflict])
+        async with sessions() as db:
+            events = (
+                await db.scalars(select(SystemEvent).where(SystemEvent.exchange_id == exchange_id))
+            ).all()
+            assert any(e.event_type == "market.identity_conflict" for e in events)
+        await restarted.stop()
+    finally:
+        await engine.dispose()
 
 
 
