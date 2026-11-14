@@ -70,6 +70,63 @@ def test_private_paper_endpoints_require_sessions(client):
         assert client.get("/api/v1" + path).status_code == 401
 
 
+async def test_funded_portfolios_and_mode_isolation(private_api):
+    c, dbs, asset = private_api
+    primary = c.post(
+        "/api/v1/paper/sessions",
+        json={"name": "SYNTHETIC validated", "starting_capital_cad": "10000"},
+    )
+    assert primary.status_code == 201, primary.text
+    p = primary.json()
+    assert p["classification"] == "VALIDATED"
+    research = c.post(
+        "/api/v1/paper/sessions",
+        json={
+            "name": "SYNTHETIC research",
+            "starting_capital_cad": "10000",
+            "classification": "RESEARCH",
+            "allocations": [
+                {
+                    "exchange": "kraken",
+                    "asset": asset,
+                    "quantity": "50",
+                    "cad_rate": "100",
+                },
+                {"exchange": "ndax", "quantity": "5000"},
+            ],
+        },
+    )
+    assert research.status_code == 201, research.text
+    r = research.json()
+    assert r["classification"] == "RESEARCH" and r["id"] != p["id"]
+    listing = c.get("/api/v1/paper/sessions").json()
+    assert listing["total"] == 2 and listing["scenarios_are_separate"]
+    illegal = c.put(
+        f"/api/v1/paper/sessions/{r['id']}/strategy",
+        json=presets()["Balanced"].model_dump(mode="json"),
+    )
+    assert illegal.status_code == 409
+    bad = c.post(
+        "/api/v1/paper/sessions",
+        json={
+            "name": "SYNTHETIC freecrypto",
+            "classification": "RESEARCH",
+            "starting_capital_cad": "10000",
+            "allocations": [
+                {
+                    "exchange": "kraken",
+                    "asset": asset,
+                    "quantity": "50",
+                    "cad_rate": "100",
+                }
+            ],
+        },
+    )
+    assert bad.status_code == 422
+    async with dbs() as db:
+        from uuid import UUID
+
+        assert await reconcile(db, UUID(p["id"])) and await reconcile(db, UUID(r["id"]))
 
 
 
