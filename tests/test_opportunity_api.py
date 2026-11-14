@@ -105,6 +105,33 @@ def test_retained_clock_gates_expiry_and_exact_decimal_sort():
     ] == ["high", "low", "missing"]
 
 
+def test_live_projection_uses_its_own_evidence_and_time_not_old_database_snapshot():
+    route = synthetic_route()
+    live = synthetic_payload(NOW + timedelta(seconds=50), profit="11")
+    result = api.project(
+        route,
+        Decimal(1000),
+        synthetic_health(NOW + timedelta(seconds=51)),
+        30,
+        evidence={"SYNTHETIC": "old pinned evidence"},
+        current=live,
+    )
+    assert result["status"] == "VERIFIED_MARKET"
+    assert result["net_profit_cad"] == "11"
+    assert result["storage_origin"] == "live_engine_projection"
+    assert "retained_snapshot_references" in result["evidence"]
+    assert result["age_seconds"] == 51
+    live["supporting_received_at"] = NOW.isoformat()
+    assert (
+        api.project(
+            route,
+            Decimal(1000),
+            synthetic_health(NOW + timedelta(seconds=51)),
+            30,
+            current=live,
+        )["status"]
+        == "EXPIRED"
+    )
 
 
 
