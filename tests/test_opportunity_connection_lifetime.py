@@ -118,5 +118,67 @@ async def test_list_releases_auth_query_and_fallback_leases_before_ipc_and_cpu(
     assert fixture.engine.pool.checkedout() == 0
 
 
+@pytest.mark.parametrize("history", [False, True])
+async def test_scalar_candidate_path_matches_full_projection_and_loads_only_needed_payloads(
+    single_connection_radar,
+    monkeypatch,
+    history,
+):
+    fixture = single_connection_radar
+    live_id, retained_id, terminal_id = fixture.seeded_ids
+    ids = {UUID(item) for item in fixture.seeded_ids}
+    asset = f"SYNTH8B1_{uuid4().hex[:10].upper()}"
+    health = synthetic_health(NOW + timedelta(seconds=3))
+    current = {
+        live_id: synthetic_payload(
+            NOW + timedelta(seconds=2),
+            profit="11.000000000000000001",
+            base_asset=asset,
+        ),
+        retained_id: synthetic_payload(
+            profit="99", expires_at="SYNTHETIC invalid expiry", base_asset=asset
+        ),
+    }
+    async with fixture.sessions() as db:
+        for row in await db.scalars(select(ArbitrageRoute).where(ArbitrageRoute.id.in_(ids))):
+            row.payload = {**row.payload, "base_asset": asset}
+            if str(row.id) in {live_id, terminal_id}:
+                row.status = "EXPIRED"
+        await db.commit()
+        original_rows = (
+            await db.execute(
+                api.list_route_query(Decimal(1000), full=True).where(ArbitrageRoute.id.in_(ids))
+            )
+        ).all()
+
+    expected = []
+    for row in original_rows:
+        projected = api.project(row, Decimal(1000), health, 30, current=current.get(str(row.id)))
+        if history or projected["status"] not in api.TERMINAL:
+            expected.append({k: v for k, v in projected.items() if k not in api.LIST_DETAIL_FIELDS})
+    expected.sort(key=lambda row: api.financial_sort(row, "net_profit_cad"))
+
+    async def collector(*_args, **_kwargs):
+        assert fixture.engine.pool.checkedout() == 0
+        return current, health
+
+    monkeypatch.setattr(api, "collector_current", collector)
+    fixture.route_queries.clear()
+    fixture.route_parameters.clear()
+    response = await fixture.client.get(
+        f"/api/v1/opportunities?asset={asset}&history={str(history).lower()}"
+    )
+    assert response.status_code == 200
+    assert response.json()["items"] == expected
+    assert expected[0]["id"] == retained_id and expected[0]["net_profit_cad"] == "20"
+    assert (
+        expected[1]["id"] == live_id and expected[1]["storage_origin"] == "live_engine_projection"
+    )
+    assert len(fixture.route_queries) == 3
+    assert "payload" not in fixture.route_queries[1].split("FROM")[0]
+    payload_ids = {str(value) for value in fixture.route_parameters[2]} & set(fixture.seeded_ids)
+    assert payload_ids == ({retained_id, terminal_id} if history else {retained_id})
+    assert f'desc="{len(payload_ids)} rows"' in response.headers["Server-Timing"]
+    assert fixture.engine.pool.checkedout() == 0
 
 
