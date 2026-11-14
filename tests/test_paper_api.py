@@ -154,6 +154,31 @@ async def test_strategy_versioning_preserves_initial_configuration(private_api):
     assert c.post(f"/api/v1/paper/sessions/{p['id']}/resume").json()["status"] == "ACTIVE"
 
 
+async def test_empty_metrics_pagination_and_insufficient_rebalance(private_api):
+    c, _, _ = private_api
+    p = c.post("/api/v1/paper/sessions", json={}).json()
+    sid = p["id"]
+    metrics = c.get(f"/api/v1/paper/sessions/{sid}/metrics")
+    assert metrics.status_code == 200 and metrics.json()["win_rate_pct"] is None
+    assert c.get("/api/v1/paper/trades?limit=101").status_code == 422
+    assert c.get(f"/api/v1/paper/trades?session_id={sid}").json()["total"] == 0
+    assert c.get("/api/v1/paper/trades/" + str(uuid4())).status_code == 404
+    assert (
+        c.post(
+            f"/api/v1/paper/sessions/{sid}/rebalance",
+            json={
+                "from_exchange": "kraken",
+                "to_exchange": "ndax",
+                "asset": "fiat:CAD",
+                "quantity": "6000",
+                "network": "SYNTHETIC",
+                "network_verified": True,
+                "settlement_seconds": 10,
+            },
+        ).status_code
+        == 409
+    )
+    assert c.get(f"/api/v1/paper/sessions/{sid}/daily").json()["timezone"] == "America/Edmonton"
 
 
 
