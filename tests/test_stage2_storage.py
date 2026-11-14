@@ -172,6 +172,33 @@ async def test_store_discovery_upserts_restart_idempotency_and_evidence(database
         await engine.dispose()
 
 
+@pytest.mark.parametrize("invalid", ["source", "receipt"])
+async def test_latest_fallback_recovers_from_untrusted_future_time(database_url, invalid):
+    engine, sessions, store, slug, _exchange_id, market = await seed_store(database_url)
+    try:
+        book = synthetic_capture(market_id=market.id, exchange=slug)
+        fields = {"ingestion_index": 1, "state": book.state.__class__.SUSPICIOUS}
+        if invalid == "source":
+            fields.update(
+                exchange_timestamp=book.received_at + timedelta(seconds=80),
+                reasons=("invalid_or_future_timestamp",),
+            )
+        else:
+            fields.update(
+                received_at=book.received_at + timedelta(seconds=80),
+                verification={"clock": {"trusted": False}},
+                reasons=("collector_clock_jump",),
+            )
+        await store.save_book(book.model_copy(update=fields), force=True)
+        await store.save_book(book.model_copy(update={"ingestion_index": 2}), force=True)
+        async with sessions() as db:
+            latest = await db.get(LatestMarketBook, market.id)
+            assert latest.received_at == book.received_at
+            assert latest.exchange_timestamp == book.exchange_timestamp
+            assert latest.payload["ingestion_index"] == 2
+        await store.stop()
+    finally:
+        await engine.dispose()
 
 
 
