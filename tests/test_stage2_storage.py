@@ -201,6 +201,67 @@ async def test_latest_fallback_recovers_from_untrusted_future_time(database_url,
         await engine.dispose()
 
 
+async def test_retention_prunes_only_transient_rows_and_enforces_row_budget(
+    database_url,
+):
+    config = CollectorConfig(max_transient_rows=1000)
+    engine, sessions, store, _slug, _exchange_id, market = await seed_store(database_url, config)
+    now = datetime.now(UTC)
+    try:
+        async with sessions() as db:
+            snapshot = OrderBookSnapshot(
+                market_id=market.id,
+                observed_at=now,
+                received_at=now,
+                bids=[["100", "1"]],
+                asks=[["101", "1"]],
+                source="synthetic-financial-evidence",
+                quality="SYNTHETIC",
+                content_sha256="a" * 64,
+            )
+            db.add(snapshot)
+            await db.flush()
+            snapshot_id = snapshot.id
+            db.add(
+                MarketQualityEvent(
+                    event_key=uuid4().hex,
+                    state="SUSPICIOUS",
+                    market_id=market.id,
+                    created_at=now - timedelta(days=10),
+                    reasons=["synthetic_expired"],
+                    evidence={"synthetic": True},
+                    confirmation={},
+                    snapshot_id=snapshot_id,
+                )
+            )
+            values = [
+                {
+                    "id": uuid4(),
+                    "market_id": market.id,
+                    "bucket_start": now - timedelta(seconds=i),
+                    "received_at": now - timedelta(seconds=i),
+                    "exchange_timestamp": now - timedelta(seconds=i),
+                    "bid": Decimal(100),
+                    "ask": Decimal(101),
+                    "state": "HEALTHY",
+                    "latency_ms": 1,
+                    "content_sha256": "b" * 64,
+                    "created_at": now - timedelta(seconds=i),
+                }
+                for i in range(1003)
+            ]
+            await db.execute(insert(MarketDataSample).values(values))
+            await db.commit()
+        await store.prune()
+        async with sessions() as db:
+            assert await db.scalar(select(func.count()).select_from(MarketDataSample)) <= 1000
+            assert await db.get(OrderBookSnapshot, snapshot_id) is not None
+            assert not await db.scalar(
+                select(MarketQualityEvent.id).where(MarketQualityEvent.snapshot_id == snapshot_id)
+            )
+    finally:
+        await store.stop()
+        await engine.dispose()
 
 
 
