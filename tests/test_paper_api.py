@@ -181,5 +181,48 @@ async def test_empty_metrics_pagination_and_insufficient_rebalance(private_api):
     assert c.get(f"/api/v1/paper/sessions/{sid}/daily").json()["timezone"] == "America/Edmonton"
 
 
+async def test_rebalance_preview_keeps_research_balances_and_ledger_unchanged(
+    private_api, monkeypatch
+):
+    from uuid import UUID
+
+    from arbiq.db.models import LedgerEntry
+    from arbiq.paper_trading.models import RebalanceRequest
+    from sqlalchemy import func
+
+    async def clock(request):
+        return datetime(2026, 11, 22, 6, tzinfo=UTC), {"trusted": True}
+
+    monkeypatch.setattr("arbiq.paper_trading.api.utc_reference", clock)
+    c, dbs, _ = private_api
+    p = c.post("/api/v1/paper/sessions", json={"classification": "RESEARCH"}).json()
+    sid = UUID(p["id"])
+    async with dbs() as db:
+        before = await db.scalar(select(func.count()).select_from(LedgerEntry))
+    result = c.post(
+        f"/api/v1/paper/sessions/{sid}/rebalance/preview",
+        json={
+            "from_exchange": "kraken",
+            "to_exchange": "ndax",
+            "asset": "fiat:CAD",
+            "target_destination_quantity": "5500",
+            "network": "SYNTHETIC settlement",
+            "withdrawal_available": True,
+            "deposit_available": True,
+            "withdrawal_fee_quantity": "1",
+            "network_fee_quantity": "2",
+            "settlement_seconds": 100,
+        },
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["hypothetical_transfer"]["transfer_fee_cad"] == "3"
+    assert result.json()["execution_performed"] is False
+    async with dbs() as db:
+        assert await db.scalar(select(func.count()).select_from(LedgerEntry)) == before
+        assert (
+            await db.scalar(select(RebalanceRequest.id).where(RebalanceRequest.session_id == sid))
+            is None
+        )
+        assert await reconcile(db, sid)
 
 
