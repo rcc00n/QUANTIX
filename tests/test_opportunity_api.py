@@ -319,3 +319,62 @@ def test_authenticated_opportunity_endpoints_filters_pagination_and_missing_cost
     )
 
 
+def test_current_api_merges_fresh_live_projection_and_recheck_is_audited(
+    database_url, radar_client, monkeypatch
+):
+    ids = asyncio.run(seed_routes(database_url))
+    client, username = radar_client
+    login(client, username)
+
+    async def current(*args, **kwargs):
+        return {
+            ids[0]: synthetic_payload(NOW + timedelta(seconds=50), profit="99")
+        }, synthetic_health(NOW + timedelta(seconds=51))
+
+    monkeypatch.setattr(api, "collector_current", current)
+    rows = client.get("/api/v1/opportunities?asset=SYNTH_API&history=false").json()[
+        "items"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["net_profit_cad"] == "99"
+    assert rows[0]["storage_origin"] == "live_engine_projection"
+    assert (
+        client.get(f"/api/v1/opportunities/{ids[0]}").json()["net_profit_cad"] == "99"
+    )
+
+    class Response:
+        status = 202
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+    class SyntheticClient:
+        def post(self, path):
+            assert path == f"/engine/routes/{ids[0]}/recheck"
+            return Response()
+
+        async def close(self):
+            pass
+
+    client.app.state.collector_http = SyntheticClient()
+    assert client.post(f"/api/v1/opportunities/{ids[0]}/recheck").status_code == 202
+
+    async def audit():
+        engine = create_async_engine(database_url)
+        try:
+            async with async_sessionmaker(engine)() as db:
+                events = (
+                    await db.scalars(
+                        select(SystemEvent).where(
+                            SystemEvent.event_type == "opportunity.recheck_requested"
+                        )
+                    )
+                ).all()
+                assert any(event.details["route_id"] == ids[0] for event in events)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(audit())
