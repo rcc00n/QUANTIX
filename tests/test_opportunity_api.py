@@ -134,6 +134,50 @@ def test_live_projection_uses_its_own_evidence_and_time_not_old_database_snapsho
     )
 
 
+def test_expired_fx_suppresses_current_cad_values_but_retains_timestamped_original_costs():
+    payload = synthetic_payload(
+        costs={"net_profit_cad": "10", "acquisition_cost_cad": "100"},
+        evidence={
+            "calculation_inputs": {
+                "buy": {
+                    "quote_currency": "USD",
+                    "fx": {"fresh_until": (NOW + timedelta(seconds=2)).isoformat()},
+                },
+                "sell": {"quote_currency": "CAD", "fx": None},
+                "evaluated_at": NOW.isoformat(),
+            }
+        },
+    )
+    result = api.project(
+        synthetic_route(payload),
+        Decimal(1000),
+        synthetic_health(NOW + timedelta(seconds=3)),
+        30,
+    )
+    assert result["status"] == "RESEARCH_ONLY"
+    assert result["net_profit_cad"] is None
+    assert result["net_return_pct"] is None
+    assert result["acquisition_cost_cad"] is None
+    assert result["costs"]["net_profit_cad"] == "10"
+    assert result["costs_evaluated_at"] == NOW.isoformat()
+    assert "CAD_CONVERSION_EXPIRED" in result["reasons"]
+    # CAD identity has no expiring market conversion evidence.
+    payload["evidence"]["calculation_inputs"]["buy"]["quote_currency"] = "CAD"
+    result = api.project(
+        synthetic_route(payload),
+        Decimal(1000),
+        synthetic_health(NOW + timedelta(seconds=3)),
+        30,
+    )
+    assert result["net_profit_cad"] == "10"
+    # A newly ingested snapshot cannot revive an expired source update.
+    payload["supporting_source_at"] = (NOW - timedelta(seconds=31)).isoformat()
+    result = api.project(
+        synthetic_route(payload), Decimal(1000), synthetic_health(), 30
+    )
+    assert result["status"] == "EXPIRED"
+    assert result["net_profit_cad"] is None
+    assert "SUPPORTING_SOURCE_TIMESTAMP_NOT_CURRENT" in result["reasons"]
 
 
 async def seed_routes(database_url):
