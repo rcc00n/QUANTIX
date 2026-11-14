@@ -272,5 +272,50 @@ def login(client, username):
     assert response.status_code == 200
 
 
+def test_authenticated_opportunity_endpoints_filters_pagination_and_missing_costs(
+    database_url, radar_client, monkeypatch
+):
+    ids = asyncio.run(seed_routes(database_url))
+    client, username = radar_client
+    for endpoint in ("", "/budgets", "/diagnostics", f"/{ids[0]}"):
+        assert client.get(f"/api/v1/opportunities{endpoint}").status_code == 401
+    login(client, username)
+
+    async def health(*args):
+        return synthetic_health()
+
+    monkeypatch.setattr(api, "collector_diagnostics", health)
+    response = client.get("/api/v1/opportunities?asset=SYNTH_API&history=true&limit=1")
+    assert response.status_code == 200
+    rows = response.json()
+    assert rows["total"] >= 3
+    assert rows["items"][0]["net_profit_cad"] == "20"
+    assert rows["items"][0]["actionable"] is False
+    assert (
+        not {"costs", "evidence", "budget_results", "maximum_executable"}
+        & rows["items"][0].keys()
+    )
+    assert client.get("/api/v1/opportunities?limit=101").status_code == 422
+    assert client.get("/api/v1/opportunities?budget_cad=NaN").status_code == 422
+    assert client.get("/api/v1/opportunities?budget_cad=1000001").status_code == 422
+    assert client.get("/api/v1/opportunities?sort=invalid").status_code == 422
+    assert (
+        client.get("/api/v1/opportunities?asset=NO_SUCH_SYNTHETIC_ASSET").json()[
+            "total"
+        ]
+        == 0
+    )
+    value = client.get(f"/api/v1/opportunities/{ids[0]}").json()
+    assert value["lifecycle"][0]["reason"] == "SYNTHETIC API fixture"
+    assert value["retained_evaluation_id"] is None
+    custom = client.get(f"/api/v1/opportunities/{ids[0]}?budget_cad=250").json()
+    assert custom["net_profit_cad"] is None
+    assert "BUDGET_EVIDENCE_UNAVAILABLE" in custom["reasons"]
+    assert client.get(f"/api/v1/opportunities/{uuid4()}").status_code == 404
+    assert client.post(f"/api/v1/opportunities/{ids[0]}/recheck").status_code == 503
+    assert (
+        client.get("/api/v1/opportunities/budgets").json()["default_budget_cad"]
+        == "1000"
+    )
 
 
