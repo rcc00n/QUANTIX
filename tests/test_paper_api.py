@@ -129,6 +129,29 @@ async def test_funded_portfolios_and_mode_isolation(private_api):
         assert await reconcile(db, UUID(p["id"])) and await reconcile(db, UUID(r["id"]))
 
 
+async def test_strategy_versioning_preserves_initial_configuration(private_api):
+    c, dbs, _ = private_api
+    p = c.post("/api/v1/paper/sessions", json={}).json()
+    settings = p["settings"]
+    settings["reaction_delay_seconds"] = 120
+    settings["minimum_profit_cad"] = "12"
+    response = c.put(f"/api/v1/paper/sessions/{p['id']}/strategy", json=settings)
+    assert response.status_code == 200, response.text
+    assert response.json()["strategy_version_id"] != p["strategy_version_id"]
+    async with dbs() as db:
+        from uuid import UUID
+
+        session = await db.get(PaperSession, UUID(p["id"]))
+        control = await db.get(PaperControl, session.id)
+        old = await db.get(StrategyVersion, session.strategy_version_id)
+        assert (
+            str(old.id) == p["strategy_version_id"] and old.settings["reaction_delay_seconds"] == 30
+        )
+        assert control.settings["reaction_delay_seconds"] == 120
+    settings["starting_capital_cad"] = "20000"
+    assert c.put(f"/api/v1/paper/sessions/{p['id']}/strategy", json=settings).status_code == 409
+    assert c.post(f"/api/v1/paper/sessions/{p['id']}/pause").json()["status"] == "PAUSED"
+    assert c.post(f"/api/v1/paper/sessions/{p['id']}/resume").json()["status"] == "ACTIVE"
 
 
 
