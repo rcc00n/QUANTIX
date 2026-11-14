@@ -182,3 +182,33 @@ async def test_scalar_candidate_path_matches_full_projection_and_loads_only_need
     assert fixture.engine.pool.checkedout() == 0
 
 
+async def test_busy_custom_gate_rejects_duplicate_before_any_route_sql_or_payload_load(
+    single_connection_radar,
+    monkeypatch,
+):
+    fixture = single_connection_radar
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def current(*_args, **_kwargs):
+        assert fixture.engine.pool.checkedout() == 0
+        entered.set()
+        await release.wait()
+        return {}, synthetic_health()
+
+    monkeypatch.setattr(api, "collector_current", current)
+    path = "/api/v1/opportunities?asset=SYNTH_API&history=true&budget_cad=250"
+    first = asyncio.create_task(fixture.client.get(path))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        loaded_before_duplicate = len(fixture.route_queries)
+        assert loaded_before_duplicate == 2  # Count and scalar candidate window.
+        assert "payload" not in fixture.route_queries[1].split("FROM")[0]
+        duplicate = await fixture.client.get(path)
+        assert duplicate.status_code == 429
+        assert duplicate.headers["retry-after"] == "2"
+        assert len(fixture.route_queries) == loaded_before_duplicate
+    finally:
+        release.set()
+        result = await first
+    assert result.status_code == 200
+    assert fixture.engine.pool.checkedout() == 0
