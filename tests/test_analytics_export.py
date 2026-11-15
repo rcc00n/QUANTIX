@@ -92,6 +92,15 @@ async def test_archive_limits_fail_explicitly_without_truncation(tmp_path, monke
         archive.close()
 
 
+def test_analytics_and_exports_require_authentication(client):
+    client.cookies.clear()
+    sid = uuid4()
+    for path in (
+        f"/analytics/sessions/{sid}",
+        f"/analytics/sessions/{sid}/series",
+        f"/reports/export?session_id={sid}",
+    ):
+        assert client.get("/api/v1" + path).status_code == 401
 
 
 
