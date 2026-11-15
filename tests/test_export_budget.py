@@ -132,6 +132,22 @@ def test_canonical_evidence_bytes_keep_sort_order_escaping_and_postorder_ids(tmp
         store.close()
 
 
+def test_archive_limit_checks_actual_closed_size_and_crc(tmp_path, monkeypatch):
+    path = tmp_path / "synthetic.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("synthetic.txt", "synthetic data")
+    actual = path.stat().st_size
+    monkeypatch.setattr("arbiq.analytics.export_budget.MAX_ZIP_BYTES", actual)
+    assert verify_archive(path) == actual
+    monkeypatch.setattr("arbiq.analytics.export_budget.MAX_ZIP_BYTES", actual - 1)
+    with pytest.raises(ExportBudgetExceeded):
+        verify_archive(path)
+    monkeypatch.setattr("arbiq.analytics.export_budget.MAX_ZIP_BYTES", 512_000_000)
+    # A corrupt stored member must not be published even when the size is small.
+    body = path.read_bytes().replace(b"synthetic data", b"SYNTHETIC DATA")
+    path.write_bytes(body)
+    with pytest.raises((RuntimeError, zipfile.BadZipFile)):
+        verify_archive(path)
 
 
 
