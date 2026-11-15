@@ -457,6 +457,84 @@ async def test_wide_synthetic_provenance_keeps_event_loop_responsive(tmp_path):
         csv.field_size_limit(previous)
 
 
+async def test_wide_immutable_evidence_export_bytes_survive_small_cursor_batches(
+    environment,
+    monkeypatch,
+):
+    """SYNTHETIC wide immutable rows cross batch boundaries without losing evidence."""
+    from arbiq.db.models import ArbitrageEvaluation
+
+    e = environment
+    wide = {
+        "kind": "EXPLICITLY_SYNTHETIC_WIDE_RETAINED_EVIDENCE",
+        "levels": [
+            {
+                "price": f"{100 + i}.000000000000000001",
+                "quantity": "1.000000000000000000",
+                "label": "SYNTHETIC_ONLY",
+            }
+            for i in range(1000)
+        ],
+    }
+    inserted = set()
+    async with e.sessions() as db:
+        trade = await db.get(PaperTrade, e.ids["trade"])
+        original = await db.get(ArbitrageEvaluation, trade.evaluation_id)
+        values = {
+            c.name: getattr(original, c.name)
+            for c in original.__table__.columns
+            if c.name
+            not in {"id", "created_at", "revision", "evaluated_at", "evidence"}
+        }
+        for i in range(65):
+            row = ArbitrageEvaluation(
+                **values,
+                revision=original.revision + i + 1,
+                evaluated_at=NOW + timedelta(microseconds=i + 1),
+                evidence={**original.evidence, "synthetic_wide_evidence": wide},
+            )
+            db.add(row)
+            await db.flush()
+            inserted.add(str(row.id))
+        await db.commit()
+    paths = []
+    try:
+        for batch in (200, 32):
+            monkeypatch.setattr("arbiq.analytics.export.BATCH_ROWS", batch)
+            async with e.sessions() as db:
+                session = await db.get(PaperSession, e.ids["session"])
+                control = await db.get(PaperControl, session.id)
+                period = ReportPeriod(start=NOW, end=NOW + timedelta(minutes=1))
+                path, _ = await make_export(
+                    db,
+                    session,
+                    control,
+                    period,
+                    period.end,
+                    {"trusted": True, "synthetic": True},
+                )
+                paths.append(path)
+        with zipfile.ZipFile(paths[0]) as before, zipfile.ZipFile(paths[1]) as after:
+            assert before.namelist() == after.namelist()
+            for name in before.namelist():
+                assert before.read(name) == after.read(name), name
+            previous = csv.field_size_limit(256 * 1024 * 1024)
+            try:
+                values = rows(after, "opportunities.csv")
+            finally:
+                csv.field_size_limit(previous)
+            retained = [row for row in values if row["id"] in inserted]
+            assert len(retained) == 65
+            for row in retained:
+                assert (
+                    json.loads(row["provenance_json"])["evaluation"]["evidence"][
+                        "synthetic_wide_evidence"
+                    ]
+                    == wide
+                )
+    finally:
+        for path in paths:
+            path.unlink(missing_ok=True)
 
 
 
