@@ -199,5 +199,55 @@ def test_analysis_fallback_retains_financial_inputs_and_discloses_raw_reduction(
         store.close()
 
 
+async def test_standalone_loader_reconstructs_all_json_fields_and_checks_semantics(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("arbiq.analytics.full_export.MIN_FREE_BYTES", 0)
+    path = tmp_path / "synthetic.zip"
+
+    async def progress(*args, **kwargs):
+        pass
+
+    data = {
+        "id": "SYNTHETIC",
+        "quantity": Decimal("0.000000000000000123"),
+        "evidence": {"repeated": [{"ask": "12345.000000000000000001", "qty": "0.1"}] * 50},
+    }
+
+    async def rows():
+        yield data
+
+    archive = FullArchive(path, progress)
+    try:
+        await archive.csv(
+            "opportunities/test.csv",
+            list(data),
+            rows(),
+            source_table="arbitrage_evaluations",
+            json_columns=["evidence"],
+        )
+        await archive.evidence()
+        await archive.json("manifest.json", {"files": archive.files})
+    finally:
+        archive.close()
+    reader = ExportReader(path)
+    try:
+        rows = list(reader.rows("opportunities/test.csv"))
+        assert rows[0]["evidence"] == data["evidence"]
+        assert rows[0]["quantity"] == "0.000000000000000123"
+        entry = reader.manifest["files"][0]
+        payload = (
+            json.dumps(
+                {"evidence": rows[0]["evidence"]},
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        assert entry["json_semantic_sha256"] == hashlib.sha256(payload.encode()).hexdigest()
+    finally:
+        reader.close()
+    assert not path.with_suffix(".evidence.sqlite").exists()
 
 
