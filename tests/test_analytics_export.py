@@ -238,6 +238,37 @@ async def test_historical_analytics_never_uses_later_completion_or_valuation(
         assert len(equity) == 1 and equity[0]["equity_cad"] == "9999.123456789012345678"
 
 
+async def test_series_is_bounded_and_keeps_exact_endpoints(private_api, monkeypatch):
+    c, dbs, _ = private_api
+    now = datetime(2026, 11, 22, 6, 10, tzinfo=UTC)
+
+    async def clock(request):
+        return now, {"trusted": True, "synthetic": True}
+
+    monkeypatch.setattr("arbiq.analytics.api.utc_reference", clock)
+    p = c.post("/api/v1/paper/sessions", json={"name": "SYNTHETIC series"}).json()
+    sid = UUID(p["id"])
+    async with dbs() as db:
+        for i in range(21):
+            db.add(
+                PortfolioCheckpoint(
+                    session_id=sid,
+                    as_of=now - timedelta(seconds=30 - i),
+                    calculation_version="SYNTHETIC",
+                    payload={
+                        "equity_cad": f"10000.{i:018d}",
+                        "drawdown_pct": "0.000000000000000001",
+                    },
+                )
+            )
+        await db.commit()
+    response = c.get(f"/api/v1/analytics/sessions/{sid}/series?limit=5")
+    assert response.status_code == 200, response.text
+    value = response.json()
+    assert value["available_count"] == 21 and len(value["items"]) <= 5
+    assert value["items"][0]["equity_cad"] == "10000.000000000000000000"
+    assert value["items"][-1]["equity_cad"] == "10000.000000000000000020"
+    assert isinstance(value["max_drawdown_full_period_pct"], str)
 
 
 
