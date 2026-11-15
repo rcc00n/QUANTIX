@@ -64,6 +64,16 @@ def test_exact_csv_and_sensitive_metadata_redaction():
     assert value["token_address"] == "public-contract-identity"
 
 
+def test_period_validation_rejects_naive_future_and_unbounded():
+    session = type("Session", (), {"started_at": NOW})()
+    for start, end in [
+        (NOW.replace(tzinfo=None), NOW),
+        (NOW, NOW),
+        (NOW, NOW + timedelta(days=1)),
+        (NOW - timedelta(days=367), NOW),
+    ]:
+        with pytest.raises(HTTPException):
+            period_for(session, start, end, NOW)
 
 
 
