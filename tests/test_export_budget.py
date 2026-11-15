@@ -251,3 +251,13 @@ async def test_standalone_loader_reconstructs_all_json_fields_and_checks_semanti
     assert not path.with_suffix(".evidence.sqlite").exists()
 
 
+def test_private_camel_case_metadata_and_exact_values():
+    result = public_record(
+        {
+            "telegramChatId": "PRIVATE",
+            "actorUserId": "PRIVATE",
+            "quantity": Decimal("0.000000000000000123"),
+        }
+    )
+    assert "PRIVATE" not in json.dumps(result)
+    assert result["quantity"] == "0.000000000000000123"
