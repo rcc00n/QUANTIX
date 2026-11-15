@@ -325,3 +325,79 @@ def test_market_dashboard_api_authentication_catalog_and_stale_fallback(database
         assert client.get("/api/v1/exchanges/synthetic-missing/markets").status_code == 404
 
 
+def test_operator_rename_and_rotation_preserve_history_and_revoke_sessions(
+    database_url,
+):
+    suffix = uuid4().hex
+    old_name = f"synthetic-old-{suffix}"
+    new_name = f"synthetic-new-{suffix}"
+    old_token = f"synthetic-old-session-{suffix}"
+
+    async def seed():
+        engine = create_async_engine(database_url)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with sessions() as db:
+                user = User(
+                    username=old_name,
+                    password_hash=hash_password("synthetic-old-password"),
+                )
+                db.add(user)
+                await db.flush()
+                strategy = StrategyVersion(
+                    user_id=user.id,
+                    version=1,
+                    settings={"synthetic": True},
+                    reason="SYNTHETIC fixture",
+                )
+                session = AuthSession(
+                    user_id=user.id,
+                    token_hash=hash_token(old_token),
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                )
+                db.add_all([strategy, session])
+                await db.commit()
+                return user.id, strategy.id, session.id
+        finally:
+            await engine.dispose()
+
+    user_id, strategy_id, session_id = asyncio.run(seed())
+    config = Settings(
+        _env_file=None,
+        database_url=database_url,
+        admin_username=new_name,
+        admin_previous_username=old_name,
+        admin_password_hash=hash_password("synthetic-new-password"),
+    )
+    with TestClient(create_app(config), client=(f"synthetic-rotation-{suffix}", 12345)) as client:
+        client.cookies.set("arbiq_session", old_token)
+        assert client.get("/api/v1/auth/me").status_code == 401
+        client.cookies.clear()
+        assert (
+            client.post(
+                "/api/v1/auth/login",
+                json={"username": old_name, "password": "synthetic-old-password"},
+            ).status_code
+            == 401
+        )
+        assert (
+            client.post(
+                "/api/v1/auth/login",
+                json={"username": new_name, "password": "synthetic-new-password"},
+            ).status_code
+            == 200
+        )
+        assert client.get("/api/v1/auth/me").json()["id"] == str(user_id)
+
+    async def verify():
+        engine = create_async_engine(database_url)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with sessions() as db:
+                assert (await db.get(StrategyVersion, strategy_id)).user_id == user_id
+                assert (await db.get(AuthSession, session_id)).revoked_at is not None
+                assert (await db.get(User, user_id)).username == new_name
+        finally:
+            await engine.dispose()
+
+    asyncio.run(verify())
