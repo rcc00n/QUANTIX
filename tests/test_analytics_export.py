@@ -408,6 +408,53 @@ async def test_negative_holding_return_benchmark_and_research_isolation(
     )
 
 
+async def test_wide_synthetic_provenance_keeps_event_loop_responsive(tmp_path):
+    """Wide retained-style fields are valid CSV, not an excuse to block all API work."""
+    payload = {
+        "kind": "EXPLICITLY_SYNTHETIC_CPU_LOAD",
+        "evidence": [
+            {
+                "level": i,
+                "price": f"{100 + i}.000000000000000001",
+                "quantity": "1.000000000000000000",
+                "reason": "SYNTHETIC_EVIDENCE_ONLY_" * 4,
+            }
+            for i in range(2000)
+        ],
+    }
+
+    async def dataset():
+        for i in range(12):
+            yield {"id": f"synthetic-{i}", "provenance_json": payload}
+
+    archive = Archive(tmp_path / "synthetic-wide.zip")
+    heartbeat = []
+    task = asyncio.create_task(
+        archive.csv("wide.csv", ("id", "provenance_json"), dataset())
+    )
+    while not task.done():
+        heartbeat.append(asyncio.get_running_loop().time())
+        await asyncio.sleep(0.005)
+    await task
+    archive.close()
+    assert len(heartbeat) >= 3
+    # Heartbeats occur while the CPU-heavy member is still being generated.
+    assert max(b - a for a, b in itertools.pairwise(heartbeat)) < 0.5
+    previous = csv.field_size_limit(256 * 1024 * 1024)
+    try:
+        with zipfile.ZipFile(tmp_path / "synthetic-wide.zip") as z:
+            assert z.testzip() is None
+            with z.open("wide.csv") as member:
+                count = 0
+                for row in csv.DictReader(
+                    io.TextIOWrapper(member, encoding="utf-8", newline="")
+                ):
+                    assert len(row["provenance_json"]) > 131072
+                    assert json.loads(row["provenance_json"]) == payload
+                    count += 1
+                assert count == 12
+    finally:
+        csv.field_size_limit(previous)
 
 
 
