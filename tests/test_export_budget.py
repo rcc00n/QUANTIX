@@ -150,6 +150,53 @@ def test_archive_limit_checks_actual_closed_size_and_crc(tmp_path, monkeypatch):
         verify_archive(path)
 
 
+def test_analysis_fallback_retains_financial_inputs_and_discloses_raw_reduction(
+    tmp_path,
+):
+    store = EvidenceStore(tmp_path / "synthetic.sqlite")
+    selection = AnalysisSelection(store)
+    evidence = {
+        "calculation_inputs": {"quantity": "0.000000000000000123"},
+        "clock": {"trusted": True},
+        "buy_book": {"raw": [1, 2, 3]},
+    }
+    row = {
+        "id": str(uuid4()),
+        "net_profit_cad": "-1",
+        "evidence": evidence,
+        "result": {"costs": {"net_profit_cad": "-1"}, "evidence": evidence},
+    }
+    try:
+        reduced, changed = selection.apply(
+            "arbitrage_evaluations", row.copy(), ["evidence", "result"]
+        )
+        assert changed and "$quantix_omitted_raw" in reduced["evidence"]
+        assert reduced["evidence"]["calculation_inputs"] == evidence["calculation_inputs"]
+        assert reduced["result"]["costs"] == row["result"]["costs"]
+        selection.important(row["id"])
+        retained, changed = selection.apply(
+            "arbitrage_evaluations", row.copy(), ["evidence", "result"]
+        )
+        assert not changed and retained == row
+        for table in (
+            "paper_fills",
+            "ledger_entries",
+            "paper_trades",
+            "strategy_versions",
+        ):
+            assert selection.apply(table, row.copy(), ["evidence"])[0] == row
+        market = {
+            "market_id": "synthetic",
+            "created_at": "2026-11-22T00:01:00Z",
+            "code": "STALE",
+            "details": {"latency_ms": 123, "book": {"asks": [["1", "2"]]}},
+        }
+        assert not selection.apply("market_quality_events", market.copy(), ["details"])[1]
+        sampled, changed = selection.apply("market_quality_events", market.copy(), ["details"])
+        assert changed and sampled["details"]["$quantix_omitted_raw"]
+        assert sampled["details"]["scalar_summary"]["latency_ms"] == 123
+    finally:
+        store.close()
 
 
 
