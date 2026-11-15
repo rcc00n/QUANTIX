@@ -271,6 +271,75 @@ async def test_series_is_bounded_and_keeps_exact_endpoints(private_api, monkeypa
     assert isinstance(value["max_drawdown_full_period_pct"], str)
 
 
+async def test_completed_fill_export_reconstructs_real_accounting(environment):
+    e = environment
+    await at(e, 4)
+    await e.coordinator.observe(
+        book(e.buy.market_id, e.buy.exchange, e.state["now"], index=3)
+    )
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=4,
+        )
+    )
+    await at(e, 6)
+    await e.coordinator.observe(
+        book(e.buy.market_id, e.buy.exchange, e.state["now"], index=5)
+    )
+    await advance(e)
+    await at(e, 7)
+    await e.coordinator.observe(
+        book(
+            e.sell.market_id,
+            e.sell.exchange,
+            e.state["now"],
+            bid="110",
+            ask="111",
+            index=6,
+        )
+    )
+    await advance(e)
+    async with e.sessions() as db:
+        trade = await db.get(PaperTrade, e.ids["trade"])
+        assert trade.status == "COMPLETED"
+        session = await db.get(PaperSession, e.ids["session"])
+        control = await db.get(PaperControl, session.id)
+        period = ReportPeriod(start=NOW, end=NOW + timedelta(minutes=1))
+        path, _ = await make_export(
+            db,
+            session,
+            control,
+            period,
+            period.end,
+            {"trusted": True, "synthetic": True},
+        )
+    try:
+        with zipfile.ZipFile(path) as z:
+            assert len(rows(z, "paper_fills.csv")) == 2
+            assert len(rows(z, "orders.csv")) == 2
+            assert len(rows(z, "order_books.csv")) >= 2
+            assert len(rows(z, "fee_versions.csv")) >= 2
+            assert len(rows(z, "fx_quotes.csv")) >= 1
+            assert rows(z, "paper_trades.csv")[0]["status"] == "COMPLETED"
+            sums = {}
+            for row in rows(z, "ledger_entries.csv"):
+                sums[row["journal_id"]] = sums.get(
+                    row["journal_id"], Decimal(0)
+                ) + Decimal(row["quantity"])
+            # Journals balance each asset separately; the scalar total is therefore zero too.
+            assert all(value == 0 for value in sums.values())
+            metrics = json.loads(z.read("metrics.json"))
+            assert metrics["classification"] == "RESEARCH"
+            assert metrics["reconciliation"]["balanced"] is True
+            assert metrics["metrics"]["completed_simulations"] == 1
+            assert metrics["metrics"]["by_trade_size"][0]["key"] != "unknown"
+    finally:
+        path.unlink(missing_ok=True)
 
 
 
