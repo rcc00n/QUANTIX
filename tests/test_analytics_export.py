@@ -169,6 +169,73 @@ async def test_zero_execution_zip_headers_hashes_and_owner_isolation(
     )
 
 
+async def test_historical_analytics_never_uses_later_completion_or_valuation(
+    private_api, monkeypatch
+):
+    c, dbs, _ = private_api
+    now = datetime(2026, 11, 22, 6, 10, tzinfo=UTC)
+
+    async def clock(request):
+        return now, {"trusted": True, "synthetic": True}
+
+    monkeypatch.setattr("arbiq.analytics.api.utc_reference", clock)
+    p = c.post("/api/v1/paper/sessions", json={"name": "SYNTHETIC historical"}).json()
+    sid = UUID(p["id"])
+    start, cutoff = now - timedelta(minutes=10), now - timedelta(minutes=5)
+    async with dbs() as db:
+        db.add(
+            PaperTrade(
+                session_id=sid,
+                opportunity_id=None,
+                classification="VALIDATED",
+                mode="PRE_FUNDED",
+                strategy_version_id=UUID(p["strategy_version_id"]),
+                status="COMPLETED",
+                requested_at=start + timedelta(seconds=1),
+                eligible_at=start + timedelta(seconds=31),
+                reaction_delay_ms=30000,
+                completed_at=now - timedelta(seconds=1),
+                calculation_version="SYNTHETIC",
+                assumptions={
+                    "synthetic": True,
+                    "strategy": {"trade_amount_cad": "100"},
+                },
+                state={"result": {"net_pnl_cad": "123.456789012345678901"}},
+            )
+        )
+        for time, equity in [(start, "9999.123456789012345678"), (now, "99999")]:
+            db.add(
+                PortfolioCheckpoint(
+                    session_id=sid,
+                    as_of=time,
+                    calculation_version="SYNTHETIC",
+                    payload={
+                        "synthetic": True,
+                        "equity_cad": equity,
+                        "no_trading_benchmark_cad": "10000",
+                        "drawdown_pct": "0.008765432109876544",
+                        "reserved_capital_cad": "0",
+                        "net_simulated_pnl_cad": "-0.876543210987654322",
+                    },
+                )
+            )
+        await db.commit()
+    query = {"start": start.isoformat(), "end": cutoff.isoformat()}
+    response = c.get(f"/api/v1/analytics/sessions/{sid}", params=query)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["metrics"]["completed_simulations"] == 0
+    assert result["metrics"]["net_completed_trade_pnl_cad"] is None
+    assert result["metrics"]["win_rate_pct"] is None
+    assert result["portfolio"]["equity_cad"] == "9999.123456789012345678"
+    response = c.get("/api/v1/reports/export", params={"session_id": str(sid), **query})
+    assert response.status_code == 200, response.text
+    with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+        trade = rows(z, "paper_trades.csv")[0]
+        assert trade["status"] == "OPEN_AT_CUTOFF"
+        assert "123.456789012345678901" not in trade["provenance_json"]
+        equity = rows(z, "portfolio_equity.csv")
+        assert len(equity) == 1 and equity[0]["equity_cad"] == "9999.123456789012345678"
 
 
 
