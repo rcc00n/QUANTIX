@@ -113,6 +113,23 @@ def test_json_dag_exact_and_marker_collision_safe(tmp_path, value):
         store.close()
 
 
+def test_canonical_evidence_bytes_keep_sort_order_escaping_and_postorder_ids(tmp_path):
+    store = EvidenceStore(tmp_path / "synthetic.sqlite")
+    quote = 'SYNTHETIC: "\\\n\t𝄞'
+    child = {"q": quote * 60, "n": -0.0}
+    record = {"large": "synthetic" * 60, "an\u0000": [child, None, True, 1.25e-12]}
+    try:
+        result = store.encode(record)
+        expected_child = compact({"m": child})
+        expected_parent = compact(
+            {"m": {"large": record["large"], "an\u0000": {"a": [{"r": 1}, None, True, 1.25e-12]}}}
+        )
+        objects = list(store.objects())
+        assert [body for _, _, body in objects] == [expected_child, expected_parent]
+        assert result == {"$quantix_codec": CODEC, "value": {"r": 2}}
+        assert decode(result, store.lookup) == record
+    finally:
+        store.close()
 
 
 
