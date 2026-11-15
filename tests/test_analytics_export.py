@@ -103,6 +103,70 @@ def test_analytics_and_exports_require_authentication(client):
         assert client.get("/api/v1" + path).status_code == 401
 
 
+async def test_zero_execution_zip_headers_hashes_and_owner_isolation(
+    private_api, monkeypatch
+):
+    c, dbs, _ = private_api
+    now = datetime(2026, 11, 22, 6, 10, tzinfo=UTC)
+
+    async def clock(request):
+        return now, {"trusted": True, "host_healthy": False, "synthetic": True}
+
+    monkeypatch.setattr("arbiq.analytics.api.utc_reference", clock)
+    portfolio = c.post(
+        "/api/v1/paper/sessions", json={"name": "SYNTHETIC export"}
+    ).json()
+    sid = portfolio["id"]
+    response = c.get(f"/api/v1/reports/export?session_id={sid}")
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/zip"
+    assert (
+        hashlib.sha256(response.content).hexdigest()
+        == response.headers["x-content-sha256"]
+    )
+    with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+        assert b"Market pipeline timing (Stage 8A)" in z.read("README.md")
+        assert set(EXPORT_FILES).issubset(z.namelist())
+        for name, columns in CSV_COLUMNS.items():
+            assert next(csv.reader(io.StringIO(z.read(name).decode()))) == list(columns)
+        for name in ("paper_trades.csv", "paper_fills.csv", "signals.csv", "fees.csv"):
+            assert rows(z, name) == []
+        metrics = json.loads(z.read("metrics.json"))
+        assert metrics["metrics"]["completed_simulations"] == 0
+        assert metrics["metrics"]["win_rate_pct"] is None
+        assert metrics["reconciliation"]["balanced"] is True
+        assert metrics["classification"] == "VALIDATED"
+        assert len(rows(z, "journals.csv")) == 2
+        assert len(rows(z, "balances.csv")) > 0
+        assert b"SYNTHETIC export" in z.read("config_snapshot.json")
+        manifest = json.loads(z.read("export_manifest.json"))
+        for item in manifest["files"]:
+            assert hashlib.sha256(z.read(item["name"])).hexdigest() == item["sha256"]
+        complete = b"".join(z.read(name) for name in z.namelist())
+        assert b"password_hash" not in complete
+        assert b"synthetic-fixture-password-only" not in complete
+    async with dbs() as db:
+        other = User(
+            username="synthetic-other-export-" + uuid4().hex, password_hash="SYNTHETIC"
+        )
+        db.add(other)
+        await db.flush()
+        version = StrategyVersion(
+            user_id=other.id, version=1, settings={}, reason="SYNTHETIC"
+        )
+        db.add(version)
+        await db.commit()
+        version_id = version.id
+    assert c.get(f"/api/v1/analytics/sessions/{uuid4()}").status_code == 404
+    assert (
+        c.get(
+            f"/api/v1/analytics/sessions/{sid}?strategy_version_id={version_id}"
+        ).status_code
+        == 404
+    )
+    assert (
+        c.get(f"/api/v1/analytics/sessions/{sid}/series?limit=501").status_code == 422
+    )
 
 
 
