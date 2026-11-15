@@ -76,6 +76,20 @@ def test_period_validation_rejects_naive_future_and_unbounded():
             period_for(session, start, end, NOW)
 
 
+async def test_archive_limits_fail_explicitly_without_truncation(tmp_path, monkeypatch):
+    monkeypatch.setattr("arbiq.analytics.export.MAX_ROWS_PER_FILE", 1)
+    archive = Archive(tmp_path / "synthetic.zip")
+
+    async def many():
+        yield {"id": "SYNTHETIC-1"}
+        yield {"id": "SYNTHETIC-2"}
+
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await archive.csv("test.csv", ("id",), many())
+        assert exc.value.status_code == 413
+    finally:
+        archive.close()
 
 
 
