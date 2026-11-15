@@ -537,5 +537,38 @@ async def test_wide_immutable_evidence_export_bytes_survive_small_cursor_batches
             path.unlink(missing_ok=True)
 
 
+async def test_cancelled_archive_drains_inflight_thread_before_member_close(
+    tmp_path, monkeypatch
+):
+    import threading
+    import time
+
+    started, finished = threading.Event(), threading.Event()
+    original = cell
+
+    def deliberately_slow(value, **kwargs):
+        started.set()
+        try:
+            time.sleep(0.1)
+            return original(value, **kwargs)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr("arbiq.analytics.export.cell", deliberately_slow)
+
+    async def dataset():
+        yield {"id": "SYNTHETIC_CANCELLATION"}
+
+    archive = Archive(tmp_path / "synthetic-cancel.zip")
+    task = asyncio.create_task(archive.csv("cancel.csv", ("id",), dataset()))
+    assert await asyncio.to_thread(started.wait, 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert finished.is_set()
+    archive.close()
+    with zipfile.ZipFile(tmp_path / "synthetic-cancel.zip") as z:
+        assert z.testzip() is None
+        assert b"SYNTHETIC_CANCELLATION" in z.read("cancel.csv")
 
 
