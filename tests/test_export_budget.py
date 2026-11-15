@@ -87,6 +87,30 @@ async def test_cancelled_job_cleans_files_and_releases_generator(
     assert c.get(f"/api/v1/reports/exports/{job['id']}/download").status_code == 409
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        {},
+        [],
+        None,
+        False,
+        "0.000000000000000123",
+        {"r": 1, "m": {"a": []}},
+        {"$quantix_codec": CODEC, "value": {"r": 999}},
+        {"unicode": "Синтетические данные", "missing": None, "zero": "0"},
+        {"books": [["12345.000000000000000001", "0.000000000000000123"]] * 100},
+    ],
+)
+def test_json_dag_exact_and_marker_collision_safe(tmp_path, value):
+    store = EvidenceStore(tmp_path / "synthetic.sqlite")
+    try:
+        packed = store.encode(value)
+        assert decode(packed, store.lookup) == value
+        before = store.nodes
+        assert store.encode(value) == packed
+        assert store.nodes == before
+    finally:
+        store.close()
 
 
 
