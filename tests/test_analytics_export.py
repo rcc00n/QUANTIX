@@ -572,3 +572,52 @@ async def test_cancelled_archive_drains_inflight_thread_before_member_close(
         assert b"SYNTHETIC_CANCELLATION" in z.read("cancel.csv")
 
 
+async def test_terminal_preferences_export_excludes_later_versions(
+    private_api, monkeypatch
+):
+    from arbiq.settings.models import TerminalSettingsVersion
+
+    c, dbs, _ = private_api
+    now = datetime(2026, 11, 22, 6, 10, tzinfo=UTC)
+
+    async def clock(request):
+        return now, {"trusted": True, "synthetic": True}
+
+    monkeypatch.setattr("arbiq.analytics.api.utc_reference", clock)
+    p = c.post(
+        "/api/v1/paper/sessions", json={"name": "SYNTHETIC settings history"}
+    ).json()
+    async with dbs() as db:
+        session = await db.get(PaperSession, UUID(p["id"]))
+        for version, minutes, assets in (
+            (1, 9, ["SYNTH_BTC"]),
+            (2, 1, ["SYNTH_FUTURE"]),
+        ):
+            db.add(
+                TerminalSettingsVersion(
+                    user_id=session.user_id,
+                    version=version,
+                    effective_at=now - timedelta(minutes=minutes),
+                    settings={
+                        "market": {"enabled_assets": assets},
+                        "notifications": {"telegram_enabled": False},
+                    },
+                )
+            )
+        await db.commit()
+    response = c.get(
+        "/api/v1/reports/export",
+        params={
+            "session_id": p["id"],
+            "start": (now - timedelta(minutes=10)).isoformat(),
+            "end": (now - timedelta(minutes=5)).isoformat(),
+        },
+    )
+    assert response.status_code == 200, response.text
+    with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+        config = json.loads(z.read("config_snapshot.json"))
+        assert config["terminal_preferences_at_cutoff"]["version"] == 1
+        assert config["notification_delivery_active"] is False
+        assert len(rows(z, "terminal_settings_history.csv")) == 1
+        assert b"SYNTH_FUTURE" not in z.read("terminal_settings_history.csv")
+        assert b"SYNTH_FUTURE" not in z.read("config_snapshot.json")
