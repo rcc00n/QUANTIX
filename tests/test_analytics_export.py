@@ -342,6 +342,70 @@ async def test_completed_fill_export_reconstructs_real_accounting(environment):
         path.unlink(missing_ok=True)
 
 
+async def test_negative_holding_return_benchmark_and_research_isolation(
+    private_api, monkeypatch
+):
+    c, dbs, asset = private_api
+    now = datetime(2026, 11, 22, 6, 10, tzinfo=UTC)
+
+    async def clock(request):
+        return now, {"trusted": True, "synthetic": True}
+
+    monkeypatch.setattr("arbiq.analytics.api.utc_reference", clock)
+    primary = c.post(
+        "/api/v1/paper/sessions", json={"name": "SYNTHETIC primary"}
+    ).json()
+    research = c.post(
+        "/api/v1/paper/sessions",
+        json={
+            "name": "SYNTHETIC research holding loss",
+            "classification": "RESEARCH",
+            "allocations": [
+                {
+                    "exchange": "kraken",
+                    "asset": asset,
+                    "quantity": "50",
+                    "cad_rate": "100",
+                },
+                {"exchange": "ndax", "quantity": "5000"},
+            ],
+        },
+    ).json()
+    async with dbs() as db:
+        sid = UUID(research["id"])
+        positions = list(
+            await db.scalars(
+                select(PortfolioPosition).where(PortfolioPosition.session_id == sid)
+            )
+        )
+        marks = {
+            (p.exchange_id, p.asset_id): PriceEvidence(
+                cad_per_unit=Decimal(90),
+                observed_at=now - timedelta(seconds=1),
+                received_at=now - timedelta(seconds=1),
+                verified=False,
+                source="SYNTHETIC exact observed holding mark",
+                provenance={"synthetic": True},
+            )
+            for p in positions
+        }
+        value = await snapshot(
+            db, sid, marks, now - timedelta(seconds=1), research_only=True
+        )
+        assert value["equity_cad"] == "9500.000000000000000000"
+        await snapshot(db, UUID(primary["id"]), {}, now - timedelta(seconds=1))
+        await db.commit()
+    r = c.get(f"/api/v1/analytics/sessions/{research['id']}").json()
+    p = c.get(f"/api/v1/analytics/sessions/{primary['id']}").json()
+    assert r["portfolio"]["equity_cad"] == r["portfolio"]["no_trading_benchmark_cad"]
+    assert r["portfolio"]["unrealized_pnl_cad"] == "-500.000000000000000000"
+    assert r["portfolio"]["strategy_excess_cad"] == "0E-18"
+    assert p["portfolio"]["equity_cad"] == "10000.000000000000000000"
+    assert r["metrics"]["win_rate_pct"] is None
+    monkeypatch.setattr("arbiq.analytics.api._export_gate", asyncio.Semaphore(0))
+    assert (
+        c.get(f"/api/v1/reports/export?session_id={primary['id']}").status_code == 429
+    )
 
 
 
