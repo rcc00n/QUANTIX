@@ -95,6 +95,72 @@ def test_list_query_selects_only_needed_scalar_columns_and_safe_json_case():
     assert "arbitrage_routes.payload" in full
 
 
+@pytest.mark.parametrize(
+    "seconds,trusted,host,healthy",
+    [
+        (0, True, True, True),
+        (6, True, True, True),
+        (31, True, True, True),
+        (-3, True, True, True),
+        (0, False, True, True),
+        (0, True, False, True),
+        (0, True, True, False),
+    ],
+)
+async def test_sql_projection_preserves_freshness_quality_financial_filters_and_exact_sort(
+    database_url,
+    seconds,
+    trusted,
+    host,
+    healthy,
+):
+    original = synthetic_evidenced_payload()
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        async with engine.connect() as db:
+            await db.execute(text("SET TRANSACTION READ ONLY"))
+            compact = await db.scalar(
+                select(
+                    api.list_payload_expression(
+                        D(1000),
+                        payload_column=bindparam("synthetic_payload", type_=JSONB),
+                    )
+                ),
+                {"synthetic_payload": original},
+            )
+        # Heavy display-unneeded trees are pruned only from the SQL read result.
+        assert "fx_books" not in compact["evidence"]
+        assert "asks" not in compact["evidence"]["calculation_inputs"]["buy"]
+        assert "to_cad" not in compact["evidence"]["calculation_inputs"]["buy"]["fx"]
+        assert "budget_results" not in compact
+        assert original["budget_results"]
+        assert original["evidence"]["fx_books"]
+        health = synthetic_health(
+            NOW + timedelta(seconds=seconds), trusted, host, healthy
+        )
+        before, after = displayed(original, health), displayed(compact, health)
+        assert before == after
+        assert after["data_confidence"] == "SUSPICIOUS"
+        for filters in (
+            {"search": "SYNTH"},
+            {"confidence": "SUSPICIOUS"},
+            {"min_profit_cad": D(10)},
+            {"min_return_pct": D(10)},
+            {"min_quantity": D(1)},
+            {"min_liquidity_cad": D("500.000000000000000001")},
+            {"max_acquisition_cad": D(100)},
+        ):
+            assert api.meets_filters(before, **filters) == api.meets_filters(
+                after, **filters
+            )
+        assert api.financial_sort(
+            {**before, "id": "SYNTHETIC"}, "net_profit_cad"
+        ) == api.financial_sort(
+            {**after, "id": "SYNTHETIC"},
+            "net_profit_cad",
+        )
+    finally:
+        await engine.dispose()
 
 
 
