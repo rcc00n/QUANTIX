@@ -155,6 +155,22 @@ async def test_disabled_exchange_does_not_poll_or_discover():
     connector.close.assert_awaited_once()
 
 
+async def test_deselecting_kraken_cancels_existing_websocket():
+    collector, _ = collector_fixture()
+    m = market("kraken")
+    stream = asyncio.create_task(asyncio.sleep(3600))
+    rt = ExchangeRuntime(
+        "kraken",
+        SimpleNamespace(),
+        exchange_id=uuid4(),
+        catalog=[m],
+        markets=[m],
+        schedules={m.id: SimpleNamespace()},
+        ws_task=stream,
+    )
+    collector.runtimes["kraken"] = rt
+    await collector.apply_selection(rt, [])
+    assert stream.cancelled() and rt.markets == [] and not rt.schedules
 
 
 
