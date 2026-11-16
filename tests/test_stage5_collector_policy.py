@@ -125,6 +125,17 @@ async def test_saved_market_policy_applies_canonical_filters_caps_and_version(
     assert collector.config is previous and len(events) == 1
 
 
+async def test_environment_defaults_survive_until_owner_saves(monkeypatch):
+    collector, events = collector_fixture()
+    original = collector.config
+
+    async def read(db, user_id):
+        return None, TerminalSettings()
+
+    monkeypatch.setattr("arbiq.settings.terminal.read_effective_terminal", read)
+    await collector.reload_terminal_preferences()
+    assert collector.config is original and not events
+    assert collector.applied_terminal_version == 0
 
 
 
