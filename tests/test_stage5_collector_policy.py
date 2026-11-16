@@ -261,6 +261,18 @@ async def test_empty_configured_internal_token_never_grants_access(private_app):
     assert status != 401 and result["mode"] == "paper"
 
 
+async def test_funding_marks_fail_closed_without_trusted_utc(private_app):
+    collector, app = private_app
+    collector.paper = SimpleNamespace(
+        market=SimpleNamespace(
+            mark=lambda *args, **kwargs: pytest.fail(
+                "Untrusted timing must not produce an initialization mark"
+            )
+        )
+    )
+    collector.utc_clock = SimpleNamespace(trusted=False)
+    status, _ = await invoke(app, "/paper/funding/marks", {"items": []})
+    assert status == 503
 
 
 
