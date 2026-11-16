@@ -163,5 +163,40 @@ async def test_sql_projection_preserves_freshness_quality_financial_filters_and_
         await engine.dispose()
 
 
+@pytest.mark.parametrize(
+    "stored_budget,selected_budget,full",
+    [
+        ("1000", "250", False),
+        ("1000.00", "1000", False),
+        (None, "1000", False),
+        ("SYNTHETIC-malformed-budget", "1000", False),
+        ("1000", "1000", True),
+    ],
+)
+async def test_custom_missing_or_unusual_budget_keeps_all_original_resize_evidence(
+    database_url,
+    stored_budget,
+    selected_budget,
+    full,
+):
+    original = synthetic_evidenced_payload()
+    original["selected_budget_cad"] = stored_budget
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        async with engine.connect() as db:
+            await db.execute(text("SET TRANSACTION READ ONLY"))
+            value = await db.scalar(
+                select(
+                    api.list_payload_expression(
+                        D(selected_budget),
+                        full=full,
+                        payload_column=bindparam("synthetic_payload", type_=JSONB),
+                    )
+                ),
+                {"synthetic_payload": original},
+            )
+            assert value == original
+    finally:
+        await engine.dispose()
 
 
