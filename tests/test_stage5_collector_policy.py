@@ -252,6 +252,13 @@ async def test_private_runtime_and_marks_require_internal_auth(private_app):
         assert status == 401
 
 
+@pytest.mark.parametrize("private_app", [""], indirect=True)
+async def test_empty_configured_internal_token_never_grants_access(private_app):
+    _, app = private_app
+    status, _ = await invoke(app, "/terminal/runtime", auth="Bearer ")
+    assert status == 401
+    status, result = await invoke(app, "/health", auth="")
+    assert status != 401 and result["mode"] == "paper"
 
 
 
