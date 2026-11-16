@@ -71,6 +71,43 @@ def test_exact_private_record_sanitization():
     )
 
 
+async def test_full_stream_exceeds_legacy_row_cap_and_preserves_exact_values(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("arbiq.analytics.full_export.MIN_FREE_BYTES", 0)
+    # Smaller batches still exercise cursor-to-disk flow; no legacy100000row cap.
+    monkeypatch.setattr("arbiq.analytics.full_export.BATCH", 256)
+    progress = []
+
+    async def update(name, rows, size, completed=False):
+        if completed:
+            progress.append(rows)
+
+    async def rows():
+        for i in range(100_001):
+            yield {
+                "id": i,
+                "quantity": Decimal("0.000000000000000123"),
+                "missing": None,
+            }
+
+    path = tmp_path / "synthetic-large.zip"
+    archive = FullArchive(path, update)
+    try:
+        await archive.csv("synthetic.csv", ["id", "quantity", "missing"], rows())
+    finally:
+        archive.close()
+    with zipfile.ZipFile(path) as z:
+        with z.open("synthetic.csv") as f:
+            reader = csv.DictReader(io.TextIOWrapper(f, encoding="utf-8", newline=""))
+            count = 0
+            for row in reader:
+                assert (
+                    row["quantity"] == "0.000000000000000123" and row["missing"] == ""
+                )
+                count += 1
+        assert count == 100_001 and progress == [count]
+        assert z.testzip() is None
 
 
 
