@@ -245,6 +245,11 @@ async def invoke(
     return response.status, json.loads(response.body)
 
 
+async def test_private_runtime_and_marks_require_internal_auth(private_app):
+    _, app = private_app
+    for path in ("/terminal/runtime", "/paper/funding/marks", "/engine/current"):
+        status, _ = await invoke(app, path, auth="")
+        assert status == 401
 
 
 
