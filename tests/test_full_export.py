@@ -110,5 +110,25 @@ async def test_full_stream_exceeds_legacy_row_cap_and_preserves_exact_values(
         assert z.testzip() is None
 
 
+def test_job_restart_recovery_and_ownership(tmp_path):
+    from fastapi import HTTPException
+
+    jobs = ExportJobs(None, tmp_path)
+    owner, other = uuid4(), uuid4()
+    job = {"id": str(uuid4()), "owner": str(owner), "status": "running"}
+    jobs.save(job)
+    partial = tmp_path / f"{job['id']}.partial"
+    partial.write_bytes(b"SYNTHETIC incomplete archive")
+    with pytest.raises(HTTPException) as exc:
+        jobs.load(job["id"], other)
+    assert exc.value.status_code == 404
+    descriptor = jobs.lock()
+    assert descriptor is not None and jobs.lock() is None
+    jobs.cleanup_and_recover()
+    import os
+
+    os.close(descriptor)
+    assert jobs.load(job["id"], owner)["status"] == "failed"
+    assert not partial.exists()
 
 
