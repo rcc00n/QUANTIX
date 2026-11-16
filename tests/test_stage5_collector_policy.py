@@ -296,6 +296,45 @@ async def test_funding_marks_reject_invalid_exact_quantities(private_app, quanti
     assert status == 422
 
 
+async def test_funding_marks_validate_full_size_and_preserve_provenance(private_app):
+    collector, app = private_app
+    collector.utc_clock = SimpleNamespace(
+        trusted=True,
+        utcnow=lambda: NOW,
+        snapshot=lambda: {"trusted": True, "utc_now": NOW.isoformat()},
+    )
+    seen = []
+
+    def mark(exchange, asset, quantity, now, research):
+        seen.append(quantity)
+        return PriceEvidence(
+            D("1.3725"),
+            now,
+            now,
+            False,
+            "SYNTHETIC executable depth",
+            {"valued_quantity": str(quantity), "no_stablecoin_parity": True},
+        )
+
+    collector.paper = SimpleNamespace(market=SimpleNamespace(mark=mark))
+    payload = {
+        "items": [
+            {
+                "exchange_id": str(uuid4()),
+                "asset_id": str(uuid4()),
+                "quantity": "123.456789012345678",
+            }
+        ]
+    }
+    status, result = await invoke(app, "/paper/funding/marks", payload)
+    assert status == 200 and seen == [D("123.456789012345678")]
+    assert result["items"][0]["quantity"] == "123.456789012345678"
+    assert result["items"][0]["cad_per_unit"] == "1.3725"
+    assert not result["items"][0]["verified"] and result["clock"]["trusted"]
+    status, _ = await invoke(
+        app, "/paper/funding/marks", {"items": payload["items"] * 101}
+    )
+    assert status == 422
 
 
 
