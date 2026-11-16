@@ -138,6 +138,21 @@ async def test_environment_defaults_survive_until_owner_saves(monkeypatch):
     assert collector.applied_terminal_version == 0
 
 
+async def test_disabled_exchange_does_not_poll_or_discover():
+    collector, _ = collector_fixture()
+    connector = SimpleNamespace(
+        adapter=SimpleNamespace(id="synthetic-disabled", name="SYNTHETIC", has={}),
+        close=AsyncMock(),
+        discover_spot_markets=AsyncMock(side_effect=AssertionError("No polling")),
+    )
+    collector.runtimes["ndax"] = ExchangeRuntime("ndax", connector)
+    collector.terminal_market_preferences = {"enabled_exchanges": ["kraken"]}
+    task = asyncio.create_task(collector.run_exchange("ndax"))
+    await asyncio.sleep(0)
+    collector.stop.set()
+    await task
+    connector.discover_spot_markets.assert_not_called()
+    connector.close.assert_awaited_once()
 
 
 
