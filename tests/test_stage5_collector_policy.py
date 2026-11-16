@@ -275,6 +275,25 @@ async def test_funding_marks_fail_closed_without_trusted_utc(private_app):
     assert status == 503
 
 
+@pytest.mark.parametrize("quantity", ["0", "-1", 0.1, True, "1e21"])
+async def test_funding_marks_reject_invalid_exact_quantities(private_app, quantity):
+    collector, app = private_app
+    collector.paper = SimpleNamespace()
+    collector.utc_clock = SimpleNamespace(trusted=True)
+    status, _ = await invoke(
+        app,
+        "/paper/funding/marks",
+        {
+            "items": [
+                {
+                    "exchange_id": str(uuid4()),
+                    "asset_id": str(uuid4()),
+                    "quantity": quantity,
+                }
+            ]
+        },
+    )
+    assert status == 422
 
 
 
