@@ -200,3 +200,55 @@ async def test_custom_missing_or_unusual_budget_keeps_all_original_resize_eviden
         await engine.dispose()
 
 
+@pytest.mark.parametrize(
+    "malformation",
+    [
+        "missing",
+        "null",
+        "string",
+        "array",
+        "scalar_buy",
+        "array_buy",
+        "array_fx",
+        "scalar_fx",
+    ],
+)
+async def test_sql_pruning_keeps_unknown_or_malformed_evidence_fail_closed(
+    database_url,
+    malformation,
+):
+    original = deepcopy(synthetic_evidenced_payload())
+    if malformation == "missing":
+        original.pop("evidence")
+    elif malformation == "null":
+        original["evidence"]["calculation_inputs"] = None
+    elif malformation == "string":
+        original["evidence"]["calculation_inputs"] = "SYNTHETIC-invalid"
+    elif malformation == "array":
+        original["evidence"]["calculation_inputs"] = ["SYNTHETIC-invalid"]
+    elif malformation == "scalar_buy":
+        original["evidence"]["calculation_inputs"]["buy"] = "SYNTHETIC-invalid"
+    elif malformation == "array_buy":
+        original["evidence"]["calculation_inputs"]["buy"] = ["SYNTHETIC-invalid"]
+    elif malformation == "array_fx":
+        original["evidence"]["calculation_inputs"]["buy"]["fx"] = ["SYNTHETIC-invalid"]
+    else:
+        original["evidence"]["calculation_inputs"]["buy"]["fx"] = "SYNTHETIC-invalid"
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        async with engine.connect() as db:
+            await db.execute(text("SET TRANSACTION READ ONLY"))
+            compact = await db.scalar(
+                select(
+                    api.list_payload_expression(
+                        D(1000),
+                        payload_column=bindparam("synthetic_payload", type_=JSONB),
+                    )
+                ),
+                {"synthetic_payload": original},
+            )
+        assert displayed(original, synthetic_health()) == displayed(
+            compact, synthetic_health()
+        )
+    finally:
+        await engine.dispose()
