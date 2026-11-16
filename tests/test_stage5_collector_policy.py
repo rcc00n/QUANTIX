@@ -173,6 +173,23 @@ async def test_deselecting_kraken_cancels_existing_websocket():
     assert stream.cancelled() and rt.markets == [] and not rt.schedules
 
 
+async def test_late_deselected_response_is_audited_without_cache_or_scanner_promotion():
+    collector, events = collector_fixture()
+    m = market("ndax")
+    rt = ExchangeRuntime(
+        "ndax",
+        SimpleNamespace(),
+        exchange_id=uuid4(),
+        catalog=[m],
+        markets=[],
+        schedules={},
+    )
+    collector.terminal_market_preferences = {"enabled_exchanges": ["kraken"]}
+    # Deliberately malformed response proves validation/promotion is never reached.
+    await collector.accept(rt, m, {"not": "a book"}, NOW, NOW, 1, "SYNTHETIC")
+    assert not collector.cache.books
+    assert events[-1][0][1] == "collector.late_deselected_response"
+    assert events[-1][1]["details"]["market_id"] == str(m.id)
 
 
 @pytest.fixture
