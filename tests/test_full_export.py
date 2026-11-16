@@ -50,6 +50,25 @@ def test_explicit_schema_policy_and_private_projection():
     assert not dataset_query(Base.metadata.tables["arbitrage_evaluations"], owner)[2]
 
 
+def test_exact_private_record_sanitization():
+    value = public_record(
+        {
+            "quantity": Decimal("-0.000000000000000123"),
+            "missing": None,
+            "chat_id": 123,
+            "nested": {"password": "SYNTHETIC-SECRET", "message": "PRIVATE"},
+            "url": "https://example.invalid/?token=secret",
+            "email": "private@example.invalid",
+            "source_token": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
+        }
+    )
+    text = json.dumps(value)
+    assert value["quantity"] == "-0.000000000000000123"
+    assert value["missing"] is None
+    assert all(
+        secret not in text
+        for secret in ("SYNTHETIC-SECRET", "PRIVATE", "private@example", "123456789:")
+    )
 
 
 
