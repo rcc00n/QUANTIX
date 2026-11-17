@@ -37,9 +37,12 @@ from arbiq.paper_trading.api import now_checked, owned
 from arbiq.paper_trading.execution import planned_reserves
 from arbiq.paper_trading.funding_plans import HistoricalRoute, funding_demands
 from arbiq.paper_trading.funding_sizing import (
+    InventoryBalance,
+    inventory_liquidation_mark,
+    prefunded_capacity,
+    prefunded_net_return,
     projected_costs,
     read_pair,
-    size_at_budget,
     time_value,
 )
 from arbiq.paper_trading.service import Allocation, create_portfolio, session_dto
@@ -173,9 +176,11 @@ async def coverage(
             select(PortfolioPosition).where(PortfolioPosition.session_id == session_id)
         )
     )
-    available = {
-        (str(x.exchange_id), str(x.asset_id)): x.quantity - x.reserved_quantity for x in positions
+    inventory = {
+        (str(x.exchange_id), str(x.asset_id)): InventoryBalance(x.quantity, x.reserved_quantity)
+        for x in positions
     }
+    available = {key: position.spendable for key, position in inventory.items()}
     latest = (
         select(ArbitrageEvaluation.id)
         .where(
@@ -212,36 +217,42 @@ async def coverage(
         | {p.asset_id for p in positions},
     )
     strategy = read_pinned_strategy(control.settings)
+    prefunded = strategy.mode == "PRE_FUNDED" or (
+        strategy.mode == "RESEARCH_SHADOW" and strategy.research_execution_model == "PRE_FUNDED"
+    )
     output = []
     for route, evaluation in pairs[:limit]:
         buy, sell = markets[route.buy_market_id], markets[route.sell_market_id]
         reasons = []
         requirements = []
         market_net = None
+        market = affordable = None
         funded = None
+        required_mark = shortfall_mark = funded_mark = None
         reallocatable = None
         limits = []
         try:
             best, cash, base = await asyncio.to_thread(required_quantities, evaluation, strategy)
-            for m, asset_id, qty in (
-                (buy, buy.quote_asset_id, cash),
-                (sell, sell.base_asset_id, base),
+            for side, m, asset_id, qty, fee_currency in (
+                ("BUY", buy, buy.quote_asset_id, cash, strategy.buy_fee_currency),
+                ("SELL", sell, sell.base_asset_id, base, strategy.sell_fee_currency),
             ):
-                if m is sell and (
-                    strategy.mode == "TRANSFER"
-                    or (
-                        strategy.mode == "RESEARCH_SHADOW"
-                        and strategy.research_execution_model == "TRANSFER"
-                    )
-                ):
+                if side == "SELL" and not prefunded:
                     continue
+                key = str(m.exchange_id), str(asset_id)
+                position = inventory.get(key, InventoryBalance())
+                fee_asset_id = m.base_asset_id if fee_currency == "base" else m.quote_asset_id
                 requirements.append(
                     {
-                        "exchange_id": str(m.exchange_id),
+                        "side": side,
+                        "exchange_id": key[0],
                         "exchange": exchanges[m.exchange_id].slug,
-                        "asset_id": str(asset_id),
+                        "asset_id": key[1],
                         "asset": assets[asset_id].symbol,
                         "canonical_key": assets[asset_id].canonical_key,
+                        "fee_asset": assets[fee_asset_id].symbol,
+                        "total_quantity": str(position.quantity),
+                        "reserved_quantity": str(position.reserved),
                         "required_quantity": str(qty),
                     }
                 )
@@ -254,42 +265,48 @@ async def coverage(
         except (ValueError, KeyError, TypeError, ArithmeticError):
             required, sufficient, quantity = [], False, None
             reasons.append("CALCULATION_EVIDENCE_INCOMPLETE")
-        if strategy.mode == "PRE_FUNDED" or (
-            strategy.mode == "RESEARCH_SHADOW" and strategy.research_execution_model == "PRE_FUNDED"
-        ):
+        if prefunded:
             try:
                 pair = read_pair(evaluation, now, strategy)
-                buy_free = available.get(
-                    (str(buy.exchange_id), str(buy.quote_asset_id)), Decimal(0)
-                )
-                sell_free = available.get(
-                    (str(sell.exchange_id), str(sell.base_asset_id)), Decimal(0)
-                )
-                funded = size_at_budget(
+                market, affordable = await asyncio.to_thread(
+                    prefunded_capacity,
                     pair,
                     strategy.trade_amount_cad,
-                    buy_available=buy_free,
-                    sell_available=sell_free,
-                    contribution_marks=False,
+                    inventory.get(
+                        (str(buy.exchange_id), str(buy.quote_asset_id)), InventoryBalance()
+                    ),
+                    inventory.get(
+                        (str(sell.exchange_id), str(sell.base_asset_id)), InventoryBalance()
+                    ),
                 )
-                if funded is None or funded.acquisition_cad < strategy.min_buy_capital_cad:
-                    funded = None
+                if affordable and affordable.acquisition_cad >= strategy.min_buy_capital_cad:
+                    funded = affordable
+                    funded_mark = inventory_liquidation_mark(
+                        pair, funded.buy_quote, funded.sell_base
+                    )
+                else:
                     limits.append("NO_USEFUL_FUNDED_SIZE")
+                if affordable and not funded:
+                    limits.append("AFFORDABLE_SIZE_BELOW_MINIMUM_BUY_CAPITAL")
                 limits.extend(
-                    "BUY_QUOTE_BALANCE" if index == 0 else "SELL_BASE_BALANCE"
-                    for index, item in enumerate(required)
+                    "BUY_QUOTE_BALANCE" if item["side"] == "BUY" else "SELL_BASE_BALANCE"
+                    for item in required
                     if Decimal(item["missing_quantity"]) > 0
                 )
-                target = size_at_budget(pair, strategy.trade_amount_cad)
-                if target is not None:
-                    paired_value = stored(target.buy_quote * target.buy_mark_rate) + stored(
-                        target.sell_base * target.sell_mark_rate
+                if len(required) == 2:
+                    required_mark = inventory_liquidation_mark(pair, cash, base)
+                    shortfall_mark = inventory_liquidation_mark(
+                        pair,
+                        Decimal(required[0]["missing_quantity"]),
+                        Decimal(required[1]["missing_quantity"]),
                     )
-                    reallocatable = (
-                        not sufficient
-                        and paired_value <= session.initial_equity_cad
-                        and target.acquisition_cad >= strategy.min_buy_capital_cad
-                    )
+                    if required_mark is not None:
+                        reallocatable = (
+                            not sufficient
+                            and required_mark <= session.initial_equity_cad
+                            and best.acquisition_cost_cad is not None
+                            and best.acquisition_cost_cad >= strategy.min_buy_capital_cad
+                        )
                 if not limits:
                     limits.append("DEPTH_FX_PRECISION_OR_TRADE_CAP")
             except (AttributeError, ValueError, KeyError, TypeError, ArithmeticError):
@@ -305,11 +322,28 @@ async def coverage(
                 "quantity": quantity,
                 "required": required,
                 "inventory_sufficient": sufficient,
+                "funding_model": "PRE_FUNDED" if prefunded else "TRANSFER",
                 "projected_net_profit_cad": str(market_net) if market_net is not None else None,
                 "market_profitability": "UNKNOWN"
                 if market_net is None
                 else ("PROJECTED_POSITIVE" if market_net > 0 else "NON_POSITIVE"),
+                "maximum_observed_acquisition_cad": str(market.acquisition_cad) if market else None,
+                "maximum_affordable_acquisition_cad": str(affordable.acquisition_cad)
+                if affordable
+                else None,
                 "maximum_funded_acquisition_cad": str(funded.acquisition_cad) if funded else None,
+                "required_inventory_mark_cad": str(required_mark)
+                if required_mark is not None
+                else None,
+                "inventory_shortfall_mark_cad": str(shortfall_mark)
+                if shortfall_mark is not None
+                else None,
+                "funded_inventory_mark_cad": str(funded_mark) if funded_mark is not None else None,
+                "prefunded_expected_return_pct": (
+                    str(net_return)
+                    if (net_return := prefunded_net_return(funded, funded_mark)) is not None
+                    else None
+                ),
                 "funded_size_net_profit_cad": str(funded.evaluation.net_profit_cad)
                 if funded
                 else None,
@@ -327,7 +361,7 @@ async def coverage(
             "asset": assets[p.asset_id].symbol,
             "canonical_key": assets[p.asset_id].canonical_key,
             "quantity": str(p.quantity),
-            "available_quantity": str(p.quantity - p.reserved_quantity),
+            "available_quantity": str(available[(str(p.exchange_id), str(p.asset_id))]),
             "reserved_quantity": str(p.reserved_quantity),
         }
         for p in positions
@@ -335,12 +369,16 @@ async def coverage(
     return {
         "session_id": str(session.id),
         "classification": control.classification,
+        "session_trade_cap_cad": str(strategy.trade_amount_cad),
+        "session_minimum_buy_capital_cad": str(strategy.min_buy_capital_cad),
         "balances": balances,
         "routes": output,
         "window": {"limit": limit, "limited": len(pairs) > limit},
         "limitations": [
             "Pinned projected quantities are not executable quotes",
             "Funding sufficiency does not verify fees, eligibility or clock",
+            "CAD inventory marks use pinned liquidation depth before exit costs. "
+            "Cash required to acquire additional inventory may differ.",
         ],
     }
 

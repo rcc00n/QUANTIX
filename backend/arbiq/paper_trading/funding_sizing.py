@@ -6,6 +6,7 @@ from decimal import ROUND_CEILING, ROUND_DOWN, Decimal
 
 from arbiq.opportunities.analysis import load_input
 from arbiq.opportunities.contracts import Costs, Evaluation, Fee, MarketInput
+from arbiq.opportunities.conversions import capture_uncertainty_ms
 from arbiq.opportunities.math import (
     conversion_capacity,
     convert,
@@ -53,6 +54,17 @@ class SizedPair:
     sell_base: Decimal
     buy_mark_rate: Decimal
     sell_mark_rate: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryBalance:
+    quantity: Decimal = ZERO
+    reserved: Decimal = ZERO
+
+    @property
+    @decimal_context
+    def spendable(self) -> Decimal:
+        return self.quantity - self.reserved
 
 
 def projected_costs(evaluation: Evaluation) -> dict[str, str | None]:
@@ -106,10 +118,24 @@ def read_pair(evaluation, cutoff: datetime, strategy: PaperStrategy) -> PinnedPa
     confidence = [
         checked_book(book, at, age, strategy.allow_missing_source_timestamp) for book in books
     ]
-    if abs(time_value(books[0]["received_at"]) - time_value(books[1]["received_at"])) > timedelta(
-        seconds=10
+    uncertainty = timedelta(
+        milliseconds=sum(
+            capture_uncertainty_ms(book.get("verification", {}).get("clock") or {})
+            for book in books
+        )
+    )
+    max_skew = timedelta(seconds=10)
+    if (
+        abs(time_value(books[0]["received_at"]) - time_value(books[1]["received_at"])) + uncertainty
+        > max_skew
     ):
         raise ValueError("CROSS_BOOK_RECEIPT_SKEW")
+    if all(book.get("exchange_timestamp") for book in books) and (
+        abs(time_value(books[0]["exchange_timestamp"]) - time_value(books[1]["exchange_timestamp"]))
+        + uncertainty
+        > max_skew
+    ):
+        raise ValueError("CROSS_BOOK_SOURCE_SKEW")
     fx_evidence = evidence.get("fx_books", {})
     used_fx = set()
     for item in (buy, sell):
@@ -276,3 +302,51 @@ def size_at_budget(
         if at_least or result.reserved_acquisition_cad <= budget:
             return result
     return None
+
+
+def prefunded_capacity(
+    pair: PinnedPair,
+    budget: Decimal,
+    buy: InventoryBalance,
+    sell: InventoryBalance,
+) -> tuple[SizedPair | None, SizedPair | None]:
+    market = size_at_budget(pair, budget, contribution_marks=False)
+    if market is None:
+        return None, None
+    buy_available, sell_available = buy.spendable, sell.spendable
+    if market.buy_quote <= buy_available and market.sell_base <= sell_available:
+        return market, market
+    return market, size_at_budget(
+        pair,
+        budget,
+        buy_available=buy_available,
+        sell_available=sell_available,
+        contribution_marks=False,
+    )
+
+
+@decimal_context
+def inventory_liquidation_mark(
+    pair: PinnedPair, buy_quote: Decimal, sell_base: Decimal
+) -> Decimal | None:
+    """Value reserved inventory using pinned liquidation depth, before exit costs."""
+    if pair.buy.fx is None or pair.sell.fx is None:
+        return None
+    try:
+        quote_cad = convert(pair.buy.fx.to_cad, buy_quote) if buy_quote else ZERO
+        base_cad = (
+            convert(pair.sell.fx.to_cad, fill_depth(pair.sell.bids, sell_base))
+            if sell_base
+            else ZERO
+        )
+        return quote_cad + base_cad
+    except (ValueError, ArithmeticError):
+        return None
+
+
+@decimal_context
+def prefunded_net_return(size: SizedPair | None, inventory_mark: Decimal | None) -> Decimal | None:
+    if size is None or inventory_mark is None or inventory_mark <= 0:
+        return None
+    net = size.evaluation.net_profit_cad
+    return net * 100 / inventory_mark if net is not None else None

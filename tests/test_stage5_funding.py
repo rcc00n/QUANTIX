@@ -552,6 +552,13 @@ async def test_missing_inventory_coverage_and_causal_replay(funding_api, environ
     )
     assert not record["inventory_sufficient"]
     assert any(D(x["missing_quantity"]) > 0 for x in record["required"])
+    assert {leg["side"] for leg in record["required"]} == {"BUY", "SELL"}
+    assert all(
+        D(leg["total_quantity"]) == D(leg["available_quantity"]) + D(leg["reserved_quantity"])
+        for leg in record["required"]
+    )
+    assert record["maximum_affordable_acquisition_cad"] is None
+    assert record["actionable"] is False
     replay = c.post(
         "/api/v1/paper/replay",
         json={"evaluation_id": str(evaluation.id), "reaction_delay_seconds": 30},
@@ -561,6 +568,15 @@ async def test_missing_inventory_coverage_and_causal_replay(funding_api, environ
     assert value["original_projection"] is not None
     assert value["delayed_projection"] is None
     assert "DELAYED_BOOK_EVIDENCE_INSUFFICIENT" in value["limitations"]
+    delays = c.post(
+        "/api/v1/paper/replay",
+        json={"evaluation_id": str(evaluation.id), "include_delay_matrix": True},
+    )
+    assert delays.status_code == 200, delays.text
+    scenarios = delays.json()["items"]
+    assert [x["delay_seconds"] for x in scenarios] == [0, 5, 15, 30]
+    assert all(not x["executed"] and not x["inventory_assessed"] for x in scenarios)
+    assert all(x["projection"] is None for x in scenarios[1:])
     async with environment.sessions() as db:
         assert (
             await db.scalar(select(func.count()).select_from(PaperFill)) == count_before
