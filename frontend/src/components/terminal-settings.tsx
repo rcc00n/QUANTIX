@@ -28,6 +28,12 @@ const numericMarket = [
   ["maximum_age_seconds", "Maximum source age · seconds"],
   ["maximum_markets_per_exchange", "Market cap per exchange"],
 ] as const;
+const marketProfiles = [
+  ["", "Collector default"],
+  ["LIQUID_MARKETS", "Liquid Markets"],
+  ["BROAD_EXPLORATION", "Broad Exploration"],
+  ["BALANCED_ADAPTIVE", "Balanced / Adaptive"],
+] as const;
 const alertAmounts = [
   ["minimum_profit_cad", "Normal minimum profit · CAD"],
   ["minimum_return_pct", "Normal minimum return · %"],
@@ -178,6 +184,21 @@ export function TerminalSettingsWorkspace() {
               not pause collection.
             </p>
             <div className="paper-form-grid">
+              <label>
+                Market allocation profile
+                <select
+                  value={text(market.market_profile, "")}
+                  onChange={(event) =>
+                    field("market", "market_profile", event.target.value || null)
+                  }
+                >
+                  {marketProfiles.map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
               {(
                 [
                   ["enabled_exchanges", "Enabled exchange slugs", "kraken, ndax"],

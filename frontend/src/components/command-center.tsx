@@ -341,6 +341,7 @@ export function SystemHealthWorkspace() {
   const pipeline = asRecord(metrics.pipeline_timings);
   const fresh = asRecord(collector.freshness_seconds);
   const routeLatency = asRecord(pipeline.route_evaluation_ms);
+  const assetCoverage = asRecords(collector.asset_coverage);
   return (
     <div className="terminal-workspace">
       <div className="terminal-workspace-top">
@@ -414,6 +415,83 @@ export function SystemHealthWorkspace() {
           notifications: value.notification_timings,
         }}
       />
+      {assetCoverage.length > 0 && (
+        <section className="terminal-panel">
+          <SectionTitle title="Market coverage by asset" />
+          <div className="table-wrap">
+            <table className="terminal-table" aria-label="Market coverage by asset">
+              <thead>
+                <tr>
+                  {[
+                    "Asset",
+                    "Selected books",
+                    "Connected venues",
+                    "Same-quote directions",
+                    "REST / WS",
+                    "Fresh / aging / stale",
+                    "Synchronized WS",
+                    "Positive CAD research",
+                    "Largest executable buy",
+                    "Evaluation p50 / p95",
+                  ].map((header) => (
+                    <th scope="col" key={header}>
+                      {header}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {assetCoverage.map((row) => {
+                  const transport = asRecord(row.transport);
+                  const freshness = asRecord(row.freshness);
+                  const evaluation = asRecord(row.retained_route_evaluation_ms);
+                  return (
+                    <tr key={text(row.asset_key)}>
+                      <th scope="row" title={text(row.asset_key)}>
+                        {text(row.asset)}
+                        {row.verified_identity === false && <small>Unverified identity</small>}
+                      </th>
+                      <td>{text(row.monitored_books, "—")}</td>
+                      <td>{text(row.connected_venue_groups, "—")}</td>
+                      <td>{text(row.same_quote_directed_routes, "—")}</td>
+                      <td>
+                        {text(transport.rest, "0")} / {text(transport.websocket, "0")}
+                      </td>
+                      <td>
+                        {clock.trusted === true
+                          ? `${text(freshness.FRESH, "0")} / ${text(freshness.AGING, "0")} / ${text(freshness.STALE, "0")}`
+                          : "Clock untrusted"}
+                        {!!freshness.UNAVAILABLE && (
+                          <small> · {text(freshness.UNAVAILABLE)} unavailable</small>
+                        )}
+                        {clock.trusted === true && !!freshness.CLOCK_UNTRUSTED && (
+                          <small> · {text(freshness.CLOCK_UNTRUSTED)} invalid timing</small>
+                        )}
+                      </td>
+                      <td>{text(row.synchronized_ws_books, "—")}</td>
+                      <td>{text(row.positive_after_cost_routes, "—")}</td>
+                      <td>
+                        <Exact value={row.maximum_executable_buy_cad} places={2} unit="CAD" />
+                      </td>
+                      <td>
+                        {text(evaluation.p50, "—")} / {text(evaluation.p95, "—")} ms · n=
+                        {text(evaluation.sample_count, "0")}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="terminal-description">
+            Same-quote directions use verified asset identities on distinct venues. Connected venues
+            have recent healthy or degraded books. Quote age and WebSocket synchronization are
+            measured independently. Size, profitability and timing summarize unexpired scanner
+            evaluations. Two-sided funding depends on the selected portfolio and is measured in the{" "}
+            <Link href="/portfolio">Funding Planner</Link>.
+          </p>
+        </section>
+      )}
       <div className="terminal-split">
         <section className="terminal-panel">
           <SectionTitle eyebrow="FINANCIAL TIMING" title="Clock confidence" />

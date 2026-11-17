@@ -610,6 +610,7 @@ test("SYNTHETIC: alert policy persists versions and authenticated polling reconn
     page.getByRole("heading", { name: "Market coverage and alert policy" }),
   ).toBeVisible();
   await expect(page.getByText("Telegram delivery inactive", { exact: true })).toBeVisible();
+  await page.getByLabel("Market allocation profile").selectOption("BALANCED_ADAPTIVE");
   await page.getByLabel("Normal minimum profit · CAD", { exact: true }).fill("12.3456789012345678");
   await page.getByLabel("Enable Telegram notifications").check();
   await page.getByLabel("Minimum Buy Capital · CAD", { exact: true }).fill("25.123456789012345678");
@@ -623,9 +624,9 @@ test("SYNTHETIC: alert policy persists versions and authenticated polling reconn
     (writes.find((x) => x.path === "terminal")?.body.settings as typeof preferences).notifications
       .minimum_profit_cad,
   ).toBe("12.3456789012345678");
-  const notifications = (
-    writes.find((x) => x.path === "terminal")?.body.settings as typeof preferences
-  ).notifications;
+  const saved = writes.find((x) => x.path === "terminal")?.body.settings as typeof preferences;
+  expect(saved.market).toMatchObject({ market_profile: "BALANCED_ADAPTIVE" });
+  const notifications = saved.notifications;
   expect(notifications.minimum_buy_capital_cad).toBe("25.123456789012345678");
   expect(notifications.minimum_return_pct).toBe("0.5");
   expect(notifications.research_enabled).toBe(true);
@@ -638,6 +639,23 @@ test("SYNTHETIC: alert policy persists versions and authenticated polling reconn
     database: "connected",
     schema_revision: "0009_terminal_settings",
     scanner: { healthy: true, clock: { trusted: true, host_healthy: false } },
+    collector: {
+      asset_coverage: [
+        {
+          asset_key: "asset:SYNTH",
+          asset: "SYNTH",
+          monitored_books: 2,
+          connected_venue_groups: 2,
+          same_quote_directed_routes: 2,
+          transport: { rest: 1, websocket: 1 },
+          freshness: { FRESH: 1, AGING: 1 },
+          synchronized_ws_books: 1,
+          positive_after_cost_routes: 0,
+          maximum_executable_buy_cad: "2500.001000000000000001",
+          retained_route_evaluation_ms: { p50: 2.5, sample_count: 2 },
+        },
+      ],
+    },
     paper: { healthy: true },
     feeds: [],
     events: [],
@@ -656,6 +674,9 @@ test("SYNTHETIC: alert policy persists versions and authenticated polling reconn
   disconnected = false;
   await page.getByRole("button", { name: "Refresh live data" }).click();
   await expect(page.getByText("0009_terminal_settings", { exact: true })).toBeVisible();
+  const coverage = page.getByRole("table", { name: "Market coverage by asset" });
+  await expect(coverage.getByRole("rowheader", { name: "SYNTH" })).toBeVisible();
+  await expect(coverage.getByTitle("2500.001000000000000001 CAD")).toBeVisible();
   await expect(page.getByText("SYNTHETIC_TRANSIENT_DISCONNECT", { exact: true })).toHaveCount(0);
   expect(requests).toBeGreaterThanOrEqual(2);
 
