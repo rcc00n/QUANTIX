@@ -66,6 +66,46 @@ def test_terminal_authentication_and_real_empty_states(
     assert client.get("/api/v1/terminal/overview").status_code == 401
 
 
+def test_runtime_singleflight_is_bounded_and_contains_no_portfolio(monkeypatch):
+    calls = []
+
+    class Response:
+        status = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def json(self):
+            calls.append(1)
+            await asyncio.sleep(0)
+            return {k: v for k, v in fixture_bundle().items() if k != "feeds"}
+
+    req = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                terminal_cache=terminal.TerminalCache(),
+                collector_http=SimpleNamespace(get=lambda _: Response()),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        terminal, "exchanges", AsyncMock(return_value=fixture_bundle()["feeds"])
+    )
+
+    async def check():
+        values = await asyncio.gather(
+            *(terminal.runtime(req, None, None) for _ in range(20))
+        )
+        assert len(calls) == 1
+        assert all(
+            "portfolio" not in x and "recent_simulations" not in x for x in values
+        )
+        assert req.app.state.terminal_cache.until > 0
+
+    asyncio.run(check())
 
 
 
