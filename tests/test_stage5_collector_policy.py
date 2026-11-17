@@ -337,6 +337,47 @@ async def test_funding_marks_validate_full_size_and_preserve_provenance(private_
     assert status == 422
 
 
+async def test_thin_current_routes_do_not_discard_original_inputs_or_fx_expiry(
+    private_app,
+):
+    collector, app = private_app
+    route_id = str(uuid4())
+    inputs = {
+        "evaluated_at": NOW.isoformat(),
+        "buy": {
+            "market_id": "synthetic-buy",
+            "quote_currency": "USDT",
+            "asks": [["100", "2"]],
+            "fx": {"fresh_until": NOW.isoformat(), "full_evidence": "SYNTHETIC"},
+        },
+        "sell": {"quote_currency": "CAD", "bids": [["110", "2"]]},
+    }
+    route = {
+        "id": route_id,
+        "status": "RESEARCH_ONLY",
+        "selected_budget_cad": "1000",
+        "evidence": {"calculation_inputs": inputs, "buy_quality": "DEGRADED"},
+        "budget_results": [{"synthetic": "heavy"}],
+        "transfer_scenario": {"synthetic": "heavy"},
+    }
+    original = json.dumps(route, sort_keys=True)
+    collector.scanner = SimpleNamespace(
+        current={"route": route}, diagnostics=lambda: {"healthy": True}
+    )
+    status, result = await invoke(app, "/engine/current", query={"summary": "1"})
+    thin = result["items"][0]
+    assert status == 200 and thin["id"] == route_id
+    assert "budget_results" not in thin and "transfer_scenario" not in thin
+    assert "asks" not in thin["evidence"]["calculation_inputs"]["buy"]
+    assert (
+        thin["evidence"]["calculation_inputs"]["buy"]["fx"]["fresh_until"]
+        == NOW.isoformat()
+    )
+    assert json.dumps(route, sort_keys=True) == original
+    status, full = await invoke(app, "/engine/current", query={"route_id": route_id})
+    assert (
+        status == 200 and full["items"][0]["evidence"]["calculation_inputs"] == inputs
+    )
 
 
 
