@@ -138,7 +138,7 @@ def normalize_market(
     )
 
 
-def selected_markets(
+def eligible_markets(
     markets: list[DiscoveredMarket], config: CollectorConfig
 ) -> list[DiscoveredMarket]:
     eligible = []
@@ -159,6 +159,13 @@ def selected_markets(
         ):
             continue
         eligible.append(market)
+    return eligible
+
+
+def selected_markets(
+    markets: list[DiscoveredMarket], config: CollectorConfig
+) -> list[DiscoveredMarket]:
+    eligible = eligible_markets(markets, config)
 
     def rank(market):
         return (

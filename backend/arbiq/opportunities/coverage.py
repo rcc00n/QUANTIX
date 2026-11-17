@@ -1,11 +1,24 @@
 """Linear catalog indexing; comparisons are limited to selected compatible books."""
 
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
-from itertools import combinations
+from decimal import Decimal
+from itertools import combinations, islice
 
-from arbiq.collector.config import CollectorConfig
-from arbiq.market_data.discovery import DiscoveredMarket, selected_markets
+from arbiq.collector.config import CollectorConfig, MarketProfile
+from arbiq.market_data.discovery import DiscoveredMarket, eligible_markets, selected_markets
+
+CORE_ASSETS = frozenset({"BTC", "ETH", "SOL", "XRP", "LTC", "ADA", "LINK", "DOGE"})
+CONVERSION_ASSETS = frozenset({"USD", "EUR", "USDC", "USDT"})
+QUALITY_RANK = {
+    "HEALTHY": 0,
+    "DEGRADED": 2,
+    "SUSPICIOUS": 3,
+    "STALE": 4,
+    "UNAVAILABLE": 5,
+    "CLOCK_UNTRUSTED": 5,
+}
 
 
 def venue_group(slug: str) -> str:
@@ -26,6 +39,9 @@ def allocate(
     config: CollectorConfig,
     relevance: dict[tuple[str, str], int] | None = None,
     quality: dict[tuple[str, str], str] | None = None,
+    *,
+    research_epoch: int = 0,
+    depth: Mapping[tuple[str, str], Decimal] | None = None,
 ):
     """Prefer intersections, retaining conversion anchors and configured filters.
 
@@ -33,6 +49,11 @@ def allocate(
     books, where present, anchor directional CAD conversion without stablecoin parity.
     All allocations respect the per-exchange cap; no unbounded subscriptions.
     """
+    if config.market_profile is not None:
+        return profile_allocation(
+            catalogs, config, relevance or {}, quality or {}, depth or {}, research_epoch
+        )
+
     coverage = intersections(catalogs)
     result = {}
     relevance = relevance or {}
@@ -66,6 +87,154 @@ def allocate(
 
         ordered = sorted(eligible, key=rank)
         result[slug] = ordered[: config.max_markets_per_exchange]
+    return result
+
+
+def spot_route_candidate(market: DiscoveredMarket) -> bool:
+    return bool(
+        market.active is not False
+        and market.base.verified
+        and market.quote.verified
+        and (market.metadata.get("trading_rules") or {}).get("market_order_available") is not False
+    )
+
+
+def quote_liquidity_ranks(markets, native_values):
+    """Rank within identical quote units and retain missing evidence as unknown."""
+    by_quote = defaultdict(list)
+    for market in markets:
+        value = native_values(market)
+        if value is not None and value > 0:
+            by_quote[market.quote.key].append((value, market.native_symbol))
+    # A normalized rank from 0 through 999 is dimensionless. A 1,000
+    # sentinel means that no comparable measurement exists.
+    ranks = {}
+    for values in by_quote.values():
+        ordered = sorted(values, key=lambda item: (-item[0], item[1]))
+        previous = None
+        rank = 0
+        for position, (value, symbol) in enumerate(ordered):
+            if position and value != previous:
+                rank = position * 1000 // len(ordered)
+            ranks[symbol] = rank
+            previous = value
+    return ranks
+
+
+def profile_allocation(catalogs, config, relevance, quality, depth, research_epoch):
+    eligible = {slug: eligible_markets(markets, config) for slug, markets in catalogs.items()}
+    coverage = defaultdict(set)
+    viable_symbols = {}
+    for slug, markets in eligible.items():
+        group = venue_group(slug)
+        viable = set()
+        for market in markets:
+            if spot_route_candidate(market):
+                viable.add(market.native_symbol)
+                coverage[(market.base.key, market.quote.key)].add(group)
+        viable_symbols[slug] = viable
+    common_assets = CORE_ASSETS.union(config.priority_assets)
+    quote_order = {value: index for index, value in enumerate(config.quote_assets)}
+    cap = config.max_markets_per_exchange
+    broad = config.market_profile == MarketProfile.BROAD_EXPLORATION
+    liquid = config.market_profile == MarketProfile.LIQUID_MARKETS
+    result = {}
+    for slug, markets in eligible.items():
+        if len(markets) <= cap:
+            result[slug] = sorted(markets, key=lambda market: market.native_symbol)
+            continue
+        viable = viable_symbols[slug]
+        liquidity = quote_liquidity_ranks(markets, lambda market: market.quote_volume)
+        depth_rank = (
+            quote_liquidity_ranks(
+                markets, lambda market, slug=slug: depth.get((slug, market.native_symbol))
+            )
+            if depth
+            else {}
+        )
+
+        def rank(market, slug=slug, depth_rank=depth_rank, liquidity=liquidity, viable=viable):
+            key = (market.base.key, market.quote.key)
+            groups = len(coverage.get(key, ()))
+            observed_quality = QUALITY_RANK.get(quality.get((slug, market.native_symbol)), 1)
+            liquid_rank = (
+                depth_rank.get(market.native_symbol, 1000),
+                liquidity.get(market.native_symbol, 1000),
+            )
+            base_prior = market.base.symbol not in common_assets
+            identity = (
+                market.native_symbol not in viable,
+                groups < 2,
+                observed_quality,
+                market.active is not True,
+                not bool(market.amount_step and market.min_notional),
+            )
+            cad_preferred = config.prefer_cad and market.quote.symbol != "CAD"
+            observed_relevance = -min(3, max(0, relevance.get(key, 0)))
+            profile_rank = (
+                (*liquid_rank, base_prior, -groups, observed_relevance)
+                if liquid
+                else (base_prior, *liquid_rank, -groups, observed_relevance)
+                if broad
+                else (base_prior, -groups, *liquid_rank, observed_relevance)
+            )
+            return (
+                *identity,
+                *profile_rank,
+                cad_preferred,
+                quote_order.get(market.quote.symbol, len(quote_order)),
+                market.native_symbol,
+            )
+
+        ordered = sorted(markets, key=rank)
+        anchor_limit = 2 if cap >= 8 else 1
+        chosen = list(
+            islice(
+                (
+                    market
+                    for market in ordered
+                    if market.native_symbol in viable
+                    and market.base.symbol in CONVERSION_ASSETS
+                    and market.quote.symbol == "CAD"
+                ),
+                anchor_limit,
+            )
+        )
+        anchor_symbols = {market.native_symbol for market in chosen}
+        remaining = [market for market in ordered if market.native_symbol not in anchor_symbols]
+        reserve = min(2 if broad else 1, max(0, (cap - 1) // 3))
+        core_limit = cap - reserve
+        base_limits = defaultdict(int)
+        for market in chosen:
+            base_limits[market.base.key] += 1
+        for market in remaining:
+            if len(chosen) >= core_limit:
+                break
+            if base_limits[market.base.key] < (2 if liquid else 1):
+                chosen.append(market)
+                base_limits[market.base.key] += 1
+
+        # The rotation explores previously unchosen assets without letting recent
+        # anomalies or an incumbent's measured depth dominate every slot.
+        chosen_symbols = {market.native_symbol for market in chosen}
+        if reserve:
+            probes = {}
+            for market in remaining:
+                if market.base.key not in base_limits and market.native_symbol in viable:
+                    probes.setdefault(market.base.key, market)
+            bases = sorted(probes)
+            for index in range(min(reserve, len(bases))):
+                market = probes[bases[(research_epoch * reserve + index) % len(bases)]]
+                chosen.append(market)
+                chosen_symbols.add(market.native_symbol)
+        # Venues with few independent bases still use their full book budget.
+        chosen.extend(
+            islice(
+                (market for market in remaining if market.native_symbol not in chosen_symbols),
+                cap - len(chosen),
+            )
+        )
+        result[slug] = chosen
     return result
 
 

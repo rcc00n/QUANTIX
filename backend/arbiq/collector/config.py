@@ -1,4 +1,5 @@
 from decimal import Decimal
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -26,6 +27,12 @@ DEFAULT_EXCHANGES = [
 ]
 
 
+class MarketProfile(StrEnum):
+    LIQUID_MARKETS = "LIQUID_MARKETS"
+    BROAD_EXPLORATION = "BROAD_EXPLORATION"
+    BALANCED_ADAPTIVE = "BALANCED_ADAPTIVE"
+
+
 class CollectorConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     enabled: bool = True
@@ -34,6 +41,7 @@ class CollectorConfig(BaseModel):
     base_assets: list[str] = []  # Empty means all discovered spot assets.
     quote_assets: list[str] = ["CAD", "USD", "USDC", "USDT", "EUR", "BTC", "JPY"]
     priority_assets: list[str] = ["BTC", "ETH", "SOL", "XRP", "LTC", "USDC", "USDT"]
+    market_profile: MarketProfile | None = None
     active_only: bool = True
     allow_unknown_active: bool = True
     prefer_cad: bool = True

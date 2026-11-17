@@ -19,6 +19,7 @@ from arbiq.finance.fees import FeeAssessment, assess_fee
 from arbiq.market_data.quality import DataState, safe_json
 from arbiq.market_data.timing import Timings, age_seconds
 from arbiq.market_data.trading_rules import positive_decimal
+from arbiq.opportunities.comparison_queue import ComparisonQueue
 from arbiq.opportunities.contracts import (
     CALCULATION_VERSION,
     Costs,
@@ -76,6 +77,7 @@ class ArbitrageEngine:
         self.config = collector.settings.arbitrage
         self.store = OpportunityStore(collector.store.sessions, collector.store.run_id)
         self.pending = set()
+        self.pending_markets = set()
         self.wake = asyncio.Event()
         self.index = defaultdict(set)
         self.market_map = {}
@@ -89,24 +91,34 @@ class ArbitrageEngine:
         self.latencies = deque(maxlen=100)
         self.timings = Timings()
         self.heartbeat = 0.0
-        self.fx_evidence = {}
-        self.jobs = OrderedDict()
+        self.fx_markets = ()
+        self.fx_cache_key = None
+        self.fx_snapshot = None
+        self.comparisons = ComparisonQueue()
+        self.jobs = self.comparisons.ready
         self.seen_candidates = OrderedDict()
         self.last_evaluated = OrderedDict()
         self.selection = ()
         self.negative_writes = deque()
-        self.base_rotation = 0
+        self.fx_inputs = {}
+        self.scheduler_context = None
         self.projections = ProjectionCache()
         self.evidence_pool = EvidencePool(
             getattr(collector.cache, "limit", self.config.max_candidates)
         )
 
     def changed(self, book):
-        if len(self.pending) < self.config.max_candidates:
+        if book.base_key in self.pending or len(self.pending) < self.config.max_candidates:
             self.pending.add(book.base_key)
-            self.wake.set()
         else:
             self.metrics["coalesced_updates"] += 1
+        # Delivery is bounded by the current monitored market index. The asset
+        # telemetry cap does not drop a valid selected market's update.
+        if book.market_id in self.market_map:
+            if book.market_id in self.pending_markets:
+                self.metrics["comparison_market_updates_coalesced"] += 1
+            self.pending_markets.add(book.market_id)
+            self.wake.set()
 
     def rebuild(self):
         self.index.clear()
@@ -118,6 +130,23 @@ class ArbitrageEngine:
                     self.index[market.base.key].add(market.id)
 
         self.selection = tuple(rt.markets for rt in self.collector.runtimes.values())
+        self.fx_markets = tuple(
+            (runtime, market, base, quote)
+            for runtime, market in self.market_map.values()
+            if (base := FX_ASSET_KEYS.get(market.base.key))
+            and (quote := FX_ASSET_KEYS.get(market.quote.key))
+            and base != quote
+            and market.base.verified
+            and market.quote.verified
+            and market.active is True
+            and (market.metadata.get("trading_rules") or {}).get("market_order_available")
+            is not False
+        )
+        self.fx_cache_key = None
+        self.metrics["comparison_work_rebuilt"] += self.comparisons.rebuild(
+            self.market_map, self.index, elapsed_seconds()
+        )
+        self.pending_markets.intersection_update(self.market_map)
         self.evidence_pool.retain(self.market_map)
         self.projections.retain(self.market_map)
 
@@ -143,24 +172,14 @@ class ArbitrageEngine:
 
     def fx_routes(self, now):
         """Select bounded causal depth paths and pin the underlying books."""
-        edges = []
-        sources = {}
-        for market_id, (rt, market) in self.market_map.items():
-            base = FX_ASSET_KEYS.get(market.base.key)
-            quote = FX_ASSET_KEYS.get(market.quote.key)
-            rules = market.metadata.get("trading_rules") or {}
-            if (
-                not base
-                or not quote
-                or base == quote
-                or not market.base.verified
-                or not market.quote.verified
-                or market.active is not True
-                or rt.health["error_code"]
-                or rules.get("market_order_available") is False
-            ):
+        age = timedelta(seconds=self.config.maximum_book_age_seconds)
+        skew = timedelta(seconds=self.config.maximum_book_skew_seconds)
+        selected = []
+        with_observation = [age, skew, self.config.default_budget_cad]
+        for rt, market, base, quote in self.fx_markets:
+            if rt.health["error_code"]:
                 continue
-            book = self.collector.cache.get(market_id, now=now)
+            book = self.collector.cache.get(market.id, now=now)
             if (
                 book is None
                 or book.state != DataState.HEALTHY
@@ -168,10 +187,35 @@ class ArbitrageEngine:
             ):
                 continue
             clock = book.verification.get("clock") or {}
-            if clock.get("trusted") is False:
+            uncertainty = capture_uncertainty_ms(clock)
+            if (
+                clock.get("trusted") is False
+                or not book.exchange_timestamp <= book.received_at <= now
+                or now - book.exchange_timestamp + timedelta(milliseconds=uncertainty) > age
+            ):
                 continue
-            reference = str(market_id) + ":" + book.content_sha256
             fee = self.fee_assessment(market, now=now, adapter=rt.slug)
+            selected.append((base, quote, book, fee, uncertainty))
+            with_observation.append(
+                (
+                    book.market_id,
+                    book.content_sha256,
+                    book.source,
+                    book.exchange_timestamp,
+                    book.received_at,
+                    uncertainty,
+                    fee,
+                )
+            )
+        cache_key = tuple(with_observation)
+        if cache_key == self.fx_cache_key:
+            self.metrics["fx_graph_reuses"] += 1
+            return self.fx_snapshot
+
+        edges = []
+        sources = {}
+        for base, quote, book, fee, uncertainty in selected:
+            reference = str(book.market_id) + ":" + book.content_sha256
             levels = {
                 "bids": book.normalized.bids,
                 "asks": book.normalized.asks,
@@ -184,26 +228,29 @@ class ArbitrageEngine:
                     spot_conversion_leg(base, quote, **levels, side="buy"),
                     book.exchange_timestamp,
                     book.received_at,
-                    capture_uncertainty_ms(clock),
+                    uncertainty,
                 )
             )
             sources[reference] = book, fee
         result = select_cad_paths(
             edges,
             now=now,
-            age=timedelta(seconds=self.config.maximum_book_age_seconds),
-            skew=timedelta(seconds=self.config.maximum_book_skew_seconds),
+            age=age,
+            skew=skew,
             probe_cad=self.config.default_budget_cad,
         )
         used = {leg.evidence for fx in result.values() for leg in fx.to_cad.legs}
-        self.fx_evidence = {
+        evidence = {
             key.split(":", 1)[0]: {
                 **self.evidence_pool.book(sources[key][0]),
                 "fees": {side: sources[key][1].as_evidence(side) for side in ("buy", "sell")},
             }
             for key in sorted(used)
         }
-        return ConversionSnapshot(result, self.fx_evidence)
+        self.fx_snapshot = ConversionSnapshot(result, evidence)
+        self.fx_cache_key = cache_key
+        self.metrics["fx_graph_rebuilds"] += 1
+        return self.fx_snapshot
 
     def market_input(self, rt, market, book, fx, *, fee: FeeAssessment, side):
         metadata = market.metadata
@@ -272,14 +319,20 @@ class ArbitrageEngine:
             fx.get(market.quote.symbol),
         )
 
-    async def evaluate_pair(self, buy_id, sell_id, fx, now):
+    async def evaluate_pair(self, buy_id, sell_id, fx, now, *, books=None):
         evaluation_started = elapsed_seconds()
         br, bm = self.market_map[buy_id]
         sr, sm = self.market_map[sell_id]
         if venue_group(br.slug) == venue_group(sr.slug):
             return
-        buy = self.collector.cache.get(buy_id, now=now)
-        sell = self.collector.cache.get(sell_id, now=now)
+        buy, sell = (
+            books
+            if books is not None
+            else (
+                self.collector.cache.get(buy_id, now=now),
+                self.collector.cache.get(sell_id, now=now),
+            )
+        )
         if not buy or not sell or not buy.normalized.asks or not sell.normalized.bids:
             return
         key = hashlib.sha256(f"{buy_id}:{sell_id}".encode()).hexdigest()
@@ -340,8 +393,12 @@ class ArbitrageEngine:
                     sell_fx.to_cad, sell.normalized.bids[0].price * probe
                 ) > required_input(buy_fx.from_cad, buy.normalized.asks[0].price * probe)
             else:
-                if rejected_fx and key in self.current:
-                    await self.invalidate(key, "INVALIDATED", "FX_CAPTURE_SKEW_EXCEEDED", now)
+                if key in self.current and self.current[key]["status"] not in {
+                    "INVALIDATED",
+                    "EXPIRED",
+                }:
+                    reason = "FX_CAPTURE_SKEW_EXCEEDED" if rejected_fx else "FX_PATH_UNAVAILABLE"
+                    await self.invalidate(key, "INVALIDATED", reason, now)
                 return
             if not raw_positive:
                 if key in self.current and self.current[key]["status"] not in {
@@ -754,8 +811,16 @@ class ArbitrageEngine:
                 "tracked_routes": len(self.current),
                 "pending_transitions": len(self.pending_transitions),
                 "pending_comparisons": len(self.jobs),
+                "comparison_deferred_markets": len(self.comparisons.deferred),
                 "comparison_queue_oldest_seconds": max(
                     (elapsed_seconds() - t for t in self.jobs.values() if t is not None), default=0
+                ),
+                "comparison_deferred_oldest_seconds": max(
+                    (
+                        elapsed_seconds() - work.queued_at
+                        for work in self.comparisons.deferred.values()
+                    ),
+                    default=0,
                 ),
                 "pipeline_timings": self.timings.snapshot(),
                 "detected_identity_window": len(self.seen_candidates),
@@ -771,6 +836,110 @@ class ArbitrageEngine:
             ],
         }
 
+    def schedule_comparisons(self, fx):
+        clock = self.collector.utc_clock.snapshot() if self.collector.utc_clock else {}
+        context = (id(self.config), clock.get("trusted"), clock.get("host_healthy"))
+        requested = set(self.pending_markets)
+        self.pending_markets.clear()
+        self.pending.clear()
+        if self.scheduler_context is not None and self.scheduler_context != context:
+            requested.update(self.comparisons.market_keys)
+        self.scheduler_context = context
+        fx_inputs = {}
+        for quote_key, currency in FX_ASSET_KEYS.items():
+            if (conversion := fx.get(currency)) is None or currency == "CAD":
+                continue
+            books = fx.referenced_books(conversion) if isinstance(fx, ConversionSnapshot) else {}
+            fx_inputs[quote_key] = (
+                conversion.selection_version,
+                conversion.verified,
+                conversion.fresh_until,
+                conversion.observed_at,
+                conversion.available_at,
+                conversion.oldest_observed_at,
+                conversion.oldest_available_at,
+                conversion.capture_uncertainty_ms,
+                tuple(
+                    (leg.evidence, leg.source_currency, leg.target_currency, leg.fee_rate)
+                    for leg in (*conversion.to_cad.legs, *conversion.from_cad.legs)
+                ),
+                tuple(
+                    (score["version"], score["applied_taker_rate"], score["applied_fee_currency"])
+                    for book in books.values()
+                    for score in book["fees"].values()
+                ),
+            )
+        for quote_key in fx_inputs.keys() | self.fx_inputs.keys():
+            if fx_inputs.get(quote_key) != self.fx_inputs.get(quote_key):
+                requested.update(self.comparisons.by_quote.get(quote_key, ()))
+        self.fx_inputs = fx_inputs
+        self.metrics["comparison_market_sweeps_coalesced"] += self.comparisons.submit(
+            sorted(requested, key=str), elapsed_seconds()
+        )
+
+        def accepts(pair):
+            quotes = tuple(self.comparisons.market_keys[mid][1] for mid in pair)
+            return (
+                quotes[0] == quotes[1]
+                or all(FX_ASSET_KEYS.get(quote) in fx for quote in quotes)
+                or pair in self.last_evaluated  # Revoke a previously evaluated route on loss of FX.
+            )
+
+        examined, coalesced, unavailable = self.comparisons.admit(
+            self.config.max_candidates * 4, 1024, accepts
+        )
+        self.metrics["comparison_admission_candidates"] += examined
+        self.metrics["comparison_duplicate_jobs_coalesced"] += coalesced
+        self.metrics["comparison_unavailable_fx_skipped"] += unavailable
+        if self.comparisons.deferred and len(self.jobs) >= self.config.max_candidates * 4:
+            self.metrics["comparison_admission_deferrals"] += 1
+
+    async def process_comparisons(self, fx):
+        batch_started = time.monotonic()
+        processed = 0
+        for _ in range(min(512, len(self.jobs))):
+            if time.monotonic() - batch_started >= 0.5:
+                break
+            pair, enqueued = self.jobs.popitem(last=False)
+            decision_now = self.collector.utcnow()
+            books = tuple(self.collector.cache.get(mid, now=decision_now) for mid in pair)
+            clock = self.collector.utc_clock.snapshot() if self.collector.utc_clock else {}
+            inputs = (
+                tuple(
+                    (
+                        book.content_sha256,
+                        book.exchange_timestamp,
+                        book.received_at,
+                        book.state,
+                        book.reasons,
+                        book.raw_evidence.get("timestamp_basis"),
+                        book.verification.get("last_error_code"),
+                        book.verification.get("clock"),
+                    )
+                    if book
+                    else None
+                    for book in books
+                ),
+                tuple(self.fx_inputs.get(self.comparisons.market_keys[mid][1]) for mid in pair),
+                id(self.config),
+                tuple(id(self.market_map[mid][1]) for mid in pair),
+                clock.get("trusted"),
+                clock.get("host_healthy"),
+            )
+            if self.last_evaluated.get(pair) == inputs:
+                self.metrics["identical_comparisons_skipped"] += 1
+                continue
+            self.last_evaluated[pair] = inputs
+            self.last_evaluated.move_to_end(pair)
+            while len(self.last_evaluated) > self.config.max_candidates * 4:
+                self.last_evaluated.popitem(last=False)
+            self.timings.add("comparison_queue_ms", (elapsed_seconds() - enqueued) * 1000)
+            await self.evaluate_pair(*pair, fx, decision_now, books=books)
+            processed += 1
+            if processed % 32 == 0:
+                await asyncio.sleep(0)
+        self.metrics["comparison_attempts"] += processed
+
     async def run(self):
         await self.store.expire_previous_runs(self.collector.utcnow())
         while not self.collector.stop.is_set():
@@ -785,77 +954,9 @@ class ArbitrageEngine:
                 self.rebuild()
             now = self.collector.utcnow()
             if self.config.enabled:
-                # Currency book updates affect every CAD-valued route.
-                pending = self.pending.copy()
-                self.pending.clear()
-                if pending & {"asset:USDC", "asset:USDT", "fiat:USD", "fiat:EUR"}:
-                    pending.update(self.index)
                 fx = self.fx_routes(now)
-                fx_signature = tuple(
-                    sorted((key, b["content_sha256"]) for key, b in self.fx_evidence.items())
-                )
-                ordered_bases = sorted(pending)
-                if ordered_bases:
-                    start = self.base_rotation % len(ordered_bases)
-                    ordered_bases = ordered_bases[start:] + ordered_bases[:start]
-                    self.base_rotation += 1
-                # Rotate producers so a full bounded queue cannot permanently
-                # starve later assets behind BTC/ETH or a high-frequency FX feed.
-                for base in ordered_bases:
-                    ids = sorted(self.index.get(base, ()), key=str)
-                    for buy in ids:
-                        for sell in ids:
-                            buy_rt, buy_market = self.market_map[buy]
-                            sell_rt, sell_market = self.market_map[sell]
-                            if buy == sell or venue_group(buy_rt.slug) == venue_group(sell_rt.slug):
-                                continue
-                            if buy_market.quote.key != sell_market.quote.key and not (
-                                buy_market.quote.symbol in fx and sell_market.quote.symbol in fx
-                            ):
-                                continue
-                            if len(self.jobs) < self.config.max_candidates * 4:
-                                self.jobs.setdefault((buy, sell), elapsed_seconds())
-                            elif (buy, sell) not in self.jobs:
-                                self.metrics["comparison_queue_coalesced"] += 1
-                # Time-slice comparisons. Never hold the event loop through an
-                # entire initial cross-venue sweep; each evaluation gets fresh now.
-                batch_started = time.monotonic()
-                processed = 0
-                while self.jobs and processed < 512 and time.monotonic() - batch_started < 0.5:
-                    (buy, sell), enqueued = self.jobs.popitem(last=False)
-                    if buy not in self.market_map or sell not in self.market_map:
-                        continue
-                    signature = (buy, sell)
-                    decision_now = self.collector.utcnow()
-                    books = [self.collector.cache.get(m, now=decision_now) for m in signature]
-                    clock = self.collector.utc_clock.snapshot() if self.collector.utc_clock else {}
-                    inputs = (
-                        tuple(
-                            (b.content_sha256, b.received_at, b.state, b.reasons) if b else None
-                            for b in books
-                        ),
-                        fx_signature,
-                        id(self.config),
-                        tuple(id(self.market_map[m][1]) for m in signature),
-                        clock.get("trusted"),
-                        clock.get("host_healthy"),
-                    )
-                    if self.last_evaluated.get(signature) == inputs:
-                        self.metrics["identical_comparisons_skipped"] += 1
-                        continue
-                    self.last_evaluated[signature] = inputs
-                    self.last_evaluated.move_to_end(signature)
-                    while len(self.last_evaluated) > self.config.max_candidates * 4:
-                        self.last_evaluated.popitem(last=False)
-                    if enqueued is not None:
-                        self.timings.add(
-                            "comparison_queue_ms", (elapsed_seconds() - enqueued) * 1000
-                        )
-                    await self.evaluate_pair(buy, sell, fx, decision_now)
-                    processed += 1
-                    if processed % 32 == 0:
-                        await asyncio.sleep(0)
-                self.metrics["comparison_attempts"] += processed
+                self.schedule_comparisons(fx)
+                await self.process_comparisons(fx)
                 for key in list(self.current):
                     if self.current[key]["status"] not in {"INVALIDATED", "EXPIRED"} and (
                         time.monotonic() - self.last_seen.get(key, 0)
@@ -871,7 +972,11 @@ class ArbitrageEngine:
             try:
                 await asyncio.wait(
                     waiters,
-                    timeout=0.05 if self.jobs else self.config.evaluation_interval_seconds,
+                    timeout=(
+                        0.05
+                        if self.jobs or self.comparisons.deferred
+                        else self.config.evaluation_interval_seconds
+                    ),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
             finally:

@@ -40,6 +40,7 @@ from arbiq.market_data.discovery import DiscoveredMarket, normalize_market
 from arbiq.market_data.quality import DataState, safe_json, validate_book
 from arbiq.market_data.timing import Timings, age_seconds, distribution, freshness
 from arbiq.opportunities.coverage import allocate
+from arbiq.opportunities.coverage_analytics import asset_coverage
 from arbiq.opportunities.engine import ArbitrageEngine
 from arbiq.paper_trading.coordinator import PaperCoordinator
 
@@ -119,6 +120,9 @@ class Collector:
         self.api_latencies = deque(maxlen=600)
         self.applied_terminal_version = 0
         self.terminal_market_preferences = None
+        self.allocation_tick = 0
+        self.allocation_quality = {}
+        self.allocation_depth = {}
         self.memory_maintenance = None
         self.timings = Timings()
         self.confirmation_enqueued = {}
@@ -236,20 +240,40 @@ class Collector:
 
     def monitoring_allocation(self):
         relevance = {}
+        profile = self.config.market_profile
+        now = self.utcnow()
         market_by_id = {str(m.id): m for rt in self.runtimes.values() for m in rt.markets}
         if self.scanner:
             for route in self.scanner.current.values():
                 if route["status"] in {"RESEARCH_ONLY", "VERIFIED_MARKET", "RECHECKING"}:
+                    if profile is not None:
+                        profit = route.get("net_profit_cad")
+                        evidence = route.get("evidence", {})
+                        if (
+                            profit is None
+                            or Decimal(profit) <= 0
+                            or evidence.get("buy_quality") != "HEALTHY"
+                            or evidence.get("sell_quality") != "HEALTHY"
+                            or not evidence.get("timing", {}).get("clock_trusted")
+                        ):
+                            continue
                     inputs = route.get("evidence", {}).get("calculation_inputs", {})
                     for side in ("buy", "sell"):
                         market = market_by_id.get(inputs.get(side, {}).get("market_id"))
                         if market:
                             key = (market.base.key, market.quote.key)
                             relevance[key] = relevance.get(key, 0) + 1
-        quality = {
-            (book.exchange, book.symbol): self.cache.get(book.market_id).state.value
-            for book in self.cache.books.values()
-        }
+        quality, depth = {}, {}
+        for market_id in self.cache.books:
+            book = self.cache.get(market_id, now=now)
+            key = (book.exchange, book.symbol)
+            quality[key] = book.state.value
+            if profile is not None and book.state == DataState.HEALTHY:
+                depth[key] = min(
+                    sum(level.price * level.quantity for level in levels)
+                    for levels in (book.normalized.asks, book.normalized.bids)
+                )
+        self.allocation_quality, self.allocation_depth = quality, depth
         catalogs = {slug: rt.catalog for slug, rt in self.runtimes.items()}
         if self.terminal_market_preferences:
             allowed = self.terminal_market_preferences["enabled_exchanges"]
@@ -262,6 +286,8 @@ class Collector:
             self.config,
             relevance,
             quality,
+            research_epoch=self.allocation_tick // 10,
+            depth=depth,
         )
 
     async def reload_terminal_preferences(self):
@@ -287,6 +313,7 @@ class Collector:
                 "maximum_age_seconds": prefs.maximum_age_seconds,
                 "minimum_quote_volume": prefs.minimum_liquidity,
                 "max_markets_per_exchange": prefs.maximum_markets_per_exchange,
+                "market_profile": prefs.market_profile or self.settings.collector.market_profile,
             }
         )
         self.cache.config = self.config
@@ -544,6 +571,10 @@ class Collector:
             self.config.websocket_fast_markets_per_exchange
             if runtime.slug in self.config.websocket_exchanges
             else 0,
+            profile=self.config.market_profile,
+            quality=self.allocation_quality,
+            depth=self.allocation_depth,
+            retained=runtime.native_symbols,
         )
         if {key: m.id for key, m in selected.items()} == {
             key: m.id for key, m in runtime.native_symbols.items()
@@ -1024,6 +1055,7 @@ class Collector:
                             await self.apply_selection(rt, identified)
                     for slug in NATIVE_PROTOCOLS.keys() & self.runtimes.keys():
                         await self.configure_native(self.runtimes[slug])
+                    self.allocation_tick += 1
                 allocation_due = time.monotonic() + 60
             if not self.clock.healthy:
                 await self.store.event(
@@ -1243,20 +1275,28 @@ class Collector:
 
         async def terminal_runtime(request):
             now = self.utcnow()
+            clock = self.utc_clock.snapshot() if self.utc_clock else {"trusted": False}
             books = [self.cache.get(x, now=now) for x in list(self.cache.books)]
             books = [x for x in books if x is not None]
-            ages = (
-                [age_seconds(now, x.received_at) for x in books]
-                if self.utc_clock and self.utc_clock.trusted
-                else []
-            )
+            ages = [age_seconds(now, x.received_at) for x in books] if clock.get("trusted") else []
             ages = [age for age in ages if age is not None]
             source_ages = {}
-            if self.utc_clock and self.utc_clock.trusted:
+            if clock.get("trusted"):
                 for book in books:
                     source_ages.setdefault(book.source, []).append(
                         age_seconds(now, book.received_at)
                     )
+            stamp = elapsed_seconds()
+            synchronized_ids = set()
+            for runtime in self.runtimes.values():
+                last_message = runtime.ws_last_message_elapsed
+                if (
+                    last_message is not None
+                    and 0 <= stamp - last_message <= self.config.websocket_idle_timeout_seconds
+                ):
+                    synchronized_ids.update(runtime.native_synchronized)
+                    if runtime.slug == "kraken" and runtime.ws_synchronized:
+                        synchronized_ids.update(runtime.ws_last)
             latencies = list(self.api_latencies)
             return web.json_response(
                 {
@@ -1268,6 +1308,15 @@ class Collector:
                         "cache_capacity": self.cache.limit,
                         "quality_counts": dict(Counter(x.state.value for x in books)),
                         "book_sources": dict(Counter(x.source for x in books)),
+                        "asset_coverage": asset_coverage(
+                            {slug: runtime.markets for slug, runtime in self.runtimes.items()},
+                            books,
+                            synchronized_ids,
+                            self.scanner.current.values() if self.scanner else None,
+                            config=self.config,
+                            now=now,
+                            clock=clock,
+                        ),
                         "transport_sources": {
                             source: distribution(receipt_ages)
                             for source, receipt_ages in source_ages.items()
@@ -1275,11 +1324,7 @@ class Collector:
                         "freshness_seconds": {
                             "median": median(ages) if ages else None,
                             "maximum": max(ages) if ages else None,
-                            **(
-                                distribution(ages)
-                                if self.utc_clock and self.utc_clock.trusted
-                                else {}
-                            ),
+                            **(distribution(ages) if clock.get("trusted") else {}),
                         },
                         "api_latency_ms": {
                             "sample_count": len(latencies),

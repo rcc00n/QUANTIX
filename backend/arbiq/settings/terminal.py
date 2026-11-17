@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 from sqlalchemy import select
 
+from arbiq.collector.config import MarketProfile
 from arbiq.db.models import User
 from arbiq.finance.contracts import Contract, NonNegativeDecimal
 from arbiq.notifications.urgent import LocalClock
@@ -15,6 +16,7 @@ class MarketPreferences(Contract):
     enabled_exchanges: tuple[str, ...] = ()
     enabled_assets: tuple[str, ...] = ()
     preferred_quote_currencies: tuple[str, ...] = ("CAD", "USD", "USDC", "USDT")
+    market_profile: MarketProfile | None = None
     cad_focused: bool = True
     research_anomaly_scanning: bool = True
     maximum_age_seconds: int = Field(default=30, ge=1, le=60)
