@@ -380,5 +380,21 @@ async def test_thin_current_routes_do_not_discard_original_inputs_or_fx_expiry(
     )
 
 
+def test_process_telemetry_uses_elapsed_and_cpu_clocks_not_wall_time(monkeypatch):
+    times = iter([10.0, 12.0])
+    cpus = iter([2.0, 2.5])
+    monkeypatch.setattr("arbiq.core.telemetry.elapsed_seconds", lambda: next(times))
+    monkeypatch.setattr("arbiq.core.telemetry.time.process_time", lambda: next(cpus))
+    monkeypatch.setattr(
+        "arbiq.core.telemetry.Path", lambda _: SimpleNamespace(read_text=lambda: "10 4")
+    )
+    monkeypatch.setattr("arbiq.core.telemetry.os.sysconf", lambda _: 4096)
+    monkeypatch.setattr(
+        "arbiq.core.telemetry.resource.getrusage",
+        lambda _: SimpleNamespace(ru_maxrss=20),
+    )
+    value = ProcessTelemetry().sample()
+    assert value["cpu_pct"] == 25 and value["uptime_seconds"] == 2
+    assert value["current_rss_bytes"] == 16384 and value["peak_rss_bytes"] == 20480
 
 
