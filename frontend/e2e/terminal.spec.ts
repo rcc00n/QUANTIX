@@ -427,6 +427,7 @@ test("SYNTHETIC: funding modes share a cutoff and creation retries the same immu
   const plans = modes.map((policy, i) => ({
     id: `cccccccc-0000-4000-8000-00000000000${i + 1}`,
     policy,
+    strategy_lab_profile: "NO_TRADING",
     capital_cad: capital,
     eligibility: "RESEARCH",
     total_cad: capital,
@@ -527,6 +528,8 @@ test("SYNTHETIC: funding modes share a cutoff and creation retries the same immu
   const planner = page.getByRole("region", { name: "Virtual Funding Planner" });
   await planner.getByLabel("Funding capital CAD").fill(capital);
   await planner.getByLabel("Funding target trade budget CAD").fill("500");
+  await planner.getByLabel("Research strategy profile").selectOption("NO_TRADING");
+  await expect(planner.getByLabel("Funding allocation policy")).toHaveValue("DIVERSIFIED_HYBRID");
   await planner.getByText("Limits, reserve and allowed markets", { exact: true }).click();
   await planner.getByLabel("Minimum position · CAD", { exact: true }).fill("60.000000000000000001");
   await planner.getByRole("button", { name: "Compare all modes", exact: true }).click();
@@ -539,6 +542,7 @@ test("SYNTHETIC: funding modes share a cutoff and creation retries the same immu
       trade_amount_cad: "500",
       min_cell_cad: "60.000000000000000001",
       eligibility: "RESEARCH",
+      strategy_lab_profile: "NO_TRADING",
     },
   ]);
   expect(compareWrites[0]).not.toHaveProperty("policy");
@@ -562,6 +566,7 @@ test("SYNTHETIC: funding modes share a cutoff and creation retries the same immu
   );
   await planner.getByRole("button", { name: "Diversified hybrid", exact: true }).click();
   const selected = planner.getByRole("region", { name: "Selected funding proposal" });
+  await expect(selected.getByText("No-trading benchmark", { exact: true })).toBeVisible();
   await expect(
     selected
       .getByRole("table", { name: "Target trade sizes" })

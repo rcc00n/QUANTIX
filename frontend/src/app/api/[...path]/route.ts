@@ -18,6 +18,7 @@ const allowed = new Map([
   ["strategies", "GET"],
   ["terminal/overview", "GET"],
   ["terminal/health", "GET"],
+  ["analytics/strategy-lab/compare", "POST"],
   ["settings/terminal", "GET,PUT"],
   ["reports/export", "GET"],
   ["reports/exports", "POST"],

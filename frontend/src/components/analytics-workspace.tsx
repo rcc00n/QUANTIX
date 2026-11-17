@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Filter, ShieldCheck } from "lucide-react";
 import { FullExport } from "@/components/full-export";
+import { StrategyLab } from "@/components/strategy-lab";
 import { Button } from "@/components/ui/button";
 import { HistoryChart, AmountBars, type SeriesPoint } from "@/components/terminal-charts";
 import {
@@ -143,6 +144,11 @@ export function AnalyticsWorkspace() {
   return (
     <div className="terminal-workspace analytics-workspace">
       <FullExport custom={sessionId ? Object.fromEntries(exportQuery) : null} />
+      <StrategyLab
+        sessions={sessions.data?.items ?? []}
+        loading={sessions.loading}
+        sessionError={sessions.error}
+      />
       <div className="terminal-workspace-top">
         <div>
           <span className="small-label">NUMERICAL ACCOUNTING</span>

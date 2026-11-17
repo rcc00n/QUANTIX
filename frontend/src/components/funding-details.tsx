@@ -4,7 +4,7 @@ import { useState } from "react";
 import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Exact, Tag } from "@/components/terminal-ui";
-import { assetLabel, utcLabel } from "@/lib/paper";
+import { assetLabel, utcLabel, type StrategyLabProfile } from "@/lib/paper";
 
 export const POLICY_LABELS = {
   COVERAGE: "Baseline route coverage",
@@ -84,6 +84,7 @@ export type FundingProposal = {
   id: string;
   capital_cad: string;
   policy: FundingPolicy;
+  strategy_lab_profile?: StrategyLabProfile;
   eligibility?: "RESEARCH" | "VALIDATED";
   feasible?: boolean;
   creatable?: boolean;

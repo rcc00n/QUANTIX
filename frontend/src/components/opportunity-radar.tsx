@@ -383,18 +383,6 @@ function Detail({
               </div>
             )),
           )}
-          <div>
-            <dt>Depth-constrained maximum acquisition · CAD</dt>
-            <dd>
-              <Amount
-                value={
-                  typeof opportunity.maximum_liquidity_cad === "string"
-                    ? opportunity.maximum_liquidity_cad
-                    : null
-                }
-              />
-            </dd>
-          </div>
         </dl>
       </div>
       <div className="radar-depth-grid">

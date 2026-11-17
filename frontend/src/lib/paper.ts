@@ -1,7 +1,15 @@
 export type PaperClassification = "VALIDATED" | "RESEARCH";
+export const STRATEGY_LAB_PROFILES = {
+  LIQUID_ARBITRAGE: "Liquid Arbitrage",
+  ANOMALY_HUNTER: "Anomaly Hunter",
+  HYBRID_OPTIMIZER: "Hybrid Optimizer",
+  NO_TRADING: "No-trading benchmark",
+} as const;
+export type StrategyLabProfile = keyof typeof STRATEGY_LAB_PROFILES;
 export type PaperStrategy = {
   schema_version?: string;
   preset: string;
+  strategy_lab_profile?: StrategyLabProfile | null;
   starting_capital_cad: string;
   trade_amount_cad: string;
   min_buy_capital_cad?: string;

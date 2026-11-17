@@ -5,7 +5,13 @@ import { ArrowRight, Plus, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { terminalFetch, useLive } from "@/lib/terminal";
 import { Exact, SectionTitle, Warning, Tag, Empty, JsonDetails } from "@/components/terminal-ui";
-import { assetLabel, utcLabel, type PaperSession } from "@/lib/paper";
+import {
+  assetLabel,
+  utcLabel,
+  STRATEGY_LAB_PROFILES,
+  type PaperSession,
+  type StrategyLabProfile,
+} from "@/lib/paper";
 import { RebalancePreview } from "@/components/rebalance-preview";
 import {
   AllocationBreakdown,
@@ -40,6 +46,13 @@ type PlanAttempt = {
   reset_from_session_id?: string;
 };
 
+const profileFundingPolicies: Record<StrategyLabProfile, FundingPolicy> = {
+  LIQUID_ARBITRAGE: "LIQUIDITY_WEIGHTED",
+  ANOMALY_HUNTER: "ROUTE_OPTIMIZED",
+  HYBRID_OPTIMIZER: "DIVERSIFIED_HYBRID",
+  NO_TRADING: "DIVERSIFIED_HYBRID",
+};
+
 function splitFilter(value: string) {
   return value
     .split(",")
@@ -67,6 +80,7 @@ export function FundingPlanner({
   const [capital, setCapital] = useState(initialCapital ?? session?.initial_equity_cad ?? "10000");
   const [tradeBudget, setTradeBudget] = useState("250");
   const [policy, setPolicy] = useState<FundingPolicy>("DIVERSIFIED_HYBRID");
+  const [profile, setProfile] = useState<StrategyLabProfile | "">("");
   const [eligibility, setEligibility] = useState<"RESEARCH" | "VALIDATED">("RESEARCH");
   const [exchanges, setExchanges] = useState("");
   const [assets, setAssets] = useState("");
@@ -104,6 +118,7 @@ export function FundingPlanner({
       reserve_cash_pct: reserve,
       lookback_days: Number(lookback),
       ...(cutoff.trim() ? { planning_cutoff: cutoff.trim() } : {}),
+      ...(profile ? { strategy_lab_profile: profile } : {}),
       eligibility,
       ...constraints,
       min_venues: Number(minVenues),
@@ -217,7 +232,13 @@ export function FundingPlanner({
               value={capital}
               onChange={(e) => setCapital(e.target.value)}
               required
+              list="funding-capitals"
             />
+            <datalist id="funding-capitals">
+              {["10000", "50000", "100000"].map((size) => (
+                <option key={size} value={size} />
+              ))}
+            </datalist>
           </label>
           <label>
             Target trade size · CAD
@@ -236,6 +257,25 @@ export function FundingPlanner({
             </datalist>
           </label>
           <label>
+            Research strategy profile
+            <select
+              aria-label="Research strategy profile"
+              value={profile}
+              onChange={(e) => {
+                const selected = e.target.value as StrategyLabProfile | "";
+                setProfile(selected);
+                if (selected) setPolicy(profileFundingPolicies[selected]);
+              }}
+            >
+              <option value="">Existing paper settings</option>
+              {Object.entries(STRATEGY_LAB_PROFILES).map(([key, label]) => (
+                <option key={key} value={key}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             Allocation policy
             <select
               aria-label="Funding allocation policy"
@@ -243,7 +283,7 @@ export function FundingPlanner({
               onChange={(e) => setPolicy(e.target.value as FundingPolicy)}
             >
               {Object.entries(POLICY_LABELS).map(([key, label]) => (
-                <option key={key} value={key}>
+                <option key={key} value={key} disabled={Boolean(profile) && key === "EQUAL_VENUES"}>
                   {label}
                 </option>
               ))}
@@ -401,6 +441,11 @@ export function FundingPlanner({
             <div>
               <span className="small-label">SELECTED PROPOSAL</span>
               <h3>{POLICY_LABELS[proposal.policy] ?? proposal.policy.replaceAll("_", " ")}</h3>
+              {proposal.strategy_lab_profile && (
+                <p className="terminal-footnote">
+                  {STRATEGY_LAB_PROFILES[proposal.strategy_lab_profile]}
+                </p>
+              )}
             </div>
             {proposal.feasible !== undefined && (
               <Tag value={proposal.feasible ? "WITHIN CONSTRAINTS" : "INFEASIBLE"} />
