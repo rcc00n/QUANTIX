@@ -137,6 +137,12 @@ def test_exact_candidate_filters_never_round_or_accept_missing_values():
     )
 
 
+def test_process_telemetry_explicit_measurement_units():
+    t = ProcessTelemetry().sample()
+    assert t["current_rss_bytes"] > 0
+    assert t["cpu_seconds"] >= 0
+    assert t["cpu_pct"] is None  # No interval to measure at initialization.
+    assert t["uptime_seconds"] >= 0
 
 
 
