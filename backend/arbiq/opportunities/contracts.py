@@ -8,7 +8,7 @@ from typing import Literal
 from arbiq.finance.contracts import exact_decimal, utc_timestamp
 from arbiq.market_data.contracts import BookLevel
 
-CALCULATION_VERSION = "quantix-depth-v1.0.0"
+CALCULATION_VERSION = "quantix-depth-v1.1.0"
 DEFAULT_BUDGETS = tuple(Decimal(x) for x in (100, 250, 500, 1000, 2000, 5000, 10000))
 
 
@@ -45,6 +45,14 @@ class MarketRules:
     verified: bool = False
     source: str = "exchange metadata"
     price_tick: Decimal | None = None
+    market_order_available: bool | None = None
+    cost_step: Decimal | None = None
+    version: str | None = None
+    observed_at: datetime | None = None
+    native_status: str | None = None
+    restrictions: tuple[str, ...] = ()
+    limitations: tuple[str, ...] = ()
+    external_notional_limits: tuple[tuple[str, Decimal], ...] = ()
 
     def __post_init__(self) -> None:
         for name in (
@@ -54,6 +62,7 @@ class MarketRules:
             "max_quantity",
             "max_notional",
             "price_tick",
+            "cost_step",
         ):
             value = getattr(self, name)
             if value is not None:
@@ -62,6 +71,14 @@ class MarketRules:
             raise ValueError("Inconsistent quantity limits")
         if self.min_notional and self.max_notional and self.min_notional > self.max_notional:
             raise ValueError("Inconsistent notional limits")
+        if self.market_order_available is not None and not isinstance(
+            self.market_order_available, bool
+        ):
+            raise ValueError("Invalid market-order availability")
+        if self.observed_at is not None:
+            utc_timestamp(self.observed_at)
+        for _, value in self.external_notional_limits:
+            _number(value, positive=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,12 +146,35 @@ class FXConversion:
     source: str = ""
     observed_at: datetime | None = None
     available_at: datetime | None = None
+    oldest_observed_at: datetime | None = None
+    oldest_available_at: datetime | None = None
+    capture_uncertainty_ms: int | None = None
+    selection_version: str | None = None
 
     def __post_init__(self) -> None:
         utc_timestamp(self.fresh_until)
-        for timestamp in (self.observed_at, self.available_at):
+        for timestamp in (
+            self.observed_at,
+            self.available_at,
+            self.oldest_observed_at,
+            self.oldest_available_at,
+        ):
             if timestamp is not None:
                 utc_timestamp(timestamp)
+        if self.selection_version is not None and (
+            None
+            in (
+                self.oldest_observed_at,
+                self.oldest_available_at,
+                self.observed_at,
+                self.available_at,
+                self.capture_uncertainty_ms,
+            )
+            or not 0 <= self.capture_uncertainty_ms <= 2000
+            or not self.oldest_observed_at <= self.observed_at <= self.available_at
+            or not self.oldest_observed_at <= self.oldest_available_at <= self.available_at
+        ):
+            raise ValueError("Invalid FX capture window")
         if self.currency == "CAD":
             if self.to_cad.legs or self.from_cad.legs:
                 raise ValueError("CAD identity must not fabricate conversion legs")

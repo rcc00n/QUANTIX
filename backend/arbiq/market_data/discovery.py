@@ -1,10 +1,16 @@
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
 
 from arbiq.collector.config import CollectorConfig
-from arbiq.finance.contracts import exact_decimal
 from arbiq.market_data.identity import AssetIdentity, asset_identity
+from arbiq.market_data.trading_rules import (
+    decimal_or_none,
+    decimal_places_step,
+    native_spot_rules,
+    positive_decimal,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,19 +28,6 @@ class DiscoveredMarket:
     id: UUID | None = None
 
 
-def decimal_or_none(value) -> Decimal | None:
-    if value is None:
-        return None
-    # CCXT metadata may contain adapter constants as floats. These are metadata,
-    # never executable financial inputs; unknown precision remains unknown.
-    if isinstance(value, float):
-        return None
-    try:
-        return exact_decimal(value)
-    except (ValueError, TypeError):
-        return None
-
-
 def normalize_market(
     exchange: str,
     market: dict,
@@ -43,6 +36,7 @@ def normalize_market(
     precision_mode: int | None = None,
     *,
     identity_by_symbol: dict[str, AssetIdentity] | None = None,
+    rules_observed_at: datetime | None = None,
 ) -> DiscoveredMarket:
     if market.get("spot") is not True or market.get("contract"):
         raise ValueError("Only explicit spot markets are supported")
@@ -72,16 +66,25 @@ def normalize_market(
     if base.key == quote.key:
         raise ValueError("Market base and quote identities are identical")
     precision = market.get("precision") or {}
+    limits = market.get("limits") or {}
+    amount_limits = limits.get("amount") or {}
+    cost_limits = limits.get("cost") or {}
+    native_limits, trading_rules = native_spot_rules(exchange, market, rules_observed_at)
+    min_notional = native_limits.get("minimum_notional") or decimal_or_none(cost_limits.get("min"))
+    min_quantity = native_limits.get("minimum_quantity") or decimal_or_none(
+        amount_limits.get("min")
+    )
+    max_quantity = native_limits.get("maximum_quantity") or decimal_or_none(
+        amount_limits.get("max")
+    )
+    max_notional = native_limits.get("maximum_notional") or decimal_or_none(cost_limits.get("max"))
 
     # CCXT TICK_SIZE=4; DECIMAL_PLACES=2. Significant-digit precision is not a tick.
     def step(value):
-        number = decimal_or_none(value)
-        if number is None:
-            return None
         if precision_mode == 4:
-            return number if number > 0 else None
-        if precision_mode == 2 and number == number.to_integral_value() and 0 <= number <= 18:
-            return Decimal(10) ** -int(number)
+            return positive_decimal(value)
+        if precision_mode == 2:
+            return decimal_places_step(value)
         return None
 
     active = market.get("active")
@@ -95,9 +98,9 @@ def normalize_market(
         base=base,
         quote=quote,
         active=active,
-        amount_step=step(precision.get("amount")),
-        price_tick=step(precision.get("price")),
-        min_notional=decimal_or_none(((market.get("limits") or {}).get("cost") or {}).get("min")),
+        amount_step=native_limits.get("amount_step") or step(precision.get("amount")),
+        price_tick=native_limits.get("price_tick") or step(precision.get("price")),
+        min_notional=min_notional,
         quote_volume=volume,
         metadata={
             "base_symbol": base.symbol,
@@ -116,18 +119,17 @@ def normalize_market(
             "quote_volume": str(volume) if volume is not None else None,
             "quote_volume_unit": quote.symbol,
             "precision_mode": precision_mode,
-            "minimum_quantity": str(v)
-            if (v := decimal_or_none(((market.get("limits") or {}).get("amount") or {}).get("min")))
-            is not None
-            else None,
-            "maximum_quantity": str(v)
-            if (v := decimal_or_none(((market.get("limits") or {}).get("amount") or {}).get("max")))
-            is not None
-            else None,
-            "maximum_notional": str(v)
-            if (v := decimal_or_none(((market.get("limits") or {}).get("cost") or {}).get("max")))
-            is not None
-            else None,
+            "trading_rules": trading_rules,
+            "minimum_quantity": str(min_quantity) if min_quantity is not None else None,
+            "maximum_quantity": str(max_quantity) if max_quantity is not None else None,
+            "maximum_notional": str(max_notional) if max_notional is not None else None,
+            **(
+                {"fx_stablecoin": market["info"]["fx_stablecoin"]}
+                if exchange == "coinbaseexchange"
+                and isinstance(market.get("info"), dict)
+                and isinstance(market["info"].get("fx_stablecoin"), bool)
+                else {}
+            ),
             "advertised_taker_rate": str(v)
             if (v := decimal_or_none(market.get("taker"))) is not None
             else None,

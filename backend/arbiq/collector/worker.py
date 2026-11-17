@@ -324,6 +324,7 @@ class Collector:
 
     async def _discover_locked(self, runtime: ExchangeRuntime):
         raw_markets = await runtime.connector.discover_spot_markets()
+        rules_observed_at = self.utcnow() if self.utc_clock and self.utc_clock.trusted else None
         tickers = {}
         # Restrict bulk ticker calls to known single-request public endpoints.
         if runtime.slug in {
@@ -363,6 +364,7 @@ class Collector:
                         tickers.get(raw.get("symbol"), {}),
                         runtime.connector.adapter.precisionMode,
                         identity_by_symbol=identity_by_symbol,
+                        rules_observed_at=rules_observed_at,
                     )
                 )
             except (ValueError, TypeError, KeyError, ArithmeticError):

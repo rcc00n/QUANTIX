@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import func, select
 
 from arbiq.auth.dependencies import DB, AuthenticatedUser
+from arbiq.connectors.canadian_eligibility import eligibility
 from arbiq.db.models import (
     CollectorRun,
     Exchange,
@@ -116,7 +117,8 @@ async def exchanges(request: Request, db: DB, user: AuthenticatedUser):
                 "slug": exchange.slug,
                 "name": exchange.name,
                 "enabled": exchange.enabled,
-                "capabilities": exchange.capabilities,
+                "capabilities": exchange.capabilities
+                | {"canadian_eligibility": eligibility(exchange.slug)},
                 "state": state,
                 "market_count": health.market_count if health else 0,
                 "monitored_count": health.monitored_count if health else 0,

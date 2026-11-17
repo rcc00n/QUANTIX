@@ -16,6 +16,7 @@ from arbiq.opportunities.contracts import (
     MarketRules,
     OptimizationResult,
 )
+from arbiq.opportunities.conversions import FX_ASSET_KEYS
 
 
 def _levels_key(levels) -> tuple[tuple[str, str], ...]:
@@ -81,8 +82,7 @@ class ProjectionCache:
             ),
         )
         token = previous.token if previous and previous.key == key else object()
-        # The live graph has five currencies. Keep the bound for direct callers too.
-        if fx.currency not in self.fx and len(self.fx) >= 5:
+        if fx.currency not in self.fx and len(self.fx) >= len(FX_ASSET_KEYS):
             self.fx.clear()
         self.fx[fx.currency] = _Revision(fx, key, token)
         return token
@@ -98,8 +98,7 @@ class ProjectionCache:
         now: datetime,
     ) -> tuple | None:
         utc_timestamp(now)
-        # optimize_route can branch on UTC only at FX availability/expiry. Leave
-        # anything outside the valid interval to the original, uncached path.
+        # Evidence validity can change with UTC even when prices are identical.
         if any(
             fx is not None
             and (
@@ -108,6 +107,11 @@ class ProjectionCache:
                 or (fx.available_at is not None and fx.available_at > now)
             )
             for fx in (buy.fx, sell.fx)
+        ):
+            return None
+        if any(
+            rules.observed_at is not None and rules.observed_at > now
+            for rules in (buy.rules, sell.rules)
         ):
             return None
         context = getcontext()

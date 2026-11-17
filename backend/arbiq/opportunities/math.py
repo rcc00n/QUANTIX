@@ -175,6 +175,10 @@ def _compatible(buy: MarketInput, sell: MarketInput) -> None:
         raise ValueError("DUPLICATE_LIQUIDITY_VENUE")
     if buy.base_currency != sell.base_currency:
         raise ValueError("INCOMPATIBLE_BASE_IDENTITY")
+    if buy.rules.market_order_available is False:
+        raise ValueError("BUY_MARKET_ORDER_UNAVAILABLE")
+    if sell.rules.market_order_available is False:
+        raise ValueError("SELL_MARKET_ORDER_UNAVAILABLE")
 
 
 @precision
@@ -194,6 +198,9 @@ def evaluate_route(
     """
     _compatible(buy, sell)
     utc_timestamp(now)
+    for side, market in (("BUY", buy), ("SELL", sell)):
+        if market.rules.observed_at is not None and market.rules.observed_at > now:
+            raise ValueError(f"{side}_MARKET_RULES_NOT_YET_AVAILABLE")
     exact_decimal(requested_buy_quantity)
     quantity = _floor(requested_buy_quantity, buy.rules.amount_step)
     if quantity <= 0:
@@ -217,6 +224,8 @@ def evaluate_route(
             reasons.append(f"{side}_FEE_UNVERIFIED")
         if not market.rules.verified or market.rules.amount_step is None:
             reasons.append(f"{side}_MARKET_LIMITS_UNVERIFIED")
+        if market.rules.version and market.rules.market_order_available is None:
+            reasons.append(f"{side}_MARKET_ORDER_AVAILABILITY_UNVERIFIED")
     if not costs.verified:
         reasons.append("REBALANCING_AND_SLIPPAGE_ASSUMPTIONS_UNVERIFIED")
     acquisition = proceeds = gross = fees = fx_cost = expenses = net = net_pct = None
@@ -681,6 +690,32 @@ def optimize_route(
     ):
         raise ValueError("Search evaluation limit must be an integer between 1 and 4096")
     utc_timestamp(now)
+    unique_budgets = tuple(dict.fromkeys((budget_cad, *budgets)))
+    restrictions = tuple(
+        f"{side}_{reason}"
+        for side, market in (("BUY", buy), ("SELL", sell))
+        if (
+            reason := (
+                "MARKET_RULES_NOT_YET_AVAILABLE"
+                if market.rules.observed_at is not None and market.rules.observed_at > now
+                else "MARKET_ORDER_UNAVAILABLE"
+                if market.rules.market_order_available is False
+                else None
+            )
+        )
+    )
+    if restrictions and buy.venue != sell.venue and buy.base_currency == sell.base_currency:
+        for budget in unique_budgets:
+            exact_decimal(budget)
+            if budget <= 0:
+                raise ValueError("Budget must be positive")
+        return OptimizationResult(
+            None,
+            None,
+            tuple(BudgetResult(budget, None, restrictions[0]) for budget in unique_budgets),
+            0,
+            restrictions,
+        )
     maximum = maximum_quantity(buy, sell)
     evaluated_count = 0
     try:
@@ -689,7 +724,6 @@ def optimize_route(
         maximum_evaluation = None
     results: list[BudgetResult] = []
     search_complete = True
-    unique_budgets = tuple(dict.fromkeys((budget_cad, *budgets)))
     for budget in unique_budgets:
         exact_decimal(budget)
         if budget <= 0:

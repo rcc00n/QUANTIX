@@ -40,6 +40,7 @@ def dump_input(value):
 
 def load_input(data):
     fx = data.get("fx")
+    rules = data["rules"]
 
     def route(value):
         return ConversionRoute(
@@ -72,6 +73,14 @@ def load_input(data):
             available_at=datetime.fromisoformat(fx["available_at"])
             if fx.get("available_at")
             else None,
+            oldest_observed_at=datetime.fromisoformat(fx["oldest_observed_at"])
+            if fx.get("oldest_observed_at")
+            else None,
+            oldest_available_at=datetime.fromisoformat(fx["oldest_available_at"])
+            if fx.get("oldest_available_at")
+            else None,
+            capture_uncertainty_ms=fx.get("capture_uncertainty_ms"),
+            selection_version=fx.get("selection_version"),
         )
     return MarketInput(
         data["market_id"],
@@ -83,8 +92,29 @@ def load_input(data):
         Fee(**{**data["fee"], "rate": Decimal(data["fee"]["rate"])}),
         MarketRules(
             **{
-                k: (Decimal(v) if v is not None and k not in {"verified", "source"} else v)
-                for k, v in data["rules"].items()
+                **rules,
+                **{
+                    key: Decimal(rules[key])
+                    for key in (
+                        "amount_step",
+                        "min_quantity",
+                        "min_notional",
+                        "max_quantity",
+                        "max_notional",
+                        "price_tick",
+                        "cost_step",
+                    )
+                    if rules.get(key) is not None
+                },
+                "observed_at": datetime.fromisoformat(rules["observed_at"])
+                if rules.get("observed_at")
+                else None,
+                "restrictions": tuple(rules.get("restrictions", ())),
+                "limitations": tuple(rules.get("limitations", ())),
+                "external_notional_limits": tuple(
+                    (key, Decimal(amount))
+                    for key, amount in rules.get("external_notional_limits", ())
+                ),
             }
         ),
         fx,

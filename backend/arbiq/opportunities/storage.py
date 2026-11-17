@@ -12,6 +12,7 @@ from arbiq.db.models import (
     FeeVersion,
     OrderBookSnapshot,
 )
+from arbiq.finance.fees import public_fee_tiers
 from arbiq.market_data.quality import safe_json
 from arbiq.opportunities.contracts import CALCULATION_VERSION
 
@@ -33,33 +34,57 @@ class OpportunityStore:
     def __init__(self, sessions, run_id):
         self.sessions, self.run_id = sessions, run_id
 
-    async def fee_version(self, db, market, exchange_id, now, rate):
+    async def fee_version(self, db, market, exchange_id, now, rate, evidence=None):
+        maker_rate = rate
+        if evidence:
+            source = evidence["version"]
+            public_maker_rate = evidence.get("public_maker_rate")
+            if public_maker_rate is not None:
+                maker_rate = Decimal(public_maker_rate)
+            assumptions = {
+                **evidence,
+                "verified": False,
+                "currency": evidence["applied_fee_currency"],
+                "maker_not_used": True,
+                "maker_rate_placeholder": public_maker_rate is None,
+                "rate_policy": "max(configured conservative floor, advertised taker, public taker)",
+                "public_tiers": public_fee_tiers(evidence.get("public_schedule_version")),
+            }
+        else:
+            source = "quantix.conservative_public_taker.v1"
+            assumptions = {
+                "verified": False,
+                "currency": "quote_assumed",
+                "advertised_rate": market.metadata.get("advertised_taker_rate"),
+                "rate_policy": "max(configured conservative estimate, advertised public taker)",
+                "account_tier_verified": False,
+                "maker_not_used": True,
+            }
+
         # Lookup immutable rows in this transaction. Caching IDs from an uncommitted
         # write poisons subsequent attempts if the transaction later rolls back.
         # The bounded scanner write budget keeps these two assumption lookups modest.
         row = await db.scalar(
-            select(FeeVersion).where(
+            select(FeeVersion)
+            .where(
                 FeeVersion.market_id == market.id,
-                FeeVersion.source == "quantix.conservative_public_taker.v1",
+                FeeVersion.source == source,
                 FeeVersion.taker_rate == rate,
+                FeeVersion.assumptions == assumptions,
+                FeeVersion.effective_at <= now,
             )
+            .order_by(FeeVersion.effective_at.desc())
+            .limit(1)
         )
         if row is None:
             row = FeeVersion(
                 exchange_id=exchange_id,
                 market_id=market.id,
                 effective_at=now,
-                maker_rate=rate,
+                maker_rate=maker_rate,
                 taker_rate=rate,
-                source="quantix.conservative_public_taker.v1",
-                assumptions={
-                    "verified": False,
-                    "currency": "quote_assumed",
-                    "advertised_rate": market.metadata.get("advertised_taker_rate"),
-                    "rate_policy": "max(configured conservative estimate, advertised public taker)",
-                    "account_tier_verified": False,
-                    "maker_not_used": True,
-                },
+                source=source,
+                assumptions=assumptions,
             )
             db.add(row)
             await db.flush()
@@ -150,8 +175,13 @@ class OpportunityStore:
             route.payload = body
             buy_id = await self.snapshot(db, buy)
             sell_id = await self.snapshot(db, sell)
-            bf = await self.fee_version(db, buy_market, buy_exchange_id, now, buy_fee)
-            sf = await self.fee_version(db, sell_market, sell_exchange_id, now, sell_fee)
+            fee_evidence = payload.get("evidence", {}).get("fee_assumptions", {})
+            bf = await self.fee_version(
+                db, buy_market, buy_exchange_id, now, buy_fee, fee_evidence.get("buy")
+            )
+            sf = await self.fee_version(
+                db, sell_market, sell_exchange_id, now, sell_fee, fee_evidence.get("sell")
+            )
             evidence = {
                 **body.get("evidence", {}),
                 "buy_book": buy.model_dump(mode="json"),

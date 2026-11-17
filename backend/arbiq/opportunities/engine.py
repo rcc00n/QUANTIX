@@ -14,22 +14,31 @@ from decimal import Decimal
 from uuid import UUID
 
 from arbiq.core.clock import elapsed_seconds
+from arbiq.finance.contracts import exact_decimal
+from arbiq.finance.fees import FeeAssessment, assess_fee
 from arbiq.market_data.quality import DataState, safe_json
 from arbiq.market_data.timing import Timings, age_seconds
+from arbiq.market_data.trading_rules import positive_decimal
 from arbiq.opportunities.contracts import (
     CALCULATION_VERSION,
-    ConversionRoute,
     Costs,
     Fee,
-    FXConversion,
     MarketInput,
     MarketRules,
-    identity_cad,
+)
+from arbiq.opportunities.conversions import (
+    FX_ASSET_KEYS,
+    ConversionSnapshot,
+    FXBook,
+    capture_uncertainty_ms,
+    select_cad_paths,
+    spot_conversion_leg,
+    synchronized_conversion,
 )
 from arbiq.opportunities.coverage import metrics as coverage_metrics
 from arbiq.opportunities.coverage import venue_group
 from arbiq.opportunities.evidence import EvidencePool, shared_json
-from arbiq.opportunities.math import conversion_leg_from_book, optimize_route
+from arbiq.opportunities.math import optimize_route
 from arbiq.opportunities.projection_cache import ProjectionCache
 from arbiq.opportunities.storage import OpportunityStore
 
@@ -112,33 +121,43 @@ class ArbitrageEngine:
         self.evidence_pool.retain(self.market_map)
         self.projections.retain(self.market_map)
 
-    def fee_rate(self, market):
-        advertised = market.metadata.get("advertised_taker_rate")
-        try:
-            value = Decimal(advertised) if advertised is not None else Decimal(0)
-            if not value.is_finite() or not 0 <= value < 1:
-                value = Decimal(0)
-        except (ValueError, TypeError, ArithmeticError):
-            value = Decimal(0)
-        return max(self.config.conservative_taker_rate, value)
+    def fee_assessment(
+        self, market, *, now: datetime | None = None, adapter: str | None = None
+    ) -> FeeAssessment:
+        if adapter is None:
+            entry = self.market_map.get(market.id)
+            adapter = entry[0].slug if entry else ""
+        metadata = market.metadata
+        return assess_fee(
+            adapter,
+            market.base.symbol,
+            market.quote.symbol,
+            configured_taker_floor=self.config.conservative_taker_rate,
+            advertised_taker=metadata.get("advertised_taker_rate"),
+            now=now if now is not None else self.collector.utcnow(),
+            fx_stablecoin=metadata.get("fx_stablecoin") is True,
+        )
+
+    def fee_rate(self, market, *, now: datetime | None = None) -> Decimal:
+        return self.fee_assessment(market, now=now).applied_taker_rate
 
     def fx_routes(self, now):
-        """Bounded two-hop executable currency graph; USD/USDC/USDT remain distinct.
-
-        Conversion books are independent of traded crypto legs. Quotes are liquidation
-        bids and acquisition asks, including taker estimates and observed depth.
-        """
-        allowed = {"CAD", "USD", "USDC", "USDT", "EUR"}
-        graph = defaultdict(list)
-        self.fx_evidence = {}
+        """Select bounded causal depth paths and pin the underlying books."""
+        edges = []
+        sources = {}
         for market_id, (rt, market) in self.market_map.items():
+            base = FX_ASSET_KEYS.get(market.base.key)
+            quote = FX_ASSET_KEYS.get(market.quote.key)
+            rules = market.metadata.get("trading_rules") or {}
             if (
-                not market.base.verified
+                not base
+                or not quote
+                or base == quote
+                or not market.base.verified
                 or not market.quote.verified
                 or market.active is not True
                 or rt.health["error_code"]
-                or market.base.symbol not in allowed
-                or market.quote.symbol not in allowed
+                or rules.get("market_order_available") is False
             ):
                 continue
             book = self.collector.cache.get(market_id, now=now)
@@ -148,80 +167,92 @@ class ArbitrageEngine:
                 or book_reasons(book, now, self.config)
             ):
                 continue
-            for reverse in (False, True):
-                leg = conversion_leg_from_book(
-                    market.base.symbol,
-                    market.quote.symbol,
-                    bids=book.normalized.bids,
-                    asks=book.normalized.asks,
-                    reverse=reverse,
-                    fee_rate=self.fee_rate(market),
-                    evidence=str(market_id) + ":" + book.content_sha256,
-                )
-                graph[leg.source_currency].append((leg, book))
-            self.fx_evidence[str(market_id)] = self.evidence_pool.book(book)
-
-        def find(source, target):
-            queue = deque([(source, (), (), {source})])
-            while queue:
-                currency, path, books, visited = queue.popleft()
-                if currency == target:
-                    return path, books
-                if len(path) >= 2:
-                    continue
-                for leg, book in sorted(graph[currency], key=lambda x: x[0].evidence):
-                    if leg.target_currency not in visited:
-                        queue.append(
-                            (
-                                leg.target_currency,
-                                (*path, leg),
-                                (*books, book),
-                                visited | {leg.target_currency},
-                            )
-                        )
-            return None
-
-        result = {"CAD": identity_cad()}
-        for currency in allowed - {"CAD"}:
-            to, back = find(currency, "CAD"), find("CAD", currency)
-            if not to or not back:
+            clock = book.verification.get("clock") or {}
+            if clock.get("trusted") is False:
                 continue
-            books = (*to[1], *back[1])
-            fresh = min(
-                book.received_at + timedelta(seconds=self.config.maximum_book_age_seconds)
-                for book in books
+            reference = str(market_id) + ":" + book.content_sha256
+            fee = self.fee_assessment(market, now=now, adapter=rt.slug)
+            levels = {
+                "bids": book.normalized.bids,
+                "asks": book.normalized.asks,
+                "fee": fee,
+                "reference": reference,
+            }
+            edges.append(
+                FXBook(
+                    spot_conversion_leg(base, quote, **levels, side="sell"),
+                    spot_conversion_leg(base, quote, **levels, side="buy"),
+                    book.exchange_timestamp,
+                    book.received_at,
+                    capture_uncertainty_ms(clock),
+                )
             )
-            result[currency] = FXConversion(
-                currency,
-                ConversionRoute(to[0]),
-                ConversionRoute(back[0]),
-                False,
-                fresh,
-                "Executable public conversion books; "
-                "account fee and funding assumptions unverified",
-                observed_at=max(book.exchange_timestamp or book.received_at for book in books),
-                available_at=max(book.received_at for book in books),
-            )
-        return result
+            sources[reference] = book, fee
+        result = select_cad_paths(
+            edges,
+            now=now,
+            age=timedelta(seconds=self.config.maximum_book_age_seconds),
+            skew=timedelta(seconds=self.config.maximum_book_skew_seconds),
+            probe_cad=self.config.default_budget_cad,
+        )
+        used = {leg.evidence for fx in result.values() for leg in fx.to_cad.legs}
+        self.fx_evidence = {
+            key.split(":", 1)[0]: {
+                **self.evidence_pool.book(sources[key][0]),
+                "fees": {side: sources[key][1].as_evidence(side) for side in ("buy", "sell")},
+            }
+            for key in sorted(used)
+        }
+        return ConversionSnapshot(result, self.fx_evidence)
 
-    def market_input(self, rt, market, book, fx):
-        def value(name):
-            raw = market.metadata.get(name)
-            return Decimal(raw) if raw is not None and Decimal(raw) > 0 else None
+    def market_input(self, rt, market, book, fx, *, fee: FeeAssessment, side):
+        metadata = market.metadata
 
+        def optional_limit(name):
+            raw = metadata.get(name)
+            value = exact_decimal(raw) if raw is not None else None
+            return value if value is not None and value > 0 else None
+
+        native = metadata.get("trading_rules") or {}
+        observed = native.get("observed_at")
+        observed_at = datetime.fromisoformat(observed) if observed else None
+        min_quantity = optional_limit("minimum_quantity")
+        min_notional = positive_decimal(market.min_notional)
+        legacy_verified = bool(
+            market.amount_step and min_quantity and metadata.get("active_status") == "active"
+        )
+        limitations = (native["limitation"],) if native.get("limitation") else ()
         rules = MarketRules(
             market.amount_step,
-            value("minimum_quantity"),
-            market.min_notional if market.min_notional and market.min_notional > 0 else None,
-            value("maximum_quantity"),
-            value("maximum_notional"),
-            verified=bool(
-                market.amount_step
-                and value("minimum_quantity") is not None
-                and market.metadata.get("active_status") == "active"
+            min_quantity,
+            min_notional,
+            optional_limit("maximum_quantity"),
+            optional_limit("maximum_notional"),
+            verified=legacy_verified
+            and (
+                not native
+                or (
+                    native.get("market_order_available") is True
+                    and observed_at is not None
+                    and market.price_tick is not None
+                    and min_notional is not None
+                    and not limitations
+                )
             ),
-            source="CCXT spot metadata; precision/limits retained with evaluation",
+            source=native.get("source", "CCXT spot metadata with retained precision and limits"),
             price_tick=market.price_tick,
+            market_order_available=native.get("market_order_available"),
+            cost_step=positive_decimal(native.get("cost_step")),
+            version=native.get("version"),
+            observed_at=observed_at,
+            native_status=native.get("native_status"),
+            restrictions=tuple(native.get("status_flags", ())),
+            limitations=limitations,
+            external_notional_limits=tuple(
+                (key, Decimal(native[key]))
+                for key in ("maxMktSz_USDT", "maxMktAmt_USD")
+                if key in native
+            ),
         )
         return MarketInput(
             str(market.id),
@@ -231,9 +262,11 @@ class ArbitrageEngine:
             book.normalized.asks,
             book.normalized.bids,
             Fee(
-                self.fee_rate(market),
+                fee.applied_taker_rate,
+                currency=fee.currency(side),
                 verified=False,
-                source="Conservative taker estimate; account tier and fee currency unverified",
+                source="Conservative taker estimate with retained public fee evidence",
+                version=fee.version,
             ),
             rules,
             fx.get(market.quote.symbol),
@@ -270,12 +303,32 @@ class ArbitrageEngine:
             await self.flush_transitions()
             if key in self.pending_transitions:
                 return
+        skew_limit = timedelta(seconds=self.config.maximum_book_skew_seconds)
+        buy_fx = fx.get(FX_ASSET_KEYS.get(bm.quote.key))
+        sell_fx = fx.get(FX_ASSET_KEYS.get(sm.quote.key))
+        rejected_fx = False
+        if not synchronized_conversion(
+            buy_fx,
+            buy.exchange_timestamp,
+            buy.received_at,
+            capture_uncertainty_ms(buy.verification.get("clock") or {}),
+            skew_limit,
+        ):
+            buy_fx, rejected_fx = None, True
+        if not synchronized_conversion(
+            sell_fx,
+            sell.exchange_timestamp,
+            sell.received_at,
+            capture_uncertainty_ms(sell.verification.get("clock") or {}),
+            skew_limit,
+        ):
+            sell_fx, rejected_fx = None, True
         try:
             # Screen with executable best bid/ask, never ticker/midprice. Cross-quote
             # screening is only possible with explicit directional CAD evidence.
             if bm.quote.key == sm.quote.key:
                 raw_positive = sell.normalized.bids[0].price > buy.normalized.asks[0].price
-            elif (buy_fx := fx.get(bm.quote.symbol)) and (sell_fx := fx.get(sm.quote.symbol)):
+            elif buy_fx and sell_fx:
                 from arbiq.opportunities.math import convert, required_input
 
                 probe = min(
@@ -287,6 +340,8 @@ class ArbitrageEngine:
                     sell_fx.to_cad, sell.normalized.bids[0].price * probe
                 ) > required_input(buy_fx.from_cad, buy.normalized.asks[0].price * probe)
             else:
+                if rejected_fx and key in self.current:
+                    await self.invalidate(key, "INVALIDATED", "FX_CAPTURE_SKEW_EXCEEDED", now)
                 return
             if not raw_positive:
                 if key in self.current and self.current[key]["status"] not in {
@@ -295,8 +350,12 @@ class ArbitrageEngine:
                 }:
                     await self.invalidate(key, "INVALIDATED", "OBSERVED_SPREAD_DISAPPEARED", now)
                 return
-            bi = self.market_input(br, bm, buy, fx)
-            si = self.market_input(sr, sm, sell, fx)
+            buy_fee = self.fee_assessment(bm, now=now, adapter=br.slug)
+            sell_fee = self.fee_assessment(sm, now=now, adapter=sr.slug)
+            bi = self.market_input(br, bm, buy, {bm.quote.symbol: buy_fx}, fee=buy_fee, side="buy")
+            si = self.market_input(
+                sr, sm, sell, {sm.quote.symbol: sell_fx}, fee=sell_fee, side="sell"
+            )
             costs = Costs(
                 slippage_bps=self.config.slippage_bps, rebalancing_bps=self.config.rebalancing_bps
             )
@@ -355,6 +414,10 @@ class ArbitrageEngine:
         ]
         if cad_budget_unavailable:
             reasons.append("BUDGET_NOT_APPLIED_CAD_UNAVAILABLE")
+        if rejected_fx:
+            reasons.append("FX_CAPTURE_SKEW_EXCEEDED")
+        if any(item and item.fresh_until < completed_at for item in (buy_fx, sell_fx)):
+            reasons.append("FX_EVIDENCE_EXPIRED_DURING_EVALUATION")
         clock = (
             self.collector.utc_clock.snapshot()
             if self.collector.utc_clock
@@ -452,6 +515,9 @@ class ArbitrageEngine:
         if structural:
             status = "INVALIDATED"
         reasons = list(dict.fromkeys(reasons))
+        fx_books = (
+            fx.referenced_books(buy_fx, sell_fx) if isinstance(fx, ConversionSnapshot) else {}
+        )
         payload = {
             "base_asset": bm.base.symbol,
             "buy_exchange": br.slug,
@@ -489,7 +555,11 @@ class ArbitrageEngine:
                 "sell_quality": sell.state.value,
                 "buy_confirmation": buy.verification,
                 "sell_confirmation": sell.verification,
-                "fx_books": self.fx_evidence,
+                "fee_assumptions": {
+                    "buy": buy_fee.as_evidence("buy"),
+                    "sell": sell_fee.as_evidence("sell"),
+                },
+                "fx_books": fx_books,
                 "timing": {
                     "evaluation_started_at": now.isoformat(),
                     "evaluated_at": completed_at.isoformat(),
@@ -505,11 +575,11 @@ class ArbitrageEngine:
                         b.raw_evidence.get("timestamp_basis") for b in (buy, sell)
                     ],
                     "source_clock_independently_verified": False,
-                    "fx_evidence_scope": "available_conversion_graph",
+                    "fx_evidence_scope": "used_conversion_books",
                     "fx_evidence_oldest_age_seconds": max(
                         (
                             a
-                            for b in self.fx_evidence.values()
+                            for b in fx_books.values()
                             if (
                                 a := age_seconds(
                                     completed_at, datetime.fromisoformat(b["received_at"])
