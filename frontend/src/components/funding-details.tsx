@@ -29,6 +29,8 @@ type FundingRequirement = Position & {
   side?: "BUY" | "SELL" | "buy" | "sell";
   required_quantity?: string | null;
   missing_quantity?: string | null;
+  fee_asset?: string;
+  total_quantity?: string | null;
 };
 type ProjectedCosts = {
   fees_cad: string | null;
@@ -50,10 +52,16 @@ export type FundingRoute = {
   projected_net_profit_cad?: string | null;
   maximum_funded_acquisition_cad?: string | null;
   maximum_observed_acquisition_cad?: string | null;
+  maximum_affordable_acquisition_cad?: string | null;
   funded_size_net_profit_cad?: string | null;
   projected_costs?: ProjectedCosts | null;
   market_profitability?: "PROJECTED_POSITIVE" | "NON_POSITIVE" | "UNKNOWN";
   fundable_with_reallocation?: boolean | null;
+  funding_model?: "PRE_FUNDED" | "TRANSFER";
+  required_inventory_mark_cad?: string | null;
+  inventory_shortfall_mark_cad?: string | null;
+  funded_inventory_mark_cad?: string | null;
+  prefunded_expected_return_pct?: string | null;
 };
 export type FundingCoverage = {
   session_id?: string;
@@ -61,6 +69,8 @@ export type FundingCoverage = {
   routes: FundingRoute[];
   limitations: string[];
   window?: { limited?: boolean; limit: number };
+  session_trade_cap_cad?: string;
+  session_minimum_buy_capital_cad?: string;
 };
 type Concentration = Record<string, { cad_value: string; share_pct: string }>;
 type SizeCoverage = {
@@ -512,6 +522,10 @@ const routeReasons = (route: FundingRoute) => [
 ];
 
 function fundingLabel(route: FundingRoute, reasons: string[]) {
+  if (reasons.includes("AFFORDABLE_SIZE_BELOW_MINIMUM_BUY_CAPITAL"))
+    return "BELOW MINIMUM BUY CAPITAL";
+  if (route.funding_model === "TRANSFER" && route.inventory_sufficient)
+    return "BUY INVENTORY AVAILABLE";
   if ((route.inventory_sufficient ?? route.funded) === true) return "FUNDED";
   if (!route.required?.length) return "FUNDING UNAVAILABLE";
   if (
@@ -561,9 +575,21 @@ export function FundingRouteDetails({
               </div>
               {route.maximum_observed_acquisition_cad !== undefined && (
                 <div>
-                  <dt>Maximum observed acquisition</dt>
+                  <dt>
+                    {route.funding_model
+                      ? "Market capacity at session cap"
+                      : "Maximum observed acquisition"}
+                  </dt>
                   <dd>
                     <Exact value={route.maximum_observed_acquisition_cad} unit="CAD" />
+                  </dd>
+                </div>
+              )}
+              {route.maximum_affordable_acquisition_cad !== undefined && (
+                <div>
+                  <dt>Maximum affordable acquisition</dt>
+                  <dd>
+                    <Exact value={route.maximum_affordable_acquisition_cad} unit="CAD" />
                   </dd>
                 </div>
               )}
@@ -580,6 +606,34 @@ export function FundingRouteDetails({
                 </dd>
               </div>
             </dl>
+            {route.funding_model === "PRE_FUNDED" && (
+              <dl className="funding-route-metrics">
+                <div>
+                  <dt>Required two-sided inventory mark</dt>
+                  <dd>
+                    <Exact value={route.required_inventory_mark_cad} unit="CAD" />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Shortfall at pinned liquidation marks</dt>
+                  <dd>
+                    <Exact value={route.inventory_shortfall_mark_cad} unit="CAD" />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Funded two-sided inventory mark</dt>
+                  <dd>
+                    <Exact value={route.funded_inventory_mark_cad} unit="CAD" />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Projected return on funded inventory</dt>
+                  <dd>
+                    <Exact value={route.prefunded_expected_return_pct} unit="%" />
+                  </dd>
+                </div>
+              </dl>
+            )}
             {route.projected_costs && (
               <div role="group" aria-label="Expected route costs in CAD">
                 <p className="terminal-footnote">Expected costs · {basis}</p>
@@ -623,9 +677,15 @@ export function FundingRouteDetails({
                 <span>
                   Available <Exact value={r.available_quantity} places={8} />
                 </span>
+                {r.reserved_quantity !== undefined && (
+                  <span>
+                    Reserved <Exact value={r.reserved_quantity} places={8} />
+                  </span>
+                )}
                 <strong>
                   Missing <Exact value={r.missing_quantity} places={8} />
                 </strong>
+                {r.fee_asset && <span>Taker fee asset {r.fee_asset}</span>}
               </div>
             ))}
             {(reasons.length > 0 ||

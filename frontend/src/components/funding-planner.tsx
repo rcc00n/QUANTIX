@@ -533,11 +533,20 @@ export function FundingPlanner({
             </table>
           </div>
           {coverage.data?.routes.length ? (
-            <FundingRouteDetails
-              key={coverage.data.session_id ?? session.id}
-              routes={coverage.data.routes}
-              basis="Capped funded size"
-            />
+            <>
+              {coverage.data.session_trade_cap_cad && (
+                <p className="terminal-footnote">
+                  Session trade cap <Exact value={coverage.data.session_trade_cap_cad} unit="CAD" />
+                  {" · "}Minimum buy capital{" "}
+                  <Exact value={coverage.data.session_minimum_buy_capital_cad} unit="CAD" />
+                </p>
+              )}
+              <FundingRouteDetails
+                key={coverage.data.session_id ?? session.id}
+                routes={coverage.data.routes}
+                basis="Capped funded size"
+              />
+            </>
           ) : !coverage.loading ? (
             <Empty title="No retained routes to assess">
               Coverage requires retained compatible opportunity evidence.

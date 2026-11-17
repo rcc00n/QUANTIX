@@ -264,16 +264,21 @@ async function fixtures(page: Page) {
             sell_exchange: "synthetic_sell",
             inventory_sufficient: false,
             maximum_funded_acquisition_cad: null,
+            maximum_observed_acquisition_cad: "123.765432109876543210",
+            maximum_affordable_acquisition_cad: null,
+            funding_model: "PRE_FUNDED",
             projected_net_profit_cad: "-0.123456789012345678",
             funded_size_net_profit_cad: null,
             market_profitability: "NON_POSITIVE",
             actionable: false,
             required: [
               {
+                side: "SELL",
                 exchange: "synthetic_sell",
                 asset: "SYNTH",
                 required_quantity: "3.123456789012345678",
                 available_quantity: "0",
+                reserved_quantity: "1.999999999999999999",
                 missing_quantity: "3.123456789012345678",
               },
             ],
@@ -374,6 +379,8 @@ test("SYNTHETIC: planner explains exact missing inventory and creates independen
     planner.locator(".funding-requirement strong").getByTitle("3.123456789012345678"),
   ).toBeVisible();
   await expect(planner.getByText("MISSING INVENTORY", { exact: true })).toBeVisible();
+  await expect(planner.getByTitle("1.999999999999999999")).toBeVisible();
+  await expect(planner.getByTitle("123.765432109876543210 CAD")).toBeVisible();
   await expect(planner.getByText("Non-positive market projection", { exact: true })).toBeVisible();
   await expect(planner.getByTitle("-0.123456789012345678 CAD")).toBeVisible();
   await page.getByRole("button", { name: "Propose virtual funding" }).click();

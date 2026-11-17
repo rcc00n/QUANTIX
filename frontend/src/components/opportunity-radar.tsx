@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   AlertTriangle,
   ChevronLeft,
@@ -59,6 +60,116 @@ function Confidence({ value }: { value: Opportunity["status"] }) {
     <span className={`opportunity-state opportunity-${value.toLowerCase()}`}>
       {reasonLabel(value)}
     </span>
+  );
+}
+
+function RouteSummary({ route }: { route: Opportunity }) {
+  const data = route.classifications;
+  if (!data) return null;
+  const size = data.depth_executable_positive;
+  return (
+    <small className="eligibility-note">
+      {size === true
+        ? "Positive at recorded size"
+        : size === false
+          ? "No positive depth result"
+          : "Executable profitability unknown"}
+      {" · "}
+      {data.inventory_funded === null
+        ? "Inventory unassessed"
+        : data.inventory_funded
+          ? "Inventory funded"
+          : "Inventory insufficient"}
+    </small>
+  );
+}
+
+function RouteEvidence({ route }: { route: Opportunity }) {
+  const data = route.classifications;
+  if (!data) return null;
+  const freshness = {
+    CURRENT: "Current received books",
+    RETAINED: "Retained evaluation",
+    UNVERIFIED: "Current freshness unverified",
+    STALE: "Stale or invalid timing",
+  }[data.freshness];
+  return (
+    <div className="radar-costs">
+      <div>
+        <h4>Route evidence</h4>
+        <dl className="settings-list">
+          <div>
+            <dt>Book freshness</dt>
+            <dd>{freshness}</dd>
+          </div>
+          {(
+            [
+              ["Raw book discrepancy", data.raw_price_discrepancy],
+              ["Positive before fees and reserves", data.theoretically_positive],
+              ["Modeled depth supports the selected size", data.depth_feasible],
+              ["Depth-executable positive CAD", data.depth_executable_positive],
+              ["Recorded receipt times within skew limit", data.receipts_within_skew_limit],
+              ["Recorded source times within skew limit", data.sources_within_skew_limit],
+            ] as const
+          ).map(([label, value]) => (
+            <div key={label}>
+              <dt>{label}</dt>
+              <dd>{value === null ? "Unknown" : value ? "Yes" : "No"}</dd>
+            </div>
+          ))}
+          <div>
+            <dt>Depth-constrained maximum buy capital · CAD</dt>
+            <dd>
+              <Amount value={route.maximum_liquidity_cad} />
+            </dd>
+          </div>
+        </dl>
+      </div>
+      <div>
+        <h4>Funding and account evidence</h4>
+        <dl className="settings-list">
+          <div>
+            <dt>Both sides funded</dt>
+            <dd>
+              {data.inventory_funded === null ? (
+                <>
+                  Unassessed · <Link href="/portfolio">Funding Planner</Link>
+                </>
+              ) : data.inventory_funded ? (
+                "Yes"
+              ) : (
+                "No"
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt>Account fees verified</dt>
+            <dd>{data.fee_verified === null ? "Unknown" : data.fee_verified ? "Yes" : "No"}</dd>
+          </div>
+          <div>
+            <dt>Buy / sell fee evidence</dt>
+            <dd>
+              {data.fee_evidence.buy ? reasonLabel(data.fee_evidence.buy) : "Unknown"} /{" "}
+              {data.fee_evidence.sell ? reasonLabel(data.fee_evidence.sell) : "Unknown"}
+            </dd>
+          </div>
+          <div>
+            <dt>Account eligibility</dt>
+            <dd>
+              {data.account_eligible === null
+                ? "Unverified"
+                : data.account_eligible
+                  ? "Eligible"
+                  : "Ineligible"}
+            </dd>
+          </div>
+          <div>
+            <dt>Actionable</dt>
+            <dd>{data.actionable ? "Yes" : "No"}</dd>
+          </div>
+        </dl>
+      </div>
+    </div>
   );
 }
 
@@ -125,6 +236,7 @@ function Detail({
         <span>Trading eligibility: {reasonLabel(opportunity.eligibility)}</span>
         <span>{opportunity.actionable ? "Eligibility checks passed" : "Not actionable"}</span>
       </div>
+      <RouteEvidence route={opportunity} />
       <dl className="book-metadata radar-metadata">
         <div>
           <dt>Detected · UTC</dt>
@@ -823,6 +935,7 @@ export function OpportunityRadar() {
                 : `${Math.max(0, Math.floor(row.age_seconds))}s`}{" "}
               · {reasonLabel(row.eligibility)}
             </p>
+            <RouteSummary route={row} />
             <div className="paper-actions">
               <Button
                 size="sm"
@@ -916,6 +1029,7 @@ export function OpportunityRadar() {
                       {reasonLabel(row.eligibility)} ·{" "}
                       {row.actionable ? "eligible" : "not actionable"}
                     </small>
+                    <RouteSummary route={row} />
                   </td>
                   <td className="timing-cell">
                     <time dateTime={row.detected_at}>{utc(row.detected_at)}</time>

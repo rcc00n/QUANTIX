@@ -28,7 +28,7 @@ export function TradeInspector({ detail }: { detail: PaperTradeDetail }) {
           method: "POST",
           body: JSON.stringify({
             evaluation_id: detail.trade.evaluation_id,
-            reaction_delay_seconds: Number(detail.trade.reaction_delay_ms ?? 30000) / 1000,
+            include_delay_matrix: true,
             budget_cad: asRecord(assumptions.strategy).trade_amount_cad || "250",
           }),
         }),
@@ -261,11 +261,10 @@ export function TradeInspector({ detail }: { detail: PaperTradeDetail }) {
       {detail.trade.evaluation_id && (
         <div className="replay-controls">
           <button className="text-link" disabled={busy} onClick={() => void runReplay()}>
-            {busy ? "Checking retained evidence…" : "Assess causal historical replay"}
+            {busy ? "Checking retained evidence…" : "Compare execution delays"}
           </button>
           <p className="terminal-footnote">
-            Read-only research projection. Sparse retained evidence produces a limitation, never
-            invented fills.
+            Compare modeled outcomes at 0, 5, 15 and 30 seconds using the retained evidence.
           </p>
         </div>
       )}
@@ -275,9 +274,48 @@ export function TradeInspector({ detail }: { detail: PaperTradeDetail }) {
           <Warning>
             {(Array.isArray(replay.limitations) ? replay.limitations : [])
               .map(String)
-              .join(" · ") || "Research projection only; no portfolio or fill was created."}
+              .join(" · ") || "Research projection from retained evidence."}
           </Warning>
-          <JsonDetails title="Deterministic retained-evidence replay result" value={replay} />
+          <div className="table-wrap">
+            <table className="terminal-table" aria-label="Historical execution delay comparison">
+              <thead>
+                <tr>
+                  <th>Delay</th>
+                  <th>Retained legs</th>
+                  <th>Acquisition</th>
+                  <th>Modeled net</th>
+                  <th>Evidence outcome</th>
+                </tr>
+              </thead>
+              <tbody>
+                {asRecords(replay.items).map((scenario, index) => {
+                  const projection = asRecord(scenario.projection);
+                  const best = asRecord(projection.best);
+                  const observed = Array.isArray(scenario.observed_legs)
+                    ? scenario.observed_legs.join(" + ")
+                    : "";
+                  return (
+                    <tr key={text(scenario.delay_seconds, String(index))}>
+                      <td>{text(scenario.delay_seconds)} s</td>
+                      <td>{observed || "Unavailable"}</td>
+                      <td>
+                        <Exact value={best.acquisition_cost_cad} unit="CAD" />
+                      </td>
+                      <td>
+                        <Exact value={best.net_profit_cad} unit="CAD" />
+                      </td>
+                      <td>
+                        {scenario.reason
+                          ? text(scenario.reason).replaceAll("_", " ").toLowerCase()
+                          : utcLabel(amount(projection.decision_at))}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <JsonDetails title="Delay projection sources and calculation bounds" value={replay} />
         </>
       )}
     </div>

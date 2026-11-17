@@ -1,6 +1,22 @@
 export type OpportunityStatus =
   "DETECTED" | "RECHECKING" | "VERIFIED_MARKET" | "RESEARCH_ONLY" | "INVALIDATED" | "EXPIRED";
 
+export type RouteClassifications = {
+  evidence_basis: "live_engine_projection" | "retained_evaluation";
+  freshness: "CURRENT" | "RETAINED" | "UNVERIFIED" | "STALE";
+  raw_price_discrepancy: boolean | null;
+  theoretically_positive: boolean | null;
+  depth_feasible: boolean | null;
+  depth_executable_positive: boolean | null;
+  inventory_funded: boolean | null;
+  fee_verified: boolean | null;
+  fee_evidence: { buy: string | null; sell: string | null };
+  account_eligible: boolean | null;
+  actionable: boolean;
+  receipts_within_skew_limit: boolean | null;
+  sources_within_skew_limit: boolean | null;
+};
+
 /** Financial amounts are exact decimal strings supplied by the calculation engine. */
 export type Opportunity = {
   id: string;
@@ -20,6 +36,8 @@ export type Opportunity = {
   net_profit_cad: string | null;
   net_return_pct: string | null;
   acquisition_cost_cad: string | null;
+  maximum_liquidity_cad?: string | null;
+  classifications?: RouteClassifications;
   reasons: string[];
   eligibility: string;
   calculation_version: string;

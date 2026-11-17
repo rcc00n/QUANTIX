@@ -21,6 +21,22 @@ const synthetic = {
   net_profit_cad: "0.012345678901234567",
   net_return_pct: "0.5",
   acquisition_cost_cad: "0.2",
+  maximum_liquidity_cad: "500.001234567890123456",
+  classifications: {
+    evidence_basis: "retained_evaluation",
+    freshness: "RETAINED",
+    raw_price_discrepancy: true,
+    theoretically_positive: true,
+    depth_feasible: true,
+    depth_executable_positive: true,
+    inventory_funded: null,
+    fee_verified: false,
+    fee_evidence: { buy: "PUBLIC_SCHEDULE_VERIFIED", sell: "CONSERVATIVE_ESTIMATE" },
+    account_eligible: null,
+    actionable: false,
+    receipts_within_skew_limit: true,
+    sources_within_skew_limit: null,
+  },
   reasons: ["HOST_CLOCK_UNHEALTHY", "FEES_UNVERIFIED"],
   eligibility: "UNVERIFIED",
   calculation_version: "synthetic-test-v1",
@@ -76,17 +92,29 @@ test("SYNTHETIC: radar preserves exact amounts, confidence gates, filters and re
           net_return_pct: "7.45",
           sell_base_required: "0.0067",
         },
-        comparisons: ["50", "100", "250", "500", "1000"].map((value) => ({
+        best_limiting_constraints: ["BUY_OBSERVED_DEPTH"],
+        best_costs_and_reserves: {
+          planned_buy_reserve: "6.731234567890123456",
+          planned_sell_reserve: "0.0067",
+          estimated_costs: {
+            fees_cad: "0.021234567890123456",
+            fx_drag_cad: "0",
+            slippage_cad: "0",
+            rebalancing_cad: "0",
+          },
+        },
+        comparisons: ["50", "100", "250", "500", "1000", "2500", "5000"].map((value) => ({
           requested_buy_capital_cad: value,
           supported: false,
           buy_capital_cad: null,
           estimated_net_profit_cad: null,
           estimated_net_return_pct: null,
           required_sell_inventory: null,
+          limiting_constraints: ["BUY_OBSERVED_DEPTH"],
           reasons: ["TARGET_EXCEEDS_BUY_OBSERVED_DEPTH"],
         })),
         explanations: ["SELECTED_OPTIMUM_USES_LESS_THAN_MAXIMUM_BUY_BUDGET"],
-        optimizer: { optimality: "BOUNDED", evaluated_count: 12 },
+        optimizer: { optimality: "CERTIFIED", evaluated_count: 12, certified: true },
         market_constraints: { sell_inventory_currency: "SYNTHETIC_BTC", buy_quote_currency: "CAD" },
       };
     else if (url.pathname.endsWith("/recheck")) {
@@ -115,12 +143,30 @@ test("SYNTHETIC: radar preserves exact amounts, confidence gates, filters and re
   ).toHaveText("≈1,000.12345678");
   await expect(page.getByRole("region", { name: "Opportunity detail" })).toBeVisible();
   await expect(page.getByText("Not actionable", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Compare retained sizes" }).click();
-  await expect(page.getByRole("table", { name: "Retained size comparison" })).toBeVisible();
   await expect(
-    page.getByRole("table", { name: "Retained size comparison" }).getByTitle("6.71"),
+    page
+      .getByRole("table", { name: "Cross-exchange opportunities" })
+      .getByText("Inventory unassessed", { exact: false }),
   ).toBeVisible();
-  await expect(page.getByText("TARGET EXCEEDS BUY OBSERVED DEPTH", { exact: true })).toHaveCount(5);
+  const detail = page.getByRole("region", { name: "Opportunity detail" });
+  await expect(detail.getByText("Retained evaluation", { exact: true })).toBeVisible();
+  await expect(
+    detail.getByTitle("Exact value: 500.001234567890123456", { exact: true }),
+  ).toBeVisible();
+  await expect(detail.getByRole("link", { name: "Funding Planner" })).toHaveAttribute(
+    "href",
+    "/portfolio",
+  );
+  await page.getByRole("button", { name: "Compare retained sizes" }).click();
+  const comparison = page.getByRole("table", { name: "Retained size comparison" });
+  await expect(comparison).toBeVisible();
+  await expect(comparison.getByTitle("6.71")).toBeVisible();
+  await expect(comparison.getByTitle("2500", { exact: true })).toBeVisible();
+  await expect(comparison.getByTitle("5000", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("Certified optimum", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("buy observed depth", { exact: true })).toHaveCount(8);
+  await expect(comparison.getByTitle("0.021234567890123456", { exact: true })).toBeVisible();
+  await expect(comparison.getByTitle("6.731234567890123456 CAD", { exact: true })).toBeVisible();
   await page
     .getByRole("combobox", { name: "Capital budget · CAD", exact: true })
     .selectOption("100");
