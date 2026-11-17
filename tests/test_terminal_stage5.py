@@ -145,5 +145,13 @@ def test_process_telemetry_explicit_measurement_units():
     assert t["uptime_seconds"] >= 0
 
 
+def test_official_links_never_construct_unknown_routes():
+    assert (
+        official_market_link("kraken", "BTC/CAD")
+        == "https://pro.kraken.com/app/trade/btc-cad"
+    )
+    assert official_market_link("kraken", "WRAPPEDBTC/CAD") is None
+    assert official_market_link("synthetic-venue", "BTC/CAD") is None
+    assert official_market_link("kraken", "BTC/CAD?redirect=elsewhere") is None
 
 
