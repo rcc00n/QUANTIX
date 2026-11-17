@@ -1,11 +1,16 @@
 """Financial audit regressions. Every market, price and portfolio here is SYNTHETIC."""
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, localcontext
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
+from arbiq.opportunities import api as opportunity_api
 from arbiq.opportunities.analysis import dump_input
+from arbiq.opportunities.config import EngineConfig
 from arbiq.opportunities.contracts import (
     ConversionRoute,
     Costs,
@@ -23,11 +28,13 @@ from arbiq.opportunities.math import (
     optimize_route,
     required_input,
 )
+from arbiq.paper_trading.execution import planned_reserves
 from arbiq.settings.strategy import (
     PaperStrategy,
     minimum_buy_satisfied,
     read_pinned_strategy,
 )
+from fastapi import HTTPException
 from pydantic import ValidationError
 from test_arbitrage_math import levels
 
@@ -88,11 +95,22 @@ def test_comparisons_price_actual_target_sizes_not_repeated_budget_optima():
     buy, sell = synthetic_small_route()
     result = size_diagnostics(pinned(buy, sell))
     assert D(result["best"]["acquisition_cost_cad"]) == D("6.71")
-    assert len(result["comparisons"]) == 5
-    for row in result["comparisons"]:
+    assert [D(row["requested_buy_capital_cad"]) for row in result["comparisons"]] == [
+        50,
+        100,
+        250,
+        500,
+        1000,
+        2500,
+        5000,
+    ]
+    for row in result["comparisons"][:5]:
         assert row["supported"]
         assert D(row["buy_capital_cad"]) == D(row["requested_buy_capital_cad"])
         assert D(row["estimated_net_profit_cad"]) < 0
+    for row in result["comparisons"][5:]:
+        assert not row["supported"]
+        assert row["limiting_constraints"] == ["BUY_OBSERVED_DEPTH"]
     assert "BEST_SIZE_AT_SELL_TOP_LEVEL_DEPTH_BOUNDARY" in result["explanations"]
     assert "SUSPICIOUS_RETAINED_BOOK_NOT_VERIFIED" in result["explanations"]
     assert result["actionable"] is False and result["actual_execution"] is False
@@ -109,6 +127,116 @@ def test_unsupported_target_never_extrapolates_profit():
         assert row["projection"] is None
 
 
+def test_certified_best_is_between_targets_and_discloses_exact_paper_reserves_and_costs():
+    buy, sell = synthetic_small_route()
+    buy = replace(buy, fee=Fee(D(".001")))
+    sell = replace(
+        sell, bids=levels((110, "7.50"), (1, 20)), fee=Fee(D(".002"), "base")
+    )
+    costs = Costs(D(10), D(20), D("0.25"))
+    evidence = pinned(buy, sell)
+    evidence["calculation_inputs"].update(
+        costs=dump_input(costs), max_search_evaluations=128
+    )
+    result = size_diagnostics(evidence, D(1000), max_search_evaluations=256)
+    best = result["best"]
+    assert result["optimizer"]["max_search_evaluations"] == 128
+    assert result["optimizer"]["certified"]
+    assert D(500) < D(best["acquisition_cost_cad"]) < D(1000)
+    assert (
+        "NEXT_QUANTITY_STEP_DOES_NOT_IMPROVE_NET_PROFIT"
+        in result["best_limiting_constraints"]
+    )
+    evaluated = evaluate_route(buy, sell, D(best["buy_quantity"]), now=NOW, costs=costs)
+    expected_buy, expected_sell = planned_reserves(
+        evaluated, buy.fee, sell.fee, costs.slippage_bps
+    )
+    displayed = result["best_costs_and_reserves"]
+    assert D(displayed["planned_buy_reserve"]) == expected_buy
+    assert D(displayed["planned_sell_reserve"]) == expected_sell
+    assert displayed["estimated_costs"] == {
+        "fees_cad": str(evaluated.fees_cad),
+        "fx_drag_cad": str(evaluated.fx_cost_cad),
+        "slippage_cad": str(evaluated.slippage_reserve_cad),
+        "rebalancing_cad": str(evaluated.rebalancing_cost_cad),
+    }
+
+
+def test_size_diagnostics_retains_sided_failure_without_a_successful_curve():
+    buy, sell = synthetic_small_route()
+    sell = replace(sell, rules=replace(sell.rules, market_order_available=False))
+    result = size_diagnostics(pinned(buy, sell))
+    assert result["best"] is None
+    assert result["best_limiting_constraints"] == ["SELL_MARKET_ORDER_UNAVAILABLE"]
+    assert result["market_constraints"]["maximum_combined_buy_quantity"] is None
+    assert all(
+        item["limiting_constraints"] == ["SELL_MARKET_ORDER_UNAVAILABLE"]
+        and not item["supported"]
+        and item["estimated_costs"] is None
+        for item in result["comparisons"]
+    )
+
+
+def test_market_cap_and_future_fx_keep_a_specific_binding_constraint():
+    buy, sell = synthetic_small_route()
+    limited = replace(sell, rules=replace(sell.rules, max_quantity=D(3)))
+    result = size_diagnostics(pinned(buy, limited))
+    assert result["comparisons"][3]["limiting_constraints"] == ["SELL_MAXIMUM_QUANTITY"]
+    late = replace(
+        sell, fx=replace(sell.fx, available_at=NOW + timedelta(microseconds=1))
+    )
+    result = size_diagnostics(pinned(buy, late))
+    assert result["comparisons"][0]["limiting_constraints"] == [
+        "SELL_CAD_CONVERSION_NOT_YET_AVAILABLE"
+    ]
+    assert result["comparisons"][0]["estimated_net_profit_cad"] is None
+
+
+@pytest.mark.asyncio
+async def test_sizing_endpoint_releases_database_before_offload_and_rejects_concurrent_work(
+    monkeypatch,
+):
+    route_id, evaluation_id = uuid4(), uuid4()
+    state = {"reads": 0, "committed": False}
+    evidence = pinned(*synthetic_small_route())
+
+    async def execute(_query):
+        state["reads"] += 1
+        return SimpleNamespace(one_or_none=lambda: (evaluation_id, evidence))
+
+    async def commit():
+        state["committed"] = True
+
+    db = SimpleNamespace(execute=execute, commit=commit)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(
+                    arbitrage=EngineConfig(max_optimizer_evaluations=64)
+                )
+            )
+        )
+    )
+    gate = asyncio.Semaphore(1)
+    monkeypatch.setattr(opportunity_api, "_projection_gate", gate)
+
+    async def to_thread(function, *args, **kwargs):
+        assert state["committed"]
+        with pytest.raises(HTTPException) as blocked:
+            await opportunity_api.diagnostics_sizes(route_id, request, db, None, D(500))
+        assert blocked.value.status_code == 429
+        assert blocked.value.headers == {"Retry-After": "2"}
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(
+        opportunity_api, "asyncio", SimpleNamespace(to_thread=to_thread)
+    )
+    value = await opportunity_api.diagnostics_sizes(route_id, request, db, None, D(500))
+    assert state["reads"] == 1
+    assert value["evaluation_id"] == str(evaluation_id)
+    assert value["optimizer"]["max_search_evaluations"] == 64
+
+
 def test_minimum_buy_is_independent_of_maximum_profit_and_and_or():
     policy = PaperStrategy(
         min_buy_capital_cad="50",
@@ -123,6 +251,14 @@ def test_minimum_buy_is_independent_of_maximum_profit_and_and_or():
     assert minimum_buy_satisfied(policy, D(50))
     assert not minimum_buy_satisfied(policy, None)
     assert policy.trade_amount_cad == D(1000) and policy.minimum_profit_cad == 0
+
+
+def test_radar_budget_presets_preserve_legacy_choices_and_custom_preferences():
+    assert EngineConfig().budgets_cad == list(
+        map(D, (50, 100, 250, 500, 1000, 2000, 2500, 5000, 10000))
+    )
+    assert EngineConfig(budgets_cad=[D(10), D(2000)]).budgets_cad == [D(10), D(2000)]
+    assert EngineConfig().default_budget_cad == D(1000)
 
 
 def test_old_pinned_strategy_maintains_original_behavior_without_rewrite():
@@ -250,7 +386,8 @@ def test_reciprocal_fx_roundoff_does_not_falsely_remove_supported_target():
     )
     sell = replace(sell, quote_currency="EUR", fx=buy.fx)
     result = size_diagnostics(pinned(buy, sell))
-    assert all(row["supported"] for row in result["comparisons"])
+    assert all(row["supported"] for row in result["comparisons"][:6])
+    assert not result["comparisons"][-1]["supported"]
 
 
 def test_fx_depth_limits_target_without_claiming_stablecoin_parity():

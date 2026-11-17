@@ -2,11 +2,13 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from arbiq.opportunities.contracts import DEFAULT_BUDGETS
+
 
 class EngineConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     enabled: bool = True
-    budgets_cad: list[Decimal] = [Decimal(x) for x in (100, 250, 500, 1000, 2000, 5000, 10000)]
+    budgets_cad: list[Decimal] = Field(default_factory=lambda: list(DEFAULT_BUDGETS))
     default_budget_cad: Decimal = Decimal("1000")
     conservative_taker_rate: Decimal = Decimal("0.006")
     slippage_bps: Decimal = Decimal("10")

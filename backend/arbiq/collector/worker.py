@@ -1203,25 +1203,59 @@ class Collector:
                 for value in values[:500]:
                     evidence = value.get("evidence", {})
                     inputs = evidence.get("calculation_inputs", {})
+                    timing = evidence.get("timing", {})
+                    fee_assumptions = evidence.get("fee_assumptions", {})
                     small_inputs = {"evaluated_at": inputs.get("evaluated_at")}
+                    small_fees = {}
                     for side in ("buy", "sell"):
                         leg = inputs.get(side, {})
                         fx = leg.get("fx") or {}
                         small_inputs[side] = {
                             "quote_currency": leg.get("quote_currency"),
                             "fx": {"fresh_until": fx.get("fresh_until")},
+                            "fee": {"verified": (leg.get("fee") or {}).get("verified")},
+                        }
+                        fee = fee_assumptions.get(side, {})
+                        small_fees[side] = {
+                            name: fee.get(name)
+                            for name in (
+                                "fee_evidence_status",
+                                "account_tier_verified",
+                                "fee_currency_assumed",
+                            )
                         }
                     summarized.append(
                         {
                             **{
                                 k: v
                                 for k, v in value.items()
-                                if k not in ("evidence", "budget_results", "transfer_scenario")
+                                if k
+                                not in (
+                                    "evidence",
+                                    "budget_results",
+                                    "transfer_scenario",
+                                    "maximum_executable",
+                                )
+                            },
+                            "maximum_executable": {
+                                "acquisition_cost_cad": (value.get("maximum_executable") or {}).get(
+                                    "acquisition_cost_cad"
+                                )
                             },
                             "evidence": {
                                 "buy_quality": evidence.get("buy_quality"),
                                 "sell_quality": evidence.get("sell_quality"),
                                 "calculation_inputs": small_inputs,
+                                "fee_assumptions": small_fees,
+                                "timing": {
+                                    name: timing.get(name)
+                                    for name in (
+                                        "clock_trusted",
+                                        "cross_book_receive_skew_seconds",
+                                        "cross_book_source_skew_seconds",
+                                        "cross_book_uncertainty_seconds",
+                                    )
+                                },
                             },
                         }
                     )

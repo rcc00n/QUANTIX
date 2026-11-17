@@ -26,6 +26,8 @@ from arbiq.db.models import (
     SystemEvent,
 )
 from arbiq.opportunities.analysis import resize
+from arbiq.opportunities.classification import CONFIDENCE, classify_route
+from arbiq.opportunities.classification import financial_sort as financial_sort
 from arbiq.opportunities.diagnostics import size_diagnostics
 
 router = APIRouter(prefix="/opportunities", tags=["arbitrage research"])
@@ -237,6 +239,7 @@ def project(
     evidence=None,
     current=None,
     max_resize_evaluations=4096,
+    maximum_book_skew: int | None = None,
 ) -> dict:
     """Apply current display eligibility without modifying historical audit records."""
     live_times = live_projection_times(current)
@@ -387,8 +390,7 @@ def project(
     quality = [
         calculation_evidence.get(f"{side}_quality", "UNAVAILABLE") for side in ("buy", "sell")
     ]
-    severity = {"HEALTHY": 0, "DEGRADED": 1, "SUSPICIOUS": 2, "STALE": 3, "UNAVAILABLE": 4}
-    payload["data_confidence"] = max(quality, key=lambda x: severity.get(x, 4))
+    payload["data_confidence"] = max(quality, key=lambda x: CONFIDENCE.get(x, 4))
     costs = payload.get("costs") or {}
     maximum = payload.get("maximum_executable") or {}
     payload["required_inventory"] = costs.get("capital_requirements", {})
@@ -401,6 +403,28 @@ def project(
     )
     payload["liquidity_definition"] = (
         "Modeled depth-constrained acquisition cost; not available funds"
+    )
+    if payload["status"] == "EXPIRED" or source_expired or (age is not None and age < 0):
+        freshness_state = "STALE"
+    elif not active:
+        freshness_state = "RETAINED"
+    elif (
+        payload["status"] not in TERMINAL
+        and diagnostics.get("healthy")
+        and diagnostics.get("clock_healthy")
+        and age is not None
+        and supporting_received_at is not None
+        and "FRESHNESS_CLASS_NOT_VERIFIABLE" not in reasons
+        and "QUOTE_INGESTION_NOT_CURRENT" not in reasons
+    ):
+        freshness_state = "CURRENT"
+    else:
+        freshness_state = "UNVERIFIED"
+    payload["classifications"] = classify_route(
+        payload,
+        calculation_evidence if isinstance(calculation_evidence, dict) else {},
+        freshness=freshness_state,
+        maximum_book_skew=maximum_book_skew,
     )
     return payload
 
@@ -443,17 +467,6 @@ def meets_filters(
         except (KeyError, TypeError, InvalidOperation):
             return False
     return True
-
-
-def financial_sort(value: dict, field: str) -> tuple:
-    raw = value.get(field)
-    try:
-        number = Decimal(raw) if isinstance(raw, str) else None
-        if number is not None and not number.is_finite():
-            number = None
-    except InvalidOperation:
-        number = None
-    return (number is None, number.copy_negate() if number is not None else Decimal(0), value["id"])
 
 
 @router.get("/budgets")
@@ -501,6 +514,11 @@ async def opportunities(
 ):
     config = request.app.state.settings.arbitrage
     budget = budget_cad if budget_cad is not None else config.default_budget_cad
+    rank_by = {
+        "net_profit": "net_profit_cad",
+        "net_return": "net_return_pct",
+        "liquidity": "maximum_liquidity_cad",
+    }[sort]
     custom_budget = budget != config.default_budget_cad
     window = CUSTOM_BUDGET_WINDOW if custom_budget else CANDIDATE_WINDOW
     gate = _projection_gate if custom_budget else _view_gate
@@ -585,11 +603,29 @@ async def opportunities(
                     config.maximum_book_age_seconds,
                     current=item,
                     max_resize_evaluations=config.max_optimizer_evaluations,
+                    maximum_book_skew=config.maximum_book_skew_seconds,
                 )
+                effective = projected["status"]
+                if (not history and effective in TERMINAL) or (status and effective != status):
+                    continue
+                if not meets_filters(
+                    projected,
+                    search=search,
+                    min_profit_cad=min_profit_cad,
+                    min_return_pct=min_return_pct,
+                    min_quantity=min_quantity,
+                    min_liquidity_cad=min_liquidity_cad,
+                    max_acquisition_cad=max_acquisition_cad,
+                    confidence=confidence,
+                ):
+                    continue
                 result.append({k: v for k, v in projected.items() if k not in LIST_DETAIL_FIELDS})
-            return result
+            result.sort(key=lambda row: financial_sort(row, rank_by))
+            return result[offset : offset + limit], len(result)
 
-        result = await asyncio.to_thread(projections, candidates, retained) if candidates else []
+        items, total = (
+            await asyncio.to_thread(projections, candidates, retained) if candidates else ([], 0)
+        )
         projected_at = elapsed_seconds()
     response.headers["Server-Timing"] = ", ".join(
         (
@@ -599,37 +635,11 @@ async def opportunities(
             f"projection;dur={(projected_at - loaded_at) * 1000:.2f}",
         )
     )
-    # Projection has completed. Rows are lightweight, untracked SQL values rather
-    # than ORM instances; release their retained/input trees before filtering and
-    # serializing the small display rows.
+    # Release retained/input trees before serializing the small display rows.
     del rows, current, candidates, retained
-    if not history:
-        result = [row for row in result if row["status"] not in TERMINAL]
-    if status:
-        result = [row for row in result if row["status"] == status]
-    result = [
-        row
-        for row in result
-        if meets_filters(
-            row,
-            search=search,
-            min_profit_cad=min_profit_cad,
-            min_return_pct=min_return_pct,
-            min_quantity=min_quantity,
-            min_liquidity_cad=min_liquidity_cad,
-            max_acquisition_cad=max_acquisition_cad,
-            confidence=confidence,
-        )
-    ]
-    field = {
-        "net_profit": "net_profit_cad",
-        "net_return": "net_return_pct",
-        "liquidity": "maximum_liquidity_cad",
-    }[sort]
-    result.sort(key=lambda row: financial_sort(row, field))
     return {
-        "items": result[offset : offset + limit],
-        "total": len(result),
+        "items": items,
+        "total": total,
         "limit": limit,
         "offset": offset,
         "matching_retained_routes": matching,
@@ -637,6 +647,7 @@ async def opportunities(
         "window_limited": matching > window,
         "sizing_search_limit": config.max_optimizer_evaluations,
         "sizing_scope": "Recent bounded candidate window; projected optimum may be uncertified",
+        "ranking_scope": "Financial metric, quality, freshness, capacity and verification",
         "selected_budget_cad": str(budget),
         "source": "live_and_retained_calculation_evidence",
     }
@@ -695,6 +706,7 @@ async def detail(
             config.maximum_book_age_seconds,
             evidence=latest.evidence if latest else None,
             current=active,
+            maximum_book_skew=config.maximum_book_skew_seconds,
         )
     return {
         **projected,
@@ -752,27 +764,33 @@ async def diagnostics_sizes(
     user: AuthenticatedUser,
     budget_cad: Budget = None,
 ):
-    if await db.get(ArbitrageRoute, route_id) is None:
-        raise HTTPException(404, "Opportunity not found")
-    evaluation = await db.scalar(
-        select(ArbitrageEvaluation)
-        .where(ArbitrageEvaluation.route_id == route_id)
-        .order_by(ArbitrageEvaluation.revision.desc())
-        .limit(1)
-    )
-    if evaluation is None:
-        raise HTTPException(409, "Retained sizing evidence unavailable")
     if _projection_gate.locked():
         raise HTTPException(
             429, "Candidate sizing busy; retry shortly", headers={"Retry-After": "2"}
         )
     try:
         async with _projection_gate:
+            evaluation = (
+                await db.execute(
+                    select(ArbitrageEvaluation.id, ArbitrageEvaluation.evidence)
+                    .where(ArbitrageEvaluation.route_id == route_id)
+                    .order_by(ArbitrageEvaluation.revision.desc())
+                    .limit(1)
+                )
+            ).one_or_none()
+            if evaluation is None:
+                if await db.get(ArbitrageRoute, route_id) is None:
+                    raise HTTPException(404, "Opportunity not found")
+                raise HTTPException(409, "Retained sizing evidence unavailable")
+            evaluation_id, evidence = evaluation
+            await db.commit()
+            config = request.app.state.settings.arbitrage
             value = await asyncio.to_thread(
                 size_diagnostics,
-                evaluation.evidence,
-                budget_cad or request.app.state.settings.arbitrage.default_budget_cad,
+                evidence,
+                budget_cad if budget_cad is not None else config.default_budget_cad,
+                max_search_evaluations=config.max_optimizer_evaluations,
             )
     except (ValueError, KeyError, TypeError, ArithmeticError):
         raise HTTPException(409, "Retained sizing evidence cannot be reconstructed") from None
-    return {**value, "route_id": str(route_id), "evaluation_id": str(evaluation.id)}
+    return {**value, "route_id": str(route_id), "evaluation_id": str(evaluation_id)}

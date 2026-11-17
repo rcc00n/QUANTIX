@@ -582,6 +582,7 @@ class ArbitrageEngine:
             "buy_symbol": bm.native_symbol,
             "sell_symbol": sm.native_symbol,
             "status": status,
+            "raw_price_discrepancy": True,
             "actionable": False,
             "eligibility": "UNVERIFIED",
             "calculation_version": CALCULATION_VERSION,

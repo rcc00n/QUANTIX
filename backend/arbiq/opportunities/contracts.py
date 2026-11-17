@@ -9,7 +9,8 @@ from arbiq.finance.contracts import exact_decimal, utc_timestamp
 from arbiq.market_data.contracts import BookLevel
 
 CALCULATION_VERSION = "quantix-depth-v1.1.0"
-DEFAULT_BUDGETS = tuple(Decimal(x) for x in (100, 250, 500, 1000, 2000, 5000, 10000))
+COMPARISON_CAPITALS = tuple(Decimal(x) for x in (50, 100, 250, 500, 1000, 2500, 5000))
+DEFAULT_BUDGETS = tuple(sorted((*COMPARISON_CAPITALS, Decimal(2000), Decimal(10000))))
 
 
 def _number(value: Decimal, *, positive: bool = False) -> None:
