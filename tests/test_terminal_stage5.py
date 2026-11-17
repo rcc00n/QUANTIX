@@ -108,6 +108,33 @@ def test_runtime_singleflight_is_bounded_and_contains_no_portfolio(monkeypatch):
     asyncio.run(check())
 
 
+def test_exact_candidate_filters_never_round_or_accept_missing_values():
+    row = {
+        "base_asset": "SYNTH",
+        "buy_exchange": "synthetic_buy",
+        "data_confidence": "SUSPICIOUS",
+        "net_profit_cad": "0.000000000000000001",
+        "net_return_pct": "-0.1",
+        "quantity": "0.000000000000000001",
+        "maximum_liquidity_cad": "100.000000000000000001",
+        "acquisition_cost_cad": "50",
+    }
+    assert meets_filters(
+        row,
+        search="SYNTHETIC",
+        min_profit_cad=Decimal("1e-18"),
+        confidence="SUSPICIOUS",
+        min_liquidity_cad=Decimal(100),
+    )
+    assert not meets_filters(row, min_profit_cad=Decimal("2e-18"))
+    assert not meets_filters(row, min_return_pct=Decimal(0))
+    assert not meets_filters(row, max_acquisition_cad=Decimal(49))
+    assert not meets_filters(
+        {**row, "maximum_liquidity_cad": None}, min_liquidity_cad=Decimal(1)
+    )
+    assert not meets_filters(
+        {**row, "net_profit_cad": "NaN"}, min_profit_cad=Decimal(0)
+    )
 
 
 
