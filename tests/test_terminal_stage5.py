@@ -155,3 +155,12 @@ def test_official_links_never_construct_unknown_routes():
     assert official_market_link("kraken", "BTC/CAD?redirect=elsewhere") is None
 
 
+def test_pending_lifecycle_reasons_are_not_counted_as_failed_opportunities():
+    result = summarize_trades(
+        [
+            {"status": "RECHECKING", "reason": "SYNTHETIC_WAITING_FOR_BOOK"},
+            {"status": "MISSED", "reason": "SYNTHETIC_INVENTORY_MISSING"},
+        ]
+    )
+    assert result["failure_reasons"] == {"SYNTHETIC_INVENTORY_MISSING": 1}
+    assert result["counts"]["RECHECKING"] == 1
