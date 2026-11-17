@@ -7,7 +7,7 @@ journal; delayed transfers cannot sell until settlement and a new observation.
 import asyncio
 from collections import defaultdict, deque
 from dataclasses import asdict, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -167,6 +167,9 @@ class PaperCoordinator:
                 for k, v in fx.items()
                 if v.available_at is None or v.available_at <= book.received_at
             }
+            order_restrictions = self.market_order_restrictions(
+                (book.market_id, target.get("opposite_id")), book.received_at
+            )
             async with self.sessions() as db:
                 trade = await db.get(PaperTrade, target["trade_id"])
                 order = await db.scalar(
@@ -202,11 +205,29 @@ class PaperCoordinator:
                             "first_valid_after_delay": True,
                             "opposite_book_asof": opposite,
                             "eligibility": reason,
+                            "market_order_restrictions": order_restrictions,
                         },
                     )
                 )
                 await db.commit()
                 self.metrics["causal_observations"] += 1
+
+    def market_order_restrictions(self, market_ids, decision_at):
+        market_map = getattr(self.collector.scanner, "market_map", {})
+        result = {}
+        for market_id in market_ids:
+            if market_id not in market_map:
+                continue
+            _, market = market_map[market_id]
+            rules = market.metadata.get("trading_rules") or {}
+            observed = rules.get("observed_at")
+            if (
+                rules.get("market_order_available") is False
+                and observed is not None
+                and datetime.fromisoformat(observed) <= decision_at
+            ):
+                result[str(market_id)] = rules
+        return result
 
     @decimal_context
     async def bootstrap(self, db, now):
@@ -640,8 +661,6 @@ class PaperCoordinator:
                 raw = trade.state.get("sell_eligible_at")
                 if not raw:
                     continue
-                from datetime import datetime
-
                 due = datetime.fromisoformat(raw)
             targets[order.market_id].append(
                 {
@@ -730,6 +749,7 @@ class PaperCoordinator:
         model = await db.get(Market, order.market_id)
         raw = trade.state["buy_input" if order.side == "buy" else "sell_input"]
         market = load_input(raw)
+        restrictions = observation.payload.get("market_order_restrictions", {})
         reservation_key = (
             trade.state.get("sell_reservation_key", trade.state["reservation_key"])
             if order.side == "sell"
@@ -739,6 +759,9 @@ class PaperCoordinator:
             other_raw = observation.payload.get("opposite_book_asof")
             other = CapturedBook.model_validate(other_raw) if other_raw else None
             try:
+                for side in ("buy", "sell"):
+                    if trade.state[f"{side}_input"]["market_id"] in restrictions:
+                        raise ValueError(f"{side.upper()}_MARKET_ORDER_UNAVAILABLE")
                 recheck_projection(
                     buy_book=book if order.side == "buy" else other,
                     sell_book=book if order.side == "sell" else other,
@@ -765,6 +788,10 @@ class PaperCoordinator:
                     other_order.status = "cancelled"
                     other_order.reason = "PREFLIGHT_REJECTED"
                 return
+        if market.market_id in restrictions:
+            order.status = "failed"
+            order.reason = "MARKET_ORDER_UNAVAILABLE"
+            return
         owned = await accounting.owned_reservation(db, trade.session_id, reservation_key)
         asset = model.quote_asset_id if order.side == "buy" else model.base_asset_id
         available = owned.get((model.exchange_id, asset), Decimal(0))

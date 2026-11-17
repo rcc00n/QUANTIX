@@ -111,6 +111,10 @@ def simulate_leg(
     slippage_bps: Decimal = Decimal(0),
     maximum_slippage_bps: Decimal | None = None,
 ) -> LegFill:
+    if rules.observed_at is not None and rules.observed_at > book.received_at:
+        raise ValueError("MARKET_RULES_NOT_YET_AVAILABLE")
+    if rules.market_order_available is False:
+        raise ValueError("MARKET_ORDER_UNAVAILABLE")
     with localcontext() as ctx:
         ctx.prec = 78
         requested, available, slippage_bps = map(
@@ -124,6 +128,12 @@ def simulate_leg(
         ):
             raise ValueError("Invalid leg inputs")
         levels = book.normalized.asks if side == "buy" else book.normalized.bids
+        if (
+            rules.version
+            and rules.price_tick
+            and any(level.price % rules.price_tick for level in levels)
+        ):
+            raise ValueError("PRICE_CONFLICTS_WITH_MARKET_TICK")
         quantity = min(requested, sum((x.quantity for x in levels), Decimal(0)))
         if rules.max_quantity:
             quantity = min(quantity, rules.max_quantity)

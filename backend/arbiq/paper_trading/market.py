@@ -7,16 +7,14 @@ from sqlalchemy import select
 
 from arbiq.db.models import Asset, Market
 from arbiq.market_data.quality import DataState
+from arbiq.opportunities.analysis import dump_input
+from arbiq.opportunities.conversions import (
+    FX_ASSET_KEYS,
+    capture_uncertainty_ms,
+    synchronized_conversion,
+)
 from arbiq.opportunities.math import convert, fill_depth
 from arbiq.portfolio.contracts import PriceEvidence
-
-FX_ASSET_KEYS = {
-    "fiat:CAD": "CAD",
-    "fiat:EUR": "EUR",
-    "fiat:USD": "USD",
-    "asset:USDC": "USDC",
-    "asset:USDT": "USDT",
-}
 
 
 def conversion_rejection(conversion, now):
@@ -75,12 +73,12 @@ class PaperMarkets:
                     amount = convert(item.to_cad, quantity)
                     return PriceEvidence(
                         amount / quantity,
-                        item.observed_at,
+                        item.oldest_observed_at or item.observed_at,
                         item.available_at,
                         item.verified,
                         item.source,
                         {
-                            "conversion": str(item),
+                            "conversion": dump_input(item),
                             "clock": clock.snapshot(),
                             "valued_quantity": str(quantity),
                         },
@@ -122,21 +120,34 @@ class PaperMarkets:
             ):
                 limitations.append("valuation_book_confidence_unavailable")
                 continue
-            quote = self.assets[market.quote_asset_id]
+            quote = self.assets.get(market.quote_asset_id)
+            if quote is None:
+                limitations.append("valuation_quote_identity_unavailable")
+                continue
             conversion = fx.get(FX_ASSET_KEYS.get(quote.canonical_key))
             reason = conversion_rejection(conversion, now)
             if reason:
                 limitations.append(reason)
+                continue
+            if conversion.selection_version and not synchronized_conversion(
+                conversion,
+                book.exchange_timestamp,
+                book.received_at,
+                capture_uncertainty_ms(book.verification.get("clock") or {}),
+                timedelta(seconds=self.collector.settings.arbitrage.maximum_book_skew_seconds),
+            ):
+                limitations.append("cad_conversion_capture_skew")
                 continue
             try:
                 with localcontext() as ctx:
                     ctx.prec = 78
                     notional = fill_depth(book.normalized.bids, quantity)
                     value = convert(conversion.to_cad, notional)
+                    fx_observed_at = conversion.oldest_observed_at or conversion.observed_at
                     return PriceEvidence(
                         value / quantity,
-                        min(book.exchange_timestamp, conversion.observed_at)
-                        if conversion.observed_at is not None
+                        min(book.exchange_timestamp, fx_observed_at)
+                        if fx_observed_at is not None
                         else book.exchange_timestamp,
                         max(book.received_at, conversion.available_at)
                         if conversion.available_at is not None
@@ -152,9 +163,10 @@ class PaperMarkets:
                             "reference_venue": market.exchange_id != exchange_id,
                             "book": book.model_dump(mode="json"),
                             "fx_source": conversion.source,
-                            "fx_observed_at": conversion.observed_at.isoformat()
-                            if conversion.observed_at is not None
+                            "fx_observed_at": fx_observed_at.isoformat()
+                            if fx_observed_at is not None
                             else None,
+                            "fx_conversion": dump_input(conversion),
                             "fx_available_at": conversion.available_at.isoformat()
                             if conversion.available_at is not None
                             else None,
