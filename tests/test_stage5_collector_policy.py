@@ -398,3 +398,25 @@ def test_process_telemetry_uses_elapsed_and_cpu_clocks_not_wall_time(monkeypatch
     assert value["current_rss_bytes"] == 16384 and value["peak_rss_bytes"] == 20480
 
 
+async def test_coverage_weighted_allocation_does_not_guarantee_one_funded_trade():
+    # SYNTHETIC capital allocation limitation:40 cells each receive225CAD after
+    # a10%reserve. The250CAD default attempt may remain inventory-constrained.
+    ex = uuid4()
+    asset_ids = [uuid4() for _ in range(40)]
+    weights = {(str(ex), str(asset)): D(1) for asset in asset_ids}
+    rates = {key: D(100) for key in weights}
+    marks = {
+        key: {"cad_per_unit": "100", "quantity": "2.25", "received_at": NOW.isoformat()}
+        for key in weights
+    }
+    items = await allocate_weighted(
+        D(9000),
+        weights,
+        rates,
+        marks,
+        {ex: SimpleNamespace(slug="synthetic")},
+        {a: SimpleNamespace(canonical_key="synthetic:" + str(a)) for a in asset_ids},
+        SimpleNamespace(slug="synthetic"),
+    )
+    assert sum(D(x["cad_value"]) for x in items) == 9000
+    assert all(D(x["cad_value"]) < 250 for x in items)
