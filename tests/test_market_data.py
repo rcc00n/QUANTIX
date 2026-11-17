@@ -238,12 +238,14 @@ def test_reference_confirmation_keeps_quote_units_and_independent_venues():
     repeated = cache.put(candidate, confirmation=True)
     assert repeated.verification["status"] == "REPEATED_WITH_REFERENCE_DISAGREEMENT"
     assert repeated.state == DataState.SUSPICIOUS
+    assert "resolved_reference_anomaly" not in repeated.verification
     recovered = cache.put(
         synthetic_capture(exchange="synthetic-c", market_id=candidate.market_id),
         confirmation=True,
     )
     assert recovered.state == DataState.HEALTHY
     assert recovered.verification["status"] == "CONFIRMED"
+    assert recovered.verification["resolved_reference_anomaly"] is True
     assert not cache.references(synthetic_capture(quote_key="asset:USDT"), datetime.now(UTC))
     pair = BookCache(CollectorConfig())
     pair.put(synthetic_capture(exchange="coinbaseexchange"))

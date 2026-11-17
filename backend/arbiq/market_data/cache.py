@@ -166,6 +166,8 @@ class BookCache:
                     "previous_content_sha256": previous.content_sha256 if previous else None,
                 }
             )
+        if unresolved and resolved:
+            verification["resolved_reference_anomaly"] = True
         state = (
             DataState.SUSPICIOUS if anomaly and book.state != DataState.UNAVAILABLE else book.state
         )
