@@ -125,7 +125,18 @@ def test_funding_replay_rejects_noncausal_or_unpriced_evidence(failure):
         read_pair(row, AT, presets()["Aggressive Research"])
 
 
-async def test_compare_and_select_immutable_proposal_once(funding_api, environment, monkeypatch):
+@pytest.mark.parametrize(
+    ("profile", "capital"),
+    [
+        (None, "1000"),
+        ("HYBRID_OPTIMIZER", "10000"),
+        ("NO_TRADING", "50000"),
+        ("LIQUID_ARBITRAGE", "100000"),
+    ],
+)
+async def test_compare_and_select_immutable_proposal_once(
+    funding_api, environment, monkeypatch, profile, capital
+):
     c, sessions, _asset = funding_api
     clock = {"now": AT + timedelta(seconds=1)}
 
@@ -183,12 +194,13 @@ async def test_compare_and_select_immutable_proposal_once(funding_api, environme
         )
         await db.commit()
     body = {
-        "capital_cad": "1000",
+        "capital_cad": capital,
         "trade_amount_cad": "250",
         "max_venue_pct": "100",
         "max_asset_pct": "100",
         "max_reserve_pct": "100",
         "exchange_slugs": [v.slug for v in venues],
+        **({"strategy_lab_profile": profile} if profile else {}),
     }
     response = c.post("/api/v1/paper/funding/compare", json=body)
     assert response.status_code == 200, response.text
@@ -200,11 +212,17 @@ async def test_compare_and_select_immutable_proposal_once(funding_api, environme
         "DIVERSIFIED_HYBRID",
     ]
     assert len({p["as_of"] for p in plans}) == 1
-    assert all(D(p["total_cad"]) == 1000 for p in plans)
+    assert all(D(p["total_cad"]) == D(capital) for p in plans)
     selected = plans[-1]
     assert selected["feasible"] and selected["creatable"] and selected["funded_route_count"] == 1
+    assert selected["proposed_strategy"].get("strategy_lab_profile") == profile
     costs = selected["route_capacity"][0]["target_pinned"]["projected_costs"]
-    assert set(costs) == {"fees_cad", "fx_drag_cad", "slippage_reserve_cad", "rebalancing_cad"}
+    assert set(costs) == {
+        "fees_cad",
+        "fx_drag_cad",
+        "slippage_reserve_cad",
+        "rebalancing_cad",
+    }
     assert isinstance(costs["fees_cad"], str) and D(costs["fees_cad"]) > 0
     assert not plans[0]["creatable"]
     blocked = c.post("/api/v1/paper/funding/compare", json={**body, "eligibility": "VALIDATED"})
@@ -212,14 +230,16 @@ async def test_compare_and_select_immutable_proposal_once(funding_api, environme
     created_body = {
         "name": "SYNTHETIC selected research",
         "proposal_id": selected["id"],
-        "capital_cad": "1000",
+        "capital_cad": capital,
         "idempotency_key": "SYNTHETIC-select-one",
     }
     path = "/api/v1/paper/funding/experiments"
     submissions = await asyncio.gather(
         asyncio.to_thread(c.post, path, json=created_body),
         asyncio.to_thread(
-            c.post, path, json={**created_body, "idempotency_key": "SYNTHETIC-concurrent-key"}
+            c.post,
+            path,
+            json={**created_body, "idempotency_key": "SYNTHETIC-concurrent-key"},
         ),
     )
     assert all(item.status_code == 201 for item in submissions)
@@ -227,11 +247,35 @@ async def test_compare_and_select_immutable_proposal_once(funding_api, environme
     assert concurrent["id"] == obs["id"]
     assert {obs["reused"], concurrent["reused"]} == {True, False}
     assert obs["classification"] == "RESEARCH"
+    assert D(obs["initial_equity_cad"]) == D(capital)
+    assert obs["settings"].get("strategy_lab_profile") == profile
+    if profile:
+        rewritten = {
+            key: value for key, value in obs["settings"].items() if key != "strategy_lab_profile"
+        }
+        assert (
+            c.put(f"/api/v1/paper/sessions/{obs['id']}/strategy", json=rewritten).status_code == 409
+        )
+        direct = c.post("/api/v1/paper/sessions", json={"settings": obs["settings"]})
+        assert direct.status_code == 422
+    if profile == "NO_TRADING":
+        trade = c.post(
+            f"/api/v1/paper/sessions/{obs['id']}/rebalance",
+            json={
+                "from_exchange": venues[0].slug,
+                "to_exchange": venues[1].slug,
+                "asset": "fiat:CAD",
+                "quantity": "20",
+                "fee_quantity": "0",
+            },
+        )
+        assert trade.status_code == 409, trade.text
     changed = c.post(path, json={**created_body, "capital_cad": "999"})
     assert changed.status_code == 409
     clock["now"] += timedelta(seconds=40)
     stale = c.post(
-        "/api/v1/paper/funding/experiments", json={**created_body, "proposal_id": plans[1]["id"]}
+        "/api/v1/paper/funding/experiments",
+        json={**created_body, "proposal_id": plans[1]["id"]},
     )
     assert stale.status_code == 409
     retry = c.post(

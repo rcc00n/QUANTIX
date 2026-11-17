@@ -42,6 +42,7 @@ from arbiq.paper_trading.execution import (
     recheck_projection,
     simulate_leg,
 )
+from arbiq.paper_trading.funding_sizing import read_pair
 from arbiq.paper_trading.market import PaperMarkets
 from arbiq.paper_trading.models import ExecutionObservation, PaperControl, RebalanceRequest
 from arbiq.paper_trading.service import Allocation, create_portfolio
@@ -310,6 +311,8 @@ class PaperCoordinator:
     @decimal_context
     async def schedule(self, db, control, session, route, evaluation, now):
         strategy = read_pinned_strategy(control.settings)
+        if strategy.strategy_lab_profile == "NO_TRADING":
+            return
         key = f"paper:{session.id}:{evaluation.id}:{control.strategy_version_id}"
         await accounting.lock_session(db, session.id)
         if await db.scalar(select(PaperTrade.id).where(PaperTrade.idempotency_key == key)):
@@ -399,6 +402,16 @@ class PaperCoordinator:
         if not allowed_paper_asset(strategy.allowed_assets, body.get("base_asset"), canonical_base):
             reject("ASSET_FILTER")
             return
+        if strategy.strategy_lab_profile:
+            if now - evaluation.evaluated_at > timedelta(seconds=strategy.maximum_book_age_seconds):
+                reject("STALE_STRATEGY_LAB_EVALUATION")
+                return
+            try:
+                read_pair(evaluation, now, strategy)
+            except (AttributeError, ValueError, KeyError, TypeError, ArithmeticError) as exc:
+                code = str(exc)
+                reject(code if code.isupper() else "INVALID_STRATEGY_LAB_EVIDENCE")
+                return
         active = await db.scalar(
             select(func.count())
             .select_from(PaperTrade)
@@ -1314,6 +1327,11 @@ class PaperCoordinator:
                     select(PaperControl, PaperSession)
                     .join(PaperSession)
                     .where(PaperControl.status == "ACTIVE")
+                    .where(
+                        PaperControl.settings["strategy_lab_profile"]
+                        .as_string()
+                        .is_distinct_from("NO_TRADING")
+                    )
                     .limit(20)
                 )
             ).all()

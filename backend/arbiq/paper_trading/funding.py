@@ -49,7 +49,13 @@ from arbiq.paper_trading.service import Allocation, create_portfolio, session_dt
 from arbiq.portfolio.contracts import AccountingError, decimal_context, stored
 from arbiq.portfolio.models import PortfolioPosition
 from arbiq.settings.models import FundingExperiment, FundingProposal
-from arbiq.settings.strategy import PaperStrategy, presets, read_pinned_strategy
+from arbiq.settings.strategy import (
+    PaperStrategy,
+    StrategyLabProfile,
+    presets,
+    read_pinned_strategy,
+    strategy_lab_settings,
+)
 
 router = APIRouter(prefix="/paper/funding", tags=["virtual funding planner"])
 STEP = Decimal("1e-18")
@@ -403,6 +409,7 @@ class ProposalRequest(Contract):
     eligibility: Literal["RESEARCH", "VALIDATED"] = "RESEARCH"
     planning_cutoff: datetime | None = None
     inventory_asset_keys: tuple[str, ...] = ()
+    strategy_lab_profile: StrategyLabProfile | None = None
 
     @model_validator(mode="after")
     def bounded(self):
@@ -622,7 +629,9 @@ def classify_funded_requirements(requirements, allocations):
 
 
 def optimized_strategy(body: ProposalRequest) -> PaperStrategy:
-    return presets()["Aggressive Research"].model_copy(
+    profile = body.strategy_lab_profile
+    settings = strategy_lab_settings(profile) if profile else presets()["Aggressive Research"]
+    return settings.model_copy(
         update={
             "trade_amount_cad": body.trade_amount_cad,
             "min_buy_capital_cad": body.min_buy_capital_cad,
@@ -1009,6 +1018,11 @@ async def build_proposals(body, request, db, user, policies):
                 "eligibility_verified": False,
                 "creation_requires_fresh_marks": True,
                 "proposed_strategy": planned_strategy.model_dump(mode="json"),
+                **(
+                    {"strategy_lab_profile": body.strategy_lab_profile}
+                    if body.strategy_lab_profile
+                    else {}
+                ),
                 "planning_window": {
                     "from": (cutoff - timedelta(days=body.lookback_days)).isoformat(),
                     "cutoff": cutoff.isoformat(),
@@ -1048,7 +1062,9 @@ async def compare(body: ProposalRequest, request: Request, db: DB, user: Authent
 @router.post("/proposal")
 @decimal_context
 async def proposal(body: ProposalRequest, request: Request, db: DB, user: AuthenticatedUser):
-    if body.policy in OPTIMIZED_POLICIES:
+    if body.strategy_lab_profile and body.policy == "EQUAL_VENUES":
+        raise HTTPException(422, "Select a current Strategy Lab allocation policy")
+    if body.strategy_lab_profile or body.policy in OPTIMIZED_POLICIES:
         return (await build_proposals(body, request, db, user, (body.policy,)))["proposals"][0]
     if (
         body.eligibility != "RESEARCH"
@@ -1346,6 +1362,8 @@ async def experiment(body: ExperimentRequest, request: Request, db: DB, user: Au
     if body.proposal_id and (proposal_row is None or proposal_row.user_id != user.id):
         raise HTTPException(404, "Funding proposal not found")
     optimized = bool(proposal_row and proposal_row.payload.get("allocation_version"))
+    if body.settings and body.settings.strategy_lab_profile and not optimized:
+        raise HTTPException(422, "Select an immutable Strategy Lab funding proposal")
     if not optimized and body.idempotency_key.startswith("allocation:v2:"):
         raise HTTPException(422, "Reserved allocation idempotency namespace")
     key = f"allocation:v2:{body.proposal_id}" if optimized else body.idempotency_key

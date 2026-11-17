@@ -100,6 +100,8 @@ async def sessions(db: DB, user: AuthenticatedUser):
 
 @router.post("/paper/sessions", status_code=201)
 async def create(body: CreatePortfolio, request: Request, db: DB, user: AuthenticatedUser):
+    if body.settings and body.settings.strategy_lab_profile:
+        raise HTTPException(422, "Select an immutable Strategy Lab funding proposal")
     now = await now_checked(request)
     settings = (
         body.settings
@@ -244,6 +246,8 @@ async def strategy_update(
     session_id: UUID, body: PaperStrategy, request: Request, db: DB, user: AuthenticatedUser
 ):
     session, control = await owned(db, user, session_id)
+    if body.strategy_lab_profile != control.settings.get("strategy_lab_profile"):
+        raise HTTPException(409, "Create a new funded portfolio to change its Strategy Lab profile")
     if (body.mode == "RESEARCH_SHADOW") != (control.classification == "RESEARCH"):
         raise HTTPException(409, "Create a separate portfolio to change research classification")
     if body.starting_capital_cad != session.initial_equity_cad:
@@ -463,6 +467,8 @@ async def rebalance(
     session_id: UUID, body: RebalanceBody, request: Request, db: DB, user: AuthenticatedUser
 ):
     _, control = await owned(db, user, session_id)
+    if control.settings.get("strategy_lab_profile") == "NO_TRADING":
+        raise HTTPException(409, "The no-trading benchmark preserves its original inventory")
     now = await now_checked(request)
     if not body.network or (
         not body.network_verified

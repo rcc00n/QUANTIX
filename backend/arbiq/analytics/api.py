@@ -12,12 +12,35 @@ from starlette.background import BackgroundTask
 
 from arbiq.analytics.export import MAX_GENERATION_SECONDS, make_export
 from arbiq.analytics.service import analytics, owned_session, period_for, series
+from arbiq.analytics.strategy_lab import StrategyLabRequest, strategy_cohort
 from arbiq.auth.dependencies import DB, AuthenticatedUser
 from arbiq.db.models import ReportExport, SystemEvent
 from arbiq.market_data.api import utc_reference
+from arbiq.paper_trading.api import now_checked
 
 router = APIRouter(tags=["analytics and reports"])
 _export_gate = asyncio.Semaphore(1)
+_strategy_lab_gate = asyncio.Lock()
+
+
+@router.post("/analytics/strategy-lab/compare")
+async def compare_strategies(
+    body: StrategyLabRequest, request: Request, db: DB, user: AuthenticatedUser
+):
+    if _strategy_lab_gate.locked():
+        raise HTTPException(
+            429, "A strategy comparison is already running", headers={"Retry-After": "5"}
+        )
+    async with _strategy_lab_gate:
+        now = await now_checked(request)
+        try:
+            async with asyncio.timeout(8):
+                await db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"))
+                return await strategy_cohort(db, user.id, body, now)
+        except TimeoutError:
+            raise HTTPException(
+                503, "Comparison exceeded its query budget. Select a shorter period."
+            ) from None
 
 
 @router.get("/analytics/sessions/{session_id}")

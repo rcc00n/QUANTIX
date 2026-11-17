@@ -71,7 +71,10 @@ async def owned_session(db, user_id, session_id, strategy_version_id=None):
     return row
 
 
-async def reconciliation(db, session_id, end):
+async def reconciliation(db, session_id, end, *, causal=False):
+    cutoff = [Journal.session_id == session_id, Journal.effective_at < end]
+    if causal:
+        cutoff.extend((Journal.created_at < end, LedgerEntry.created_at < end))
     entries = (
         select(
             LedgerEntry.journal_id,
@@ -80,7 +83,7 @@ async def reconciliation(db, session_id, end):
         )
         .join(VirtualAccount, VirtualAccount.id == LedgerEntry.account_id)
         .join(Journal, Journal.id == LedgerEntry.journal_id)
-        .where(Journal.session_id == session_id, Journal.effective_at < end)
+        .where(*cutoff)
         .group_by(LedgerEntry.journal_id, VirtualAccount.asset_id)
         .subquery()
     )
@@ -92,8 +95,7 @@ async def reconciliation(db, session_id, end):
         .join(LedgerEntry, LedgerEntry.account_id == VirtualAccount.id)
         .join(Journal, Journal.id == LedgerEntry.journal_id)
         .where(
-            Journal.session_id == session_id,
-            Journal.effective_at < end,
+            *cutoff,
             VirtualAccount.role.in_(("available", "reserved")),
         )
         .group_by(VirtualAccount.id)

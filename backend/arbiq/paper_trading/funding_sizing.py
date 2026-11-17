@@ -118,6 +118,23 @@ def read_pair(evaluation, cutoff: datetime, strategy: PaperStrategy) -> PinnedPa
     confidence = [
         checked_book(book, at, age, strategy.allow_missing_source_timestamp) for book in books
     ]
+    profile = strategy.strategy_lab_profile
+    resolved_anomaly = False
+    if profile:
+        if not all(confidence):
+            raise ValueError("STRATEGY_LAB_REQUIRES_HEALTHY_SOURCE_BOOKS")
+        resolved_anomaly = any(
+            book.get("verification", {}).get("resolved_reference_anomaly") is True
+            and book["verification"].get("fresh_rest_recheck") is True
+            and book["verification"].get("status") == "CONFIRMED"
+            for book in books
+        )
+        if profile == "ANOMALY_HUNTER" and not (
+            resolved_anomaly and evidence.get("both_legs_rechecked") is True
+        ):
+            raise ValueError("CONFIRMED_ANOMALY_EVIDENCE_UNAVAILABLE")
+        if profile == "LIQUID_ARBITRAGE" and resolved_anomaly:
+            raise ValueError("OBSERVATION_BELONGS_TO_ANOMALY_COHORT")
     uncertainty = timedelta(
         milliseconds=sum(
             capture_uncertainty_ms(book.get("verification", {}).get("clock") or {})
@@ -189,6 +206,11 @@ def read_pair(evaluation, cutoff: datetime, strategy: PaperStrategy) -> PinnedPa
         "sell_fee_version_id": str(evaluation.sell_fee_version_id),
         "fx_book_references": sorted(used_fx),
         "source_timestamps_complete": all(bool(book.get("exchange_timestamp")) for book in books),
+        **(
+            {"strategy_lab_profile": profile, "resolved_reference_anomaly": resolved_anomaly}
+            if profile
+            else {}
+        ),
         "account_eligibility_verified": False,
         "fees_verified": False,
     }

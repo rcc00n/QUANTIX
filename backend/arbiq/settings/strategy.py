@@ -9,6 +9,8 @@ from arbiq.db.models import StrategyVersion, SystemEvent, User
 from arbiq.finance.contracts import Contract, NonNegativeDecimal, PositiveDecimal
 from arbiq.paper_trading.models import StrategyHead
 
+StrategyLabProfile = Literal["LIQUID_ARBITRAGE", "ANOMALY_HUNTER", "HYBRID_OPTIMIZER", "NO_TRADING"]
+
 
 class TransferPolicy(Contract):
     network: str = Field(default="", max_length=80)
@@ -26,6 +28,9 @@ class TransferPolicy(Contract):
 class PaperStrategy(Contract):
     schema_version: Literal["2.0"] = "2.0"
     preset: Literal["Conservative", "Balanced", "Aggressive Research", "Custom"] = "Balanced"
+    strategy_lab_profile: StrategyLabProfile | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     starting_capital_cad: PositiveDecimal = "10000"
     trade_amount_cad: PositiveDecimal = "1000"
     min_buy_capital_cad: NonNegativeDecimal = "50"
@@ -66,7 +71,45 @@ class PaperStrategy(Contract):
             raise ValueError("Unverified data confidence requires a separate research portfolio")
         if len(self.allowed_exchanges) > 30 or len(self.allowed_assets) > 100:
             raise ValueError("Bounded allowlists required")
+        if self.strategy_lab_profile and (
+            self.mode != "RESEARCH_SHADOW"
+            or self.research_execution_model != "PRE_FUNDED"
+            or self.minimum_confidence != "HEALTHY"
+            or self.allow_missing_source_timestamp
+            or self.threshold_logic != "AND"
+            or self.minimum_profit_cad <= 0
+            or self.minimum_profit_pct <= 0
+        ):
+            raise ValueError(
+                "Strategy Lab requires healthy, prefunded research with positive profit thresholds"
+            )
         return self
+
+
+def strategy_lab_settings(profile: StrategyLabProfile) -> PaperStrategy:
+    risk_settings = {
+        "LIQUID_ARBITRAGE": {
+            "minimum_profit_cad": "10",
+            "minimum_profit_pct": "1",
+            "maximum_concurrent": 1,
+            "maximum_loss_cad": "20",
+        },
+        "ANOMALY_HUNTER": {
+            "maximum_concurrent": 1,
+            "maximum_simulations_per_hour": 20,
+            "maximum_loss_cad": "25",
+        },
+        "HYBRID_OPTIMIZER": {},
+        "NO_TRADING": {},
+    }
+    return PaperStrategy(
+        preset="Custom",
+        strategy_lab_profile=profile,
+        mode="RESEARCH_SHADOW",
+        maximum_capital_per_exchange_pct="60",
+        maximum_inventory_exposure_pct="70",
+        **risk_settings[profile],
+    )
 
 
 def read_pinned_strategy(settings: dict) -> PaperStrategy:

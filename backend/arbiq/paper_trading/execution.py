@@ -1,12 +1,13 @@
 """Deterministic single-leg fills from observed depth. Never an exchange client."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, localcontext
 
 from arbiq.finance.contracts import exact_decimal
 from arbiq.market_data.quality import CapturedBook, DataState
 from arbiq.opportunities.contracts import Evaluation, Fee, MarketRules
+from arbiq.opportunities.conversions import capture_uncertainty_ms
 from arbiq.opportunities.math import fill_depth, quantity_for_notional
 
 VERSION = "paper-depth-v1.2.0"
@@ -243,6 +244,17 @@ def recheck_projection(
             )
             if not good:
                 raise ValueError(reason)
+        if strategy.strategy_lab_profile:
+            uncertainty = sum(
+                capture_uncertainty_ms(book.verification.get("clock") or {})
+                for book in (buy_book, sell_book)
+            )
+            skew_limit = timedelta(seconds=10, milliseconds=-uncertainty)
+            if (
+                abs(buy_book.received_at - sell_book.received_at) > skew_limit
+                or abs(buy_book.exchange_timestamp - sell_book.exchange_timestamp) > skew_limit
+            ):
+                raise ValueError("STRATEGY_LAB_CROSS_BOOK_SKEW")
         if buy_book.market_id != __import__("uuid").UUID(
             buy_input.market_id
         ) or sell_book.market_id != __import__("uuid").UUID(sell_input.market_id):
