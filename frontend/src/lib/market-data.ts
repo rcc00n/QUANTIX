@@ -1,5 +1,19 @@
 export type DataState = "HEALTHY" | "DEGRADED" | "STALE" | "SUSPICIOUS" | "UNAVAILABLE";
 export type MarketTier = "FAST_LANE" | "STANDARD" | "RESEARCH";
+export type CanadianPublicStatus =
+  | "CANADIAN_SPOT_DOCUMENTED"
+  | "SEPARATE_PRODUCT_UNVERIFIED"
+  | "CANADA_RESTRICTED"
+  | "CANADIAN_SERVICE_CEASED"
+  | "RESIDENT_ONBOARDING_UNAVAILABLE"
+  | "REGIONAL_RESTRICTIONS"
+  | "UNVERIFIED";
+export type AlbertaPublicStatus =
+  | "PUBLIC_SCOPE_DOCUMENTED"
+  | "RESTRICTED"
+  | "CANADIAN_SERVICE_CEASED"
+  | "RESIDENT_ONBOARDING_UNAVAILABLE"
+  | "UNVERIFIED";
 export type NativeStreamStatus = {
   subscribed: string[];
   synchronized: number;
@@ -59,6 +73,12 @@ export type ExchangeFeed = {
       entity: string | null;
       source: string | null;
       scope: string;
+      public_status?: CanadianPublicStatus;
+      alberta_status?: AlbertaPublicStatus;
+      account_status?: "UNVERIFIED";
+      sources?: { label: string; url: string }[];
+      restricted_assets?: string[];
+      owner_checklist?: string[];
       manual_trading_eligible: false;
       reviewed_at: string | null;
       venue_group: string;

@@ -44,7 +44,18 @@ test("SYNTHETIC: collector age advances without trusting browser wall-clock jump
           failed_requests: 0,
           successful_requests: 10,
           reconnects: 0,
-          capabilities: {},
+          capabilities: {
+            canadian_eligibility: {
+              classification: "UNVERIFIED",
+              public_status: "CANADA_RESTRICTED",
+              alberta_status: "RESTRICTED",
+              account_status: "UNVERIFIED",
+              scope: "SYNTHETIC public restrictions for test venue",
+              sources: [{ label: "SYNTHETIC source", url: "https://example.com/eligibility" }],
+              reviewed_at: "2026-01-01",
+              owner_checklist: ["SYNTHETIC verification step"],
+            },
+          },
           freshness_counts: { FRESH: 1, AGING: 2, STALE: 1 },
           timings: { request_ms: { p50: 210, p95: null, sample_count: 10 } },
         },
@@ -56,6 +67,15 @@ test("SYNTHETIC: collector age advances without trusting browser wall-clock jump
   );
   await page.goto("/exchanges");
   const row = page.getByRole("row").filter({ hasText: "SYNTHETIC timing venue" });
+  await expect(row.getByText("Canada restricted", { exact: true })).toBeVisible();
+  await expect(row.getByText("Owner account unverified", { exact: true })).toBeVisible();
+  await expect(page.getByText("Alberta restricted · Owner account unverified")).toBeVisible();
+  await expect(page.getByRole("link", { name: "SYNTHETIC source" })).toHaveAttribute(
+    "href",
+    "https://example.com/eligibility",
+  );
+  await page.getByText("Owner verification checklist", { exact: true }).click();
+  await expect(page.getByText("SYNTHETIC verification step", { exact: true })).toBeVisible();
   await expect(row.getByText("1.0s", { exact: true })).toBeVisible();
   await expect(row.getByText("210 ms last REST call", { exact: true })).toBeVisible();
   await page.clock.runFor(2100);

@@ -17,7 +17,9 @@ import {
   age,
   decimal,
   utc,
+  type AlbertaPublicStatus,
   type Book,
+  type CanadianPublicStatus,
   type DataState,
   type DiscoveredMarket,
   type ExchangeFeed,
@@ -31,6 +33,41 @@ const marketTierLabels: Record<MarketTier, string> = {
   STANDARD: "Standard",
   RESEARCH: "Research",
 };
+
+const canadianStatusLabels: Record<CanadianPublicStatus, string> = {
+  CANADIAN_SPOT_DOCUMENTED: "Canadian spot documented",
+  SEPARATE_PRODUCT_UNVERIFIED: "Adapter product unverified",
+  CANADA_RESTRICTED: "Canada restricted",
+  CANADIAN_SERVICE_CEASED: "Canadian service ceased",
+  RESIDENT_ONBOARDING_UNAVAILABLE: "Canadian resident sign-up unavailable",
+  REGIONAL_RESTRICTIONS: "Regional restrictions",
+  UNVERIFIED: "Unverified",
+};
+
+const albertaStatusLabels: Record<AlbertaPublicStatus, string> = {
+  PUBLIC_SCOPE_DOCUMENTED: "Alberta public scope documented",
+  RESTRICTED: "Alberta restricted",
+  CANADIAN_SERVICE_CEASED: "Canadian withdrawal includes Alberta",
+  RESIDENT_ONBOARDING_UNAVAILABLE: "Alberta resident sign-up unavailable",
+  UNVERIFIED: "Alberta public scope unverified",
+};
+
+function CanadianEligibility({ feed }: { feed: ExchangeFeed }) {
+  const eligibility = feed.capabilities.canadian_eligibility;
+  const registered = eligibility?.classification === "REGISTERED_ENTITY";
+  return (
+    <>
+      <span className="eligibility-tag">
+        {eligibility?.public_status
+          ? canadianStatusLabels[eligibility.public_status]
+          : registered
+            ? "Registered entity"
+            : "Unverified"}
+      </span>
+      <small className="eligibility-note">Owner account unverified</small>
+    </>
+  );
+}
 
 function State({ state }: { state: DataState }) {
   return (
@@ -369,16 +406,7 @@ export function ExchangeExplorer({ initialFeeds }: { initialFeeds: ExchangeFeed[
                   </small>
                 </td>
                 <td>
-                  <span className="eligibility-tag">
-                    {feed.capabilities.canadian_eligibility?.classification === "REGISTERED_ENTITY"
-                      ? "Registered entity"
-                      : "Unverified"}
-                  </span>
-                  <small className="eligibility-note">
-                    {feed.capabilities.canadian_eligibility?.classification === "REGISTERED_ENTITY"
-                      ? "Account / product review required"
-                      : "Reference data only"}
-                  </small>
+                  <CanadianEligibility feed={feed} />
                 </td>
               </tr>
             ))}
@@ -721,12 +749,42 @@ export function ExchangeExplorer({ initialFeeds }: { initialFeeds: ExchangeFeed[
         <div className="eligibility-detail">
           <ShieldQuestion size={18} />
           <div>
-            <strong>{eligibility?.entity || "Canadian eligibility unverified"}</strong>
-            <p>{eligibility?.scope || "No Canadian trading eligibility has been verified."}</p>
-            {eligibility?.source && (
+            <strong>{eligibility?.entity || "Canadian trading eligibility"}</strong>
+            <p>{eligibility?.scope || "Canadian trading eligibility requires verification."}</p>
+            {eligibility?.alberta_status && (
+              <p>{albertaStatusLabels[eligibility.alberta_status]} · Owner account unverified</p>
+            )}
+            {!!eligibility?.restricted_assets?.length && (
+              <p>
+                Documented asset restrictions include {eligibility.restricted_assets.join(", ")}
+              </p>
+            )}
+            {!!eligibility?.sources?.length && (
+              <ul>
+                {eligibility.sources.map(({ label, url }) => (
+                  <li key={url}>
+                    <a href={url} target="_blank" rel="noreferrer">
+                      {label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {eligibility?.reviewed_at && <p>Public sources reviewed {eligibility.reviewed_at}</p>}
+            {!eligibility?.sources?.length && eligibility?.source && (
               <a href={eligibility.source} target="_blank" rel="noreferrer">
-                Official registration source · reviewed {eligibility.reviewed_at}
+                Official eligibility source
               </a>
+            )}
+            {!!eligibility?.owner_checklist?.length && (
+              <details className="mt-3 text-xs">
+                <summary>Owner verification checklist</summary>
+                <ul className="mt-2 list-disc space-y-1 pl-4">
+                  {eligibility.owner_checklist.map((step) => (
+                    <li key={step}>{step}</li>
+                  ))}
+                </ul>
+              </details>
             )}
           </div>
         </div>
