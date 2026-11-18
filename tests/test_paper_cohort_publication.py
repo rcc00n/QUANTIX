@@ -8,9 +8,11 @@ from uuid import UUID, uuid4
 import pytest
 import test_paper_api as paper_fixtures
 from arbiq.db.models import Asset, PaperSession, PaperTrade, StrategyVersion
+from arbiq.opportunities.contracts import identity_cad
 from arbiq.paper_trading import cohort
 from arbiq.paper_trading.cohort_market import SelectedMarket, opening_demands
 from arbiq.paper_trading.coordinator import scheduled_projection
+from arbiq.paper_trading.execution import enforce_cohort_buy_cap
 from arbiq.paper_trading.models import PaperControl, StrategyHead
 from arbiq.portfolio.accounting import reconcile
 from arbiq.portfolio.models import AccountingMovement, PortfolioCheckpoint
@@ -52,10 +54,24 @@ def test_scheduling_prefers_qualified_target_and_honors_the_hard_cap(monkeypatch
     assert budgets[0] < Decimal(250) < budgets[-1] < Decimal(500)
 
 
+def test_exact_fee_inclusive_buy_limit_fails_closed_at_execution():
+    at = datetime(2026, 11, 22, 6, tzinfo=UTC)
+    strategy = cohort.cohort_strategy()
+    enforce_cohort_buy_cap(Decimal(500), identity_cad(), at, strategy)
+    with pytest.raises(ValueError, match="MAXIMUM_BUY_CAPITAL"):
+        enforce_cohort_buy_cap(
+            Decimal("500.000000000000000001"), identity_cad(), at, strategy
+        )
+    with pytest.raises(ValueError, match="BUY_CAP_CAD_EVIDENCE_UNAVAILABLE"):
+        enforce_cohort_buy_cap(Decimal(490), None, at, strategy)
+
+
 def test_opening_uses_losing_depth_without_synthesizing_an_anomaly():
     at = datetime(2026, 11, 22, 6, tzinfo=UTC)
     base = SimpleNamespace(canonical_key="asset:BTC", kind="crypto", symbol="BTC")
-    cad = SimpleNamespace(id=uuid4(), canonical_key="fiat:CAD", kind="fiat", symbol="CAD")
+    cad = SimpleNamespace(
+        id=uuid4(), canonical_key="fiat:CAD", kind="fiat", symbol="CAD"
+    )
     markets, books = [], []
     for venue in ("SYNTHETIC_FIRST", "SYNTHETIC_SECOND"):
         market = SimpleNamespace(

@@ -36,6 +36,7 @@ from arbiq.opportunities.math import convert, optimize_route
 from arbiq.opportunities.storage import OpportunityStore
 from arbiq.paper_trading.execution import (
     VERSION,
+    enforce_cohort_buy_cap,
     evidence_eligibility,
     floor_derived,
     planned_reserves,
@@ -524,6 +525,11 @@ class PaperCoordinator:
         except (ValueError, ArithmeticError):
             reject("UNREPRESENTABLE_RESERVATION")
             return
+        try:
+            enforce_cohort_buy_cap(buy_reserve, buy.fx, evaluation.evaluated_at, strategy)
+        except ValueError as exc:
+            reject(str(exc))
+            return
         if (
             best.acquisition_cost_cad is None
             or best.acquisition_cost_cad < strategy.minimum_liquidity_cad
@@ -852,6 +858,27 @@ class PaperCoordinator:
             order.status = "failed"
             order.reason = str(exc)
             return
+        if order.side == "buy" and strategy.target_trade_cad is not None:
+            try:
+                fx = (
+                    market.fx
+                    if market.quote_currency == "CAD"
+                    else load_input(
+                        {**raw, "fx": observation.payload.get("fx", {}).get(market.quote_currency)}
+                    ).fx
+                )
+                cash = fill.quote_notional + (
+                    fill.fee_quantity if fill.fee_currency == "quote" else Decimal(0)
+                )
+                enforce_cohort_buy_cap(cash, fx, observation.received_at, strategy)
+            except (KeyError, TypeError, ValueError) as exc:
+                order.status = "failed"
+                order.reason = (
+                    str(exc)
+                    if str(exc) == "MAXIMUM_BUY_CAPITAL"
+                    else "BUY_CAP_CAD_EVIDENCE_UNAVAILABLE"
+                )
+                return
         quote_asset = await db.get(Asset, model.quote_asset_id)
         quote_rate = self._fx(observation.payload, quote_asset.symbol, fill.quote_notional)
         base_rate = fill.observed_vwap * quote_rate if quote_rate is not None else None

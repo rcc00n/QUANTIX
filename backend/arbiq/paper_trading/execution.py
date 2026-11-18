@@ -8,7 +8,7 @@ from arbiq.finance.contracts import exact_decimal
 from arbiq.market_data.quality import CapturedBook, DataState
 from arbiq.opportunities.contracts import Evaluation, Fee, MarketRules
 from arbiq.opportunities.conversions import capture_uncertainty_ms
-from arbiq.opportunities.math import fill_depth, quantity_for_notional
+from arbiq.opportunities.math import fill_depth, quantity_for_notional, required_input
 
 VERSION = "paper-depth-v1.2.0"
 UNIT = Decimal("1e-18")
@@ -53,6 +53,25 @@ def planned_reserves(
                 evaluation.sell_quantity + (sell_charge if sell_fee.currency == "base" else 0)
             ),
         )
+
+
+def enforce_cohort_buy_cap(native_quote, fx, at, strategy):
+    """Enforce the hard CAD cap on exact acquisition including quote commission."""
+    if strategy.target_trade_cad is None:
+        return
+    if (
+        fx is None
+        or fx.fresh_until < at
+        or (fx.available_at is not None and fx.available_at > at)
+        or (fx.observed_at is not None and fx.observed_at > at)
+    ):
+        raise ValueError("BUY_CAP_CAD_EVIDENCE_UNAVAILABLE")
+    try:
+        acquisition = required_input(fx.from_cad, native_quote)
+    except (ArithmeticError, ValueError):
+        raise ValueError("BUY_CAP_CAD_EVIDENCE_UNAVAILABLE") from None
+    if acquisition > strategy.trade_amount_cad:
+        raise ValueError("MAXIMUM_BUY_CAPITAL")
 
 
 def evidence_eligibility(
@@ -283,6 +302,9 @@ def recheck_projection(
             raise ValueError("CAD_RECHECK_VALUATION_UNAVAILABLE")
         if not minimum_buy_satisfied(strategy, result.acquisition_cost_cad):
             raise ValueError("MINIMUM_BUY_CAPITAL")
+        if strategy.target_trade_cad is not None:
+            buy_quote, _ = planned_reserves(result, buy.fee, sell.fee, strategy.slippage_bps)
+            enforce_cohort_buy_cap(buy_quote, buy.fx, decision_at, strategy)
         allowed = [
             result.net_profit_cad >= strategy.minimum_profit_cad,
             result.net_return_pct >= strategy.minimum_profit_pct,
