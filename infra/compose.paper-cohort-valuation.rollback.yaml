@@ -1,0 +1,10 @@
+# Return the collector to the compatible cohort calculation.
+services:
+  backend:
+    image: quantix-backend:0.7.1-paper-cohort
+  collector:
+    image: quantix-backend:0.7.1-paper-cohort
+  frontend:
+    image: quantix-frontend:0.7.1-paper-cohort
+  notifications:
+    image: quantix-backend:0.7.1-stage8a1

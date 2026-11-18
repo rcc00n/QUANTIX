@@ -1420,64 +1420,70 @@ class PaperCoordinator:
             await self.refresh_targets(db)
             await db.commit()
         if elapsed_seconds() - self.last_valuation >= self.config.valuation_interval_seconds:
-            async with self.sessions() as db:
-                rows = (
-                    await db.execute(
-                        select(PaperControl, PaperSession)
-                        .join(PaperSession)
-                        .where(PaperSession.ended_at.is_(None))
-                        .limit(20)
+            await self.checkpoint_portfolios()
+            self.last_valuation = elapsed_seconds()
+        self.last_tick = elapsed_seconds()
+
+    async def checkpoint_portfolios(self):
+        """Publish one causal, atomic valuation batch for the bounded active scope."""
+        async with self.sessions() as db:
+            rows = (
+                await db.execute(
+                    select(PaperControl, PaperSession)
+                    .join(PaperSession)
+                    .where(PaperSession.ended_at.is_(None))
+                    .order_by(PaperSession.id)
+                    .limit(20)
+                    .with_for_update(of=PaperSession)
+                )
+            ).all()
+            positions_by_session = defaultdict(list)
+            if rows:
+                for position in await db.scalars(
+                    select(PortfolioPosition).where(
+                        PortfolioPosition.session_id.in_([session.id for _, session in rows])
                     )
-                ).all()
-                for control, session in rows:
-                    positions = list(
-                        await db.scalars(
-                            select(PortfolioPosition).where(
-                                PortfolioPosition.session_id == session.id
-                            )
-                        )
+                ):
+                    positions_by_session[position.session_id].append(position)
+            marked_at = self.collector.utcnow()
+            frame = self.market.valuation_frame(marked_at) if rows else None
+            hour = marked_at.astimezone(
+                __import__("zoneinfo").ZoneInfo("America/Edmonton")
+            ).strftime("%Y-%m-%dT%H%z")
+            daily = []
+            for control, session in rows:
+                research = control.classification == "RESEARCH"
+                prices = self.market.prices(
+                    positions_by_session[session.id], marked_at, research, frame=frame
+                )
+                benchmark = {}
+                for h in session.benchmark_snapshot.get("holdings", []):
+                    key = (UUID(h["exchange_id"]), UUID(h["asset_id"]))
+                    benchmark[key] = self.market.mark(
+                        *key, Decimal(h["quantity"]), marked_at, research, frame=frame
                     )
-                    prices = self.market.prices(
-                        positions, now, control.classification == "RESEARCH"
+                if self.daily_hours.get(session.id) != hour:
+                    # The daily snapshot already persists this portfolio's checkpoint.
+                    await analytics.daily_snapshot(
+                        db,
+                        session.id,
+                        prices,
+                        marked_at,
+                        research_only=research,
+                        benchmark_prices=benchmark,
                     )
-                    benchmark = {}
-                    for h in session.benchmark_snapshot.get("holdings", []):
-                        key = (UUID(h["exchange_id"]), UUID(h["asset_id"]))
-                        benchmark[key] = self.market.mark(
-                            *key, Decimal(h["quantity"]), now, control.classification == "RESEARCH"
-                        )
-                    ended_at = await db.scalar(
-                        select(PaperSession.ended_at)
-                        .where(PaperSession.id == session.id)
-                        .with_for_update()
-                    )
-                    if ended_at is not None:
-                        await db.commit()
-                        continue
+                    daily.append(session.id)
+                else:
                     await valuation.snapshot(
                         db,
                         session.id,
                         prices,
-                        now,
-                        research_only=control.classification == "RESEARCH",
+                        marked_at,
+                        research_only=research,
                         benchmark_prices=benchmark,
                     )
-                    hour = now.astimezone(
-                        __import__("zoneinfo").ZoneInfo("America/Edmonton")
-                    ).strftime("%Y-%m-%dT%H%z")
-                    if self.daily_hours.get(session.id) != hour:
-                        await analytics.daily_snapshot(
-                            db,
-                            session.id,
-                            prices,
-                            now,
-                            research_only=control.classification == "RESEARCH",
-                            benchmark_prices=benchmark,
-                        )
-                        self.daily_hours[session.id] = hour
-                    await db.commit()
-            self.last_valuation = elapsed_seconds()
-        self.last_tick = elapsed_seconds()
+            await db.commit()
+            self.daily_hours.update(dict.fromkeys(daily, hour))
 
     def diagnostics(self):
         return {

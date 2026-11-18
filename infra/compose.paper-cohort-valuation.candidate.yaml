@@ -1,0 +1,10 @@
+# Replace only the collector. Preserve the running cohort API, UI, and Telegram worker.
+services:
+  backend:
+    image: quantix-backend:0.7.1-paper-cohort
+  collector:
+    image: quantix-backend:0.7.1-paper-cohort.1
+  frontend:
+    image: quantix-frontend:0.7.1-paper-cohort
+  notifications:
+    image: quantix-backend:0.7.1-stage8a1

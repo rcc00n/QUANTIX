@@ -48,6 +48,7 @@ REPLACEMENT_ROLES = {
     "stage8c": ("backend", "collector", "frontend"),
     "marathon": ("backend", "collector", "frontend"),
     "paper-cohort": ("backend", "collector", "frontend"),
+    "paper-cohort-valuation": ("collector",),
 }
 GUARD_SUSTAINED_FLOOR_MIB = 640
 REPLACEMENT_DISK_RESERVE_BYTES = 6 * 1024**3
@@ -356,6 +357,8 @@ def replacement_image_transition(role, release):
         return f"{image}:0.7.1-stage8c", f"{image}:0.7.1-marathon"
     if release == "paper-cohort":
         return f"{image}:0.7.1-marathon", f"{image}:0.7.1-paper-cohort"
+    if release == "paper-cohort-valuation":
+        return f"{image}:0.7.1-paper-cohort", f"{image}:0.7.1-paper-cohort.1"
     old_tag = "0.7.1-export2" if role in {"backend", "frontend"} else "0.7.1"
     return f"{image}:{old_tag}", f"{image}:0.7.1-stage8a1"
 

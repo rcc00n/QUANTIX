@@ -33,6 +33,13 @@ def validate_release_overlays(base, release):
         selected = read_config(
             "compose.production.yaml", f"compose.{release}.{mode}.yaml"
         )
+        if release == "paper-cohort-valuation":
+            for role in ("backend", "frontend"):
+                _, expected = replacement_image_transition(role, "paper-cohort")
+                assert selected["services"][role]["image"] == expected, (
+                    "The published cohort API and UI must remain pinned"
+                )
+                selected["services"][role]["image"] = base["services"][role]["image"]
         for role in REPLACEMENT_ROLES[release]:
             previous, candidate = replacement_image_transition(role, release)
             assert selected["services"][role]["image"] == (
@@ -54,6 +61,9 @@ def main():
     )
     parser.add_argument(
         "--paper-cohort", action="store_true", help="Verify the paper cohort image overlays"
+    )
+    parser.add_argument(
+        "--paper-cohort-valuation", action="store_true", help="Verify the collector valuation overlays"
     )
     args = parser.parse_args()
     config = read_config("compose.production.yaml")
@@ -98,7 +108,11 @@ def main():
                 s["source"] != "telegram_bot_token" for s in service.get("secrets", [])
             )
     overlays = {}
-    for release, requested in (("marathon", args.marathon), ("paper-cohort", args.paper_cohort)):
+    for release, requested in (
+        ("marathon", args.marathon),
+        ("paper-cohort", args.paper_cohort),
+        ("paper-cohort-valuation", args.paper_cohort_valuation),
+    ):
         if requested:
             validate_release_overlays(config, release)
             overlays[f"{release.replace('-', '_')}_image_overlays"] = "PASS"

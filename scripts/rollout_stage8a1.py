@@ -43,6 +43,10 @@ OVERLAYS = {
         "candidate": "compose.paper-cohort.candidate.yaml",
         "rollback": "compose.paper-cohort.rollback.yaml",
     },
+    "paper-cohort-valuation": {
+        "candidate": "compose.paper-cohort-valuation.candidate.yaml",
+        "rollback": "compose.paper-cohort-valuation.rollback.yaml",
+    },
 }
 EXPORT_MOUNT = "/var/tmp/quantix-export"
 STAGE8C_PAPER_COMPATIBILITY = """
@@ -129,6 +133,8 @@ def check_config(mode, release="stage8a1"):
             if role in gate.REPLACEMENT_ROLES[release]:
                 old, new = gate.replacement_image_transition(role, release)
                 expected = new if name == "candidate" else old
+            elif release == "paper-cohort-valuation" and role != "notifications":
+                _, expected = gate.replacement_image_transition(role, "paper-cohort")
             else:
                 _, expected = gate.replacement_image_transition(role, "stage8a1")
             if image != expected:

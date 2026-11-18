@@ -1,13 +1,16 @@
 """Observed liquidation marks; missing depth/FX remains unavailable, never parity."""
 
-from datetime import timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from decimal import Decimal, localcontext
+from uuid import UUID
 
 from sqlalchemy import select
 
 from arbiq.db.models import Asset, Market
-from arbiq.market_data.quality import DataState
+from arbiq.market_data.quality import CapturedBook, DataState
 from arbiq.opportunities.analysis import dump_input
+from arbiq.opportunities.contracts import FXConversion
 from arbiq.opportunities.conversions import (
     FX_ASSET_KEYS,
     capture_uncertainty_ms,
@@ -31,6 +34,17 @@ def conversion_rejection(conversion, now):
     return None
 
 
+@dataclass(slots=True)
+class ValuationFrame:
+    at: datetime
+    assets: dict[UUID, Asset]
+    markets: tuple[Market, ...]
+    books: dict[UUID, CapturedBook | None]
+    fx: dict[str, FXConversion]
+    clock: dict
+    marks: dict[tuple[UUID, UUID, Decimal, bool], PriceEvidence] = field(default_factory=dict)
+
+
 class PaperMarkets:
     def __init__(self, collector):
         self.collector = collector
@@ -49,17 +63,41 @@ class PaperMarkets:
             )
         }
 
-    def mark(self, exchange_id, asset_id, quantity, now, research=True, *, fx=None):
-        asset = self.assets.get(asset_id)
+    def valuation_frame(self, now):
+        """Pin a single cache and FX read with no event-loop yield between sources."""
+        clock = self.collector.utc_clock
+        proof = clock.snapshot() if clock and clock.trusted else {"trusted": False}
+        markets = tuple(self.markets.values())
+        books, fx = {}, {}
+        if proof.get("trusted"):
+            fx = self.collector.scanner.fx_routes(now)
+            books = {market.id: self.collector.cache.get(market.id, now=now) for market in markets}
+        return ValuationFrame(now, self.assets.copy(), markets, books, fx, proof)
+
+    def mark(self, exchange_id, asset_id, quantity, now, research=True, *, fx=None, frame=None):
+        if frame is None:
+            return self._mark(exchange_id, asset_id, quantity, now, research, fx=fx)
+        if frame.at != now or fx is not None:
+            raise ValueError("Valuation marks must use the supplied frame's cutoff and FX")
+        key = (exchange_id, asset_id, quantity, research)
+        if key not in frame.marks:
+            frame.marks[key] = self._mark(*key[:3], now, research, fx=frame.fx, frame=frame)
+        return frame.marks[key]
+
+    def _mark(self, exchange_id, asset_id, quantity, now, research, *, fx=None, frame=None):
+        assets = frame.assets if frame is not None else self.assets
+        asset = assets.get(asset_id)
         if not asset:
             return PriceEvidence(None, None, None, source="asset_not_monitored")
         if asset.canonical_key == "fiat:CAD":
             return PriceEvidence(Decimal(1), now, now, True, "CAD identity")
         clock = self.collector.utc_clock
-        if not clock or not clock.trusted:
+        trusted = frame.clock.get("trusted") if frame is not None else clock and clock.trusted
+        if not trusted:
             return PriceEvidence(None, None, None, source="utc_untrusted")
         if fx is None:
             fx = self.collector.scanner.fx_routes(now)
+        clock_proof = frame.clock if frame is not None else clock.snapshot()
         limitations = []
         currency = FX_ASSET_KEYS.get(asset.canonical_key)
         if currency in fx:
@@ -79,7 +117,7 @@ class PaperMarkets:
                         item.source,
                         {
                             "conversion": dump_input(item),
-                            "clock": clock.snapshot(),
+                            "clock": clock_proof,
                             "valued_quantity": str(quantity),
                         },
                     )
@@ -88,12 +126,17 @@ class PaperMarkets:
         elif currency is not None:
             limitations.append("cad_conversion_unavailable")
         candidates = sorted(
-            self.markets.values(), key=lambda m: (m.exchange_id != exchange_id, str(m.id))
+            frame.markets if frame is not None else self.markets.values(),
+            key=lambda m: (m.exchange_id != exchange_id, str(m.id)),
         )
         for market in candidates:
             if market.base_asset_id != asset_id:
                 continue
-            book = self.collector.cache.get(market.id, now=now)
+            book = (
+                frame.books.get(market.id)
+                if frame is not None
+                else self.collector.cache.get(market.id, now=now)
+            )
             if not book:
                 limitations.append("valuation_book_unavailable")
                 continue
@@ -120,7 +163,7 @@ class PaperMarkets:
             ):
                 limitations.append("valuation_book_confidence_unavailable")
                 continue
-            quote = self.assets.get(market.quote_asset_id)
+            quote = assets.get(market.quote_asset_id)
             if quote is None:
                 limitations.append("valuation_quote_identity_unavailable")
                 continue
@@ -170,7 +213,7 @@ class PaperMarkets:
                             "fx_available_at": conversion.available_at.isoformat()
                             if conversion.available_at is not None
                             else None,
-                            "clock": clock.snapshot(),
+                            "clock": clock_proof,
                         },
                     )
             except (ValueError, ArithmeticError):
@@ -186,8 +229,15 @@ class PaperMarkets:
             provenance={"valuation_blockers": reasons},
         )
 
-    def prices(self, positions, now, research):
+    def prices(self, positions, now, research, *, frame=None):
         positions = [p for p in positions if p.quantity > 0]
+        if frame is not None:
+            return {
+                (p.exchange_id, p.asset_id): self.mark(
+                    p.exchange_id, p.asset_id, p.quantity, now, research, frame=frame
+                )
+                for p in positions
+            }
         clock = self.collector.utc_clock
         needs_fx = any(
             (asset := self.assets.get(p.asset_id)) and asset.canonical_key != "fiat:CAD"

@@ -163,6 +163,17 @@ def test_paper_cohort_rollback_holds_before_stopping_on_incompatible_state(monke
     assert not calls
 
 
+@pytest.mark.parametrize("role", ("backend", "frontend", "notifications"))
+def test_cohort_valuation_release_refuses_to_replace_other_roles(transaction, role):
+    args, outcome, calls = transaction
+    args.release = "paper-cohort-valuation"
+    args.role = role
+    with pytest.raises(preflight.CapacityProofError, match="ROLE_NOT_APPROVED_FOR_RELEASE"):
+        rollout.replace(args, outcome)
+    assert outcome["state"] == "UNCHANGED"
+    assert not calls
+
+
 @pytest.mark.parametrize("reply", ["compatible\n", "incompatible\n", ""])
 def test_stage8c_paper_check_requires_a_positive_read_only_database_result(monkeypatch, reply):
     calls = []
