@@ -35,8 +35,22 @@ OVERLAYS = {
         "candidate": "compose.stage8c.candidate.yaml",
         "rollback": "compose.stage8c.rollback.yaml",
     },
+    "marathon": {
+        "candidate": "compose.marathon.candidate.yaml",
+        "rollback": "compose.marathon.rollback.yaml",
+    },
 }
 EXPORT_MOUNT = "/var/tmp/quantix-export"
+STAGE8C_PAPER_COMPATIBILITY = """
+SELECT CASE WHEN
+    EXISTS (SELECT 1 FROM paper_controls
+            WHERE status = 'ACTIVE' AND settings ? 'strategy_lab_profile')
+ OR EXISTS (SELECT 1 FROM paper_trades
+            WHERE completed_at IS NULL AND (assumptions -> 'strategy') ? 'strategy_lab_profile')
+ OR EXISTS (SELECT 1 FROM strategy_heads h JOIN strategy_versions v
+            ON h.strategy_version_id = v.id WHERE v.settings ? 'strategy_lab_profile')
+THEN 'incompatible' ELSE 'compatible' END;
+"""
 
 
 def checked(args, *, timeout=20):
@@ -64,6 +78,26 @@ def verify_notification_pin(snapshot):
     image = gate.docker_data(["image", "inspect", "--format", "{{.Id}}", tag]).strip()
     if snapshot["owned"]["notifications"]["image_id"] != image:
         raise gate.CapacityProofError("UNCHANGED_NOTIFICATION_IMAGE_MISMATCH")
+
+
+def verify_stage8c_paper_compatibility(db_id):
+    """Refuse to start a legacy paper parser on active newer strategy state."""
+    result = checked(
+        [
+            *gate.LOCAL_DOCKER,
+            "exec",
+            db_id,
+            "sh",
+            "-c",
+            'PGOPTIONS="-c default_transaction_read_only=on -c statement_timeout=2500" '
+            'exec psql -X -Aqt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "$1"',
+            "quantix-stage8c-compatibility",
+            STAGE8C_PAPER_COMPATIBILITY,
+        ],
+        timeout=6,
+    ).strip()
+    if result != "compatible":
+        raise gate.CapacityProofError("STAGE8C_PAPER_COMPATIBILITY_NOT_PROVEN")
 
 
 def release_path(release):
@@ -277,6 +311,8 @@ def replace(args, outcome):
         keep_notification_worker = "notifications" not in gate.REPLACEMENT_ROLES[args.release]
         if keep_notification_worker:
             verify_notification_pin(snapshot)
+        if args.release == "marathon" and args.mode == "rollback":
+            verify_stage8c_paper_compatibility(snapshot["owned"]["db"]["id"])
         old = snapshot["owned"][args.role]
         if old["id"] != args.current_container_id or old["image_id"] != args.current_image_id:
             raise gate.CapacityProofError("ORIGINAL_DEPLOYED_INSTANCE_CHANGED")
@@ -300,6 +336,8 @@ def replace(args, outcome):
                 raise gate.CapacityProofError("PROTECTED_SENTINEL_CHANGED")
             if keep_notification_worker:
                 verify_notification_pin(stopped)
+            if args.release == "marathon" and args.mode == "rollback":
+                verify_stage8c_paper_compatibility(stopped["owned"]["db"]["id"])
             inspect_images(
                 args.role, args.current_image_id, args.replacement_image_id, args.mode, args.release
             )

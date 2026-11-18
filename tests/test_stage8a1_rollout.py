@@ -100,12 +100,15 @@ def test_changed_old_instance_fails_before_any_stop(transaction):
 
 @pytest.mark.parametrize("role", ("backend", "collector", "frontend"))
 @pytest.mark.parametrize("mode", ("candidate", "rollback"))
-@pytest.mark.parametrize("release", ("stage8b1", "stage8c"))
-def test_new_release_uses_exact_stage8a1_rollback_and_candidate_tags(
-    monkeypatch, role, mode, release
+@pytest.mark.parametrize(
+    ("release", "previous"),
+    (("stage8b1", "stage8a1"), ("stage8c", "stage8a1"), ("marathon", "stage8c")),
+)
+def test_new_release_uses_exact_rollback_and_candidate_tags(
+    monkeypatch, role, mode, release, previous
 ):
     project = "quantix-frontend" if role == "frontend" else "quantix-backend"
-    old = f"{project}:0.7.1-stage8a1"
+    old = f"{project}:0.7.1-{previous}"
     new = f"{project}:0.7.1-{release}"
     image_ids = {old: "sha256:" + "a" * 64, new: "sha256:" + "b" * 64}
     current, replacement = (old, new) if mode == "candidate" else (new, old)
@@ -118,7 +121,7 @@ def test_new_release_uses_exact_stage8a1_rollback_and_candidate_tags(
         rollout.inspect_images(role, image_ids[replacement], image_ids[current], mode, release)
 
 
-@pytest.mark.parametrize("release", ("stage8b1", "stage8c"))
+@pytest.mark.parametrize("release", ("stage8b1", "stage8c", "marathon"))
 def test_new_release_cannot_restart_the_active_notification_consumer(transaction, release):
     args, outcome, calls = transaction
     args.release = release
@@ -137,6 +140,27 @@ def test_stage8b1_notification_pin_rejects_image_drift(monkeypatch):
     snapshot["owned"]["notifications"]["image_id"] = "sha256:" + "b" * 64
     with pytest.raises(preflight.CapacityProofError, match="UNCHANGED_NOTIFICATION_IMAGE_MISMATCH"):
         rollout.verify_notification_pin(snapshot)
+
+
+@pytest.mark.parametrize("reply", ["compatible\n", "incompatible\n", ""])
+def test_stage8c_paper_check_requires_a_positive_read_only_database_result(monkeypatch, reply):
+    calls = []
+
+    def checked(cmd, *, timeout):
+        calls.append((cmd, timeout))
+        return reply
+
+    monkeypatch.setattr(rollout, "checked", checked)
+    db_id = "b" * 64
+    if reply == "compatible\n":
+        rollout.verify_stage8c_paper_compatibility(db_id)
+    else:
+        with pytest.raises(preflight.CapacityProofError, match="STAGE8C_PAPER_COMPATIBILITY"):
+            rollout.verify_stage8c_paper_compatibility(db_id)
+    [(command, timeout)] = calls
+    assert command[:5] == [*preflight.LOCAL_DOCKER, "exec", db_id]
+    assert any("default_transaction_read_only=on" in arg for arg in command)
+    assert timeout == 6
 
 
 def test_full_export_worker_lock_blocks_maintenance_without_touching_archive(monkeypatch, tmp_path):

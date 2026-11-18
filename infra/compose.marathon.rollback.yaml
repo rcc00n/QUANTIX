@@ -1,0 +1,10 @@
+# Return the three application roles to the verified Stage 8C release.
+services:
+  backend:
+    image: quantix-backend:0.7.1-stage8c
+  collector:
+    image: quantix-backend:0.7.1-stage8c
+  frontend:
+    image: quantix-frontend:0.7.1-stage8c
+  notifications:
+    image: quantix-backend:0.7.1-stage8a1

@@ -19,6 +19,14 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from arbiq.collector.config import CollectorConfig
+from arbiq.collector.reliability import (
+    CHECK_LABELS,
+    CollectorReliability,
+    clock_trust,
+    market_coverage,
+    native_streams,
+    scanner_progress,
+)
 from arbiq.collector.scheduling import ClockGuard, Schedule
 from arbiq.collector.storage import CollectorStore
 from arbiq.collector.stream_selection import native_symbols, tier
@@ -126,6 +134,7 @@ class Collector:
         self.memory_maintenance = None
         self.timings = Timings()
         self.confirmation_enqueued = {}
+        self.reliability = CollectorReliability()
 
     def utcnow(self):
         return self.utc_clock.utcnow() if self.utc_clock else datetime.now(UTC)
@@ -141,6 +150,98 @@ class Collector:
 
     def monitored_ids(self):
         return {market.id for rt in self.runtimes.values() for market in rt.markets}
+
+    async def sample_reliability(self, now: datetime, clock: dict, engine: dict) -> None:
+        stamp = elapsed_seconds()
+        counts = Counter()
+        for market_id in self.monitored_ids():
+            book = self.cache.books.get(market_id)
+            state = (
+                "UNAVAILABLE"
+                if book is None or book.state in {DataState.UNAVAILABLE, DataState.SUSPICIOUS}
+                else freshness(book, now, self.config, clock)["classification"]
+            )
+            counts[state] += 1
+        subscriptions, synchronized = {}, {}
+        configured_streams = set(self.config.websocket_exchanges)
+        for slug, runtime in self.runtimes.items():
+            if slug not in configured_streams:
+                continue
+            requested = len(runtime.markets) if slug == "kraken" else len(runtime.native_symbols)
+            if requested == 0:
+                continue
+            subscriptions[slug] = requested
+            last_message = runtime.ws_last_message_elapsed
+            if (
+                runtime.ws_task is None
+                or runtime.ws_task.done()
+                or last_message is None
+                or not 0 <= stamp - last_message <= self.config.websocket_idle_timeout_seconds
+            ):
+                continue
+            if slug == "kraken":
+                synchronized[slug] = requested if runtime.ws_synchronized else 0
+            else:
+                synchronized[slug] = sum(
+                    market.id in runtime.native_synchronized
+                    for market in runtime.native_symbols.values()
+                )
+        scanner = self.scanner
+        scanner_config = scanner.config if scanner is not None else self.settings.arbitrage
+        heartbeat_age = (
+            time.monotonic() - scanner.heartbeat if scanner and scanner.heartbeat > 0 else None
+        )
+        metrics = engine.get("metrics", {})
+        trusted = clock.get("trusted") is True
+        transitions = self.reliability.observe(
+            stamp,
+            now if trusted else None,
+            {
+                "market_coverage": market_coverage(counts, clock_trusted=trusted),
+                "scanner_progress": scanner_progress(
+                    enabled=scanner_config.enabled,
+                    ready=metrics.get("pending_comparisons", 0),
+                    capacity=scanner_config.max_candidates * 4,
+                    oldest=max(
+                        metrics.get("comparison_queue_oldest_seconds", 0),
+                        metrics.get("comparison_deferred_oldest_seconds", 0),
+                    ),
+                    heartbeat_age=heartbeat_age,
+                    deferred=metrics.get("comparison_deferred_markets", 0),
+                    stale_seconds=min(
+                        self.config.freshness_stale_seconds,
+                        self.config.maximum_age_seconds,
+                        scanner_config.maximum_book_age_seconds,
+                    ),
+                ),
+                "native_streams": native_streams(
+                    enabled="kraken" in configured_streams
+                    or (
+                        self.config.websocket_fast_markets_per_exchange > 0
+                        and bool(NATIVE_PROTOCOLS.keys() & configured_streams)
+                    ),
+                    subscriptions=subscriptions,
+                    synchronized=synchronized,
+                ),
+                "clock_trust": clock_trust(clock),
+            },
+        )
+        for transition in transitions:
+            degraded = transition.state == "DEGRADED"
+            suffix = "degraded" if degraded else "recovered"
+            await self.store.event(
+                None,
+                f"collector.reliability_{suffix}",
+                f"{CHECK_LABELS[transition.key]} {suffix}",
+                "warning" if degraded else "info",
+                {
+                    "check": transition.key,
+                    "state": transition.state,
+                    "reason": transition.reason,
+                    "collector_run_id": str(self.store.run_id),
+                    "observed_at": now.isoformat() if trusted else None,
+                },
+            )
 
     def native_status(self, runtime, now, clock_trusted):
         stream = runtime.native_stream
@@ -489,6 +590,12 @@ class Collector:
                 runtime.ws_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await runtime.ws_task
+            runtime.ws_task = None
+            runtime.ws_synchronized = False
+            runtime.ws_last_message_elapsed = None
+            runtime.ws_last_message_at = None
+            runtime.ws_last.clear()
+            runtime.ws_published.clear()
             if chosen:
                 by_symbol = {m.native_symbol: m for m in chosen}
 
@@ -1108,6 +1215,9 @@ class Collector:
                         {"state": state, "error_code": health["error_code"]},
                     )
                     previous_states[runtime.slug] = state
+            clock = self.utc_clock.snapshot() if self.utc_clock else {"trusted": False}
+            engine = self.scanner.diagnostics() if self.scanner else {}
+            await self.sample_reliability(self.utcnow(), clock, engine)
             await self.store.heartbeat(
                 {
                     "monitored_books": len(self.cache.books),
@@ -1119,9 +1229,10 @@ class Collector:
                         slug: rt.timings.snapshot() for slug, rt in self.runtimes.items()
                     },
                     "clock_healthy": self.utc_clock.trusted if self.utc_clock else False,
-                    "clock": self.utc_clock.snapshot() if self.utc_clock else {},
-                    "engine": self.scanner.diagnostics() if self.scanner else {},
+                    "clock": clock,
+                    "engine": engine,
                     "paper": self.paper.diagnostics() if self.paper else {},
+                    "reliability": self.reliability.snapshot,
                 }
             )
             self.last_heartbeat = time.monotonic()
@@ -1332,12 +1443,13 @@ class Collector:
                     if runtime.slug == "kraken" and runtime.ws_synchronized:
                         synchronized_ids.update(runtime.ws_last)
             latencies = list(self.api_latencies)
+            healthy = self.last_heartbeat > 0 and time.monotonic() - self.last_heartbeat < 30
             return web.json_response(
                 {
                     "as_of": now.isoformat(),
                     "collector": {
-                        "healthy": self.last_heartbeat > 0
-                        and time.monotonic() - self.last_heartbeat < 30,
+                        "healthy": healthy,
+                        "reliability": self.reliability.snapshot if healthy else None,
                         "cache_books": len(books),
                         "cache_capacity": self.cache.limit,
                         "quality_counts": dict(Counter(x.state.value for x in books)),

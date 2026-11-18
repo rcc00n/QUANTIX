@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate normalized Compose mount/isolation contracts without printing env/secrets."""
 
+import argparse
 import json
 import subprocess
 from pathlib import Path
@@ -8,13 +9,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def main():
+def read_config(*files):
     raw = subprocess.run(
         [
             "docker",
             "compose",
-            "-f",
-            str(ROOT / "infra/compose.production.yaml"),
+            *(part for name in files for part in ("-f", str(ROOT / "infra" / name))),
             "config",
             "--format",
             "json",
@@ -23,7 +23,37 @@ def main():
         text=True,
         check=True,
     )
-    config = json.loads(raw.stdout)
+    return json.loads(raw.stdout)
+
+
+def validate_marathon_overlays(base):
+    from production_preflight import REPLACEMENT_ROLES, replacement_image_transition
+
+    for mode in ("candidate", "rollback"):
+        selected = read_config(
+            "compose.production.yaml", f"compose.marathon.{mode}.yaml"
+        )
+        for role in REPLACEMENT_ROLES["marathon"]:
+            previous, candidate = replacement_image_transition(role, "marathon")
+            assert selected["services"][role]["image"] == (
+                candidate if mode == "candidate" else previous
+            ), "Unexpected marathon application image"
+        assert (
+            selected["services"]["notifications"]["image"]
+            == replacement_image_transition("notifications", "stage8a1")[1]
+        ), "The original Telegram worker must remain pinned"
+        for role in (*REPLACEMENT_ROLES["marathon"], "notifications"):
+            selected["services"][role]["image"] = base["services"][role]["image"]
+        assert selected == base, "A marathon overlay changed more than image tags"
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--marathon", action="store_true", help="Verify the combined image overlays"
+    )
+    args = parser.parse_args()
+    config = read_config("compose.production.yaml")
     services = config["services"]
     assert config["name"] == "quantix"
     assert set(services) == {
@@ -64,6 +94,8 @@ def main():
             assert all(
                 s["source"] != "telegram_bot_token" for s in service.get("secrets", [])
             )
+    if args.marathon:
+        validate_marathon_overlays(config)
     print(
         json.dumps(
             {
@@ -72,6 +104,7 @@ def main():
                 "public_internal_ports": 0,
                 "swap_allowed": False,
                 "environment_values_printed": False,
+                **({"marathon_image_overlays": "PASS"} if args.marathon else {}),
             }
         )
     )
