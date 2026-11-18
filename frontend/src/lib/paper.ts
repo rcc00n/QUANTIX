@@ -6,6 +6,13 @@ export const STRATEGY_LAB_PROFILES = {
   NO_TRADING: "No-trading benchmark",
 } as const;
 export type StrategyLabProfile = keyof typeof STRATEGY_LAB_PROFILES;
+export const STRATEGY_LAB_ENTRY: Record<StrategyLabProfile, string> = {
+  LIQUID_ARBITRAGE: "Healthy, timestamped books. Resolved anomalies are excluded.",
+  ANOMALY_HUNTER: "A resolved anomaly requires independent fresh REST rechecks of both legs.",
+  HYBRID_OPTIMIZER:
+    "Healthy, timestamped books and independently confirmed anomalies are eligible.",
+  NO_TRADING: "Values the original inventory without submitting orders or rebalancing.",
+};
 export type PaperStrategy = {
   schema_version?: string;
   preset: string;
@@ -24,17 +31,75 @@ export type PaperStrategy = {
   allowed_assets?: string[];
   [key: string]: unknown;
 };
+export type LabOpeningAllocation = {
+  target_trade_cad: string;
+  reserve_cad: string;
+  unallocated_cad: string;
+  allocations: {
+    exchange: string;
+    asset: string;
+    quantity: string;
+    cad_value: string;
+    cad_rate: string;
+  }[];
+  coverage_by_size: {
+    trade_amount_cad: string;
+    effective_minimum_cad: string;
+    considered_routes: number;
+    funded_alternative_routes: number;
+    simultaneous_funded_routes: number;
+    profitable_funded_routes: number;
+  }[];
+  funded_routes: {
+    route_id: string;
+    base_asset: string;
+    buy_exchange: string;
+    sell_exchange: string;
+    maximum_funded_acquisition_cad: string;
+    net_profit_cad: string | null;
+  }[];
+};
 export type PaperSession = {
   id: string;
   name: string;
   classification: PaperClassification;
   mode: string;
   status: string;
+  archived_at?: string | null;
   initial_equity_cad: string;
   started_at: string;
   strategy_version_id: string;
   settings: PaperStrategy;
+  lab_cohort?: {
+    id: string;
+    proposal_id: string;
+    started_at: string;
+    allocation?: LabOpeningAllocation;
+  } | null;
 };
+export type PaperSessionScope = "current" | "archived";
+
+export function paperSessionsPath(scope: PaperSessionScope) {
+  return scope === "archived" ? "/paper/sessions?scope=archived" : "/paper/sessions";
+}
+
+export function preferredPaperSession(
+  sessions: PaperSession[],
+  ...preferredIds: (string | null)[]
+): PaperSession | undefined {
+  for (const id of preferredIds) {
+    const selected = sessions.find((session) => session.id === id);
+    if (selected) return selected;
+  }
+  const hybrid = (session: PaperSession) =>
+    session.settings.strategy_lab_profile === "HYBRID_OPTIMIZER" && session.status !== "ARCHIVED";
+  return (
+    sessions.find((session) => hybrid(session) && session.lab_cohort) ??
+    sessions.find((session) => hybrid(session) && session.status === "ACTIVE") ??
+    sessions.find((session) => session.classification === "VALIDATED") ??
+    sessions[0]
+  );
+}
 export type PaperBalance = {
   exchange: string;
   asset: string;
@@ -62,6 +127,7 @@ export type PaperPortfolio = {
   strategy_excess_cad: string | null;
   drawdown_pct: string | null;
   capital_utilization_pct: string | null;
+  inventory_exposure_cad?: string | null;
   portfolio_return_pct: string | null;
   balances: PaperBalance[];
   valuation_status?: PortfolioValuationStatus;
@@ -89,6 +155,7 @@ export type PaperMetrics = {
   missed_simulations?: number;
   failed_simulations?: number;
   expired_simulations?: number;
+  net_completed_trade_pnl_cad?: string | null;
   maximum_drawdown_pct?: string | null;
   win_rate_pct?: string | null;
   average_profit_cad?: string | null;

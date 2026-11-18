@@ -15,17 +15,23 @@ import {
 import { Button } from "@/components/ui/button";
 import { displayDecimal } from "@/lib/opportunities";
 import { FundingPlanner } from "@/components/funding-planner";
+import { CohortOpening } from "@/components/cohort-opening";
 import { TradeInspector } from "@/components/trade-inspector";
 import { BuyCapitalControl } from "@/components/buy-capital-control";
 import { asRecord } from "@/lib/terminal";
 import {
+  STRATEGY_LAB_ENTRY,
+  STRATEGY_LAB_PROFILES,
   assetLabel,
   paperFetch,
+  paperSessionsPath,
+  preferredPaperSession,
   utcLabel,
   type PaperClassification,
   type PaperMetrics,
   type PaperPortfolio,
   type PaperSession,
+  type PaperSessionScope,
   type PaperStrategy,
   type PaperTrade,
   type PaperTradeDetail,
@@ -807,6 +813,13 @@ function CreatePortfolio({
   );
 }
 function Balances({ portfolio }: { portfolio: PaperPortfolio | null }) {
+  const [showZero, setShowZero] = useState(false);
+  const balances = portfolio?.balances ?? [];
+  const visibleBalances = showZero
+    ? balances
+    : balances.filter(
+        (balance) => !/^[+-]?(?:0+(?:\.0*)?|\.0+)(?:[eE][+-]?\d+)?$/.test(balance.quantity),
+      );
   return (
     <section className="paper-detail">
       <div className="section-heading">
@@ -814,6 +827,16 @@ function Balances({ portfolio }: { portfolio: PaperPortfolio | null }) {
           <span className="small-label">LEDGER-BACKED INVENTORY</span>
           <h2>Virtual exchange balances</h2>
         </div>
+        {visibleBalances.length !== balances.length || showZero ? (
+          <Button
+            variant="outline"
+            size="sm"
+            aria-pressed={showZero}
+            onClick={() => setShowZero(!showZero)}
+          >
+            {showZero ? "Hide zero balances" : "Show zero balances"}
+          </Button>
+        ) : null}
       </div>
       <div className="table-wrap">
         <table className="paper-table" aria-label="Virtual balances">
@@ -833,8 +856,8 @@ function Balances({ portfolio }: { portfolio: PaperPortfolio | null }) {
             </tr>
           </thead>
           <tbody>
-            {portfolio?.balances?.length ? (
-              portfolio.balances.map((balance) => (
+            {visibleBalances.length ? (
+              visibleBalances.map((balance) => (
                 <tr key={`${balance.exchange}:${balance.asset}`}>
                   <td>{balance.exchange}</td>
                   <td>{assetLabel(balance.asset)}</td>
@@ -864,8 +887,14 @@ function Balances({ portfolio }: { portfolio: PaperPortfolio | null }) {
               <tr>
                 <td colSpan={7}>
                   <div className="table-empty">
-                    <strong>No virtual balances available</strong>
-                    <span>Funding and valuation require an initialized paper portfolio.</span>
+                    <strong>
+                      {balances.length
+                        ? "All virtual balances are zero"
+                        : "No virtual balances available"}
+                    </strong>
+                    {!balances.length && (
+                      <span>Funding and valuation require an initialized paper portfolio.</span>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -876,7 +905,13 @@ function Balances({ portfolio }: { portfolio: PaperPortfolio | null }) {
     </section>
   );
 }
-function PortfolioDetails({ portfolio }: { portfolio: PaperPortfolio | null }) {
+function PortfolioDetails({
+  portfolio,
+  metrics,
+}: {
+  portfolio: PaperPortfolio | null;
+  metrics: PaperMetrics | null;
+}) {
   return (
     <section className="paper-detail">
       <div className="section-heading">
@@ -892,8 +927,10 @@ function PortfolioDetails({ portfolio }: { portfolio: PaperPortfolio | null }) {
               "Realized simulated trading P&L",
               portfolio?.realized_trading_pnl_cad ?? portfolio?.realized_trading_cad,
             ],
+            ["Net completed-pair P&L", metrics?.net_completed_trade_pnl_cad],
             ["Realized currency P&L", portfolio?.realized_fx_pnl_cad ?? portfolio?.realized_fx_cad],
             ["Unrealized inventory P&L", portfolio?.unrealized_pnl_cad],
+            ["Marked crypto inventory exposure", portfolio?.inventory_exposure_cad],
             ["Trading fees", portfolio?.fees_cad],
             ["FX, slippage and rebalancing expenses", portfolio?.expenses_cad],
           ].map(([label, value]) => (
@@ -929,6 +966,7 @@ function PortfolioDetails({ portfolio }: { portfolio: PaperPortfolio | null }) {
   );
 }
 export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "settings" }) {
+  const [viewScope, setViewScope] = useState<PaperSessionScope>("current");
   const [sessions, setSessions] = useState<PaperSession[]>([]);
   const [sessionId, setSessionId] = useState("");
   const [options, setOptions] = useState<StrategyOptions | null>(null);
@@ -944,6 +982,7 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
   const [showFunding, setShowFunding] = useState(false);
   const [fundingDraft, setFundingDraft] = useState<{ capital: string; name: string }>();
   const scopeRef = useRef(sessionId);
+  const sessionListRequest = useRef(0);
   scopeRef.current = sessionId;
   const [loadedScope, setLoadedScope] = useState("");
   const portfolio = loadedScope === sessionId ? portfolioState : null;
@@ -951,6 +990,14 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
   const trades = loadedScope === sessionId ? tradesState : null;
   const detail = loadedScope === sessionId ? detailState : null;
   const session = sessions.find((item) => item.id === sessionId) || null;
+  const archived = viewScope === "archived";
+  const profile = session?.settings.strategy_lab_profile;
+  const passive = profile === "NO_TRADING";
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("scope") === "archived") {
+      setViewScope("archived");
+    }
+  }, []);
   useEffect(() => {
     if (!showFunding) return;
     const frame = requestAnimationFrame(() =>
@@ -962,26 +1009,30 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
     return () => cancelAnimationFrame(frame);
   }, [showFunding, sessionId, fundingDraft]);
   const loadSessions = useCallback(async () => {
+    const request = ++sessionListRequest.current;
     const [response, strategies] = await Promise.all([
-      paperFetch<{ items: PaperSession[] }>("/paper/sessions"),
-      paperFetch<StrategyOptions>("/strategies"),
+      paperFetch<{ items: PaperSession[] }>(paperSessionsPath(viewScope)),
+      viewScope === "current" ? paperFetch<StrategyOptions>("/strategies") : null,
     ]);
+    if (request !== sessionListRequest.current) return;
     setSessions(response.items);
     setOptions(strategies);
     const requested = new URLSearchParams(window.location.search).get("session");
-    setSessionId((old) =>
-      response.items.some((s) => s.id === old)
-        ? old
-        : response.items.find((s) => s.id === requested)?.id ||
-          response.items.find((s) => s.classification === "VALIDATED")?.id ||
-          response.items[0]?.id ||
-          "",
-    );
-  }, []);
+    setSessionId((old) => preferredPaperSession(response.items, old, requested)?.id ?? "");
+  }, [viewScope]);
   useEffect(() => {
+    let current = true;
     loadSessions()
-      .catch((reason) => setError(reason.message))
-      .finally(() => setLoading(false));
+      .catch((reason) => {
+        if (current) setError(reason.message);
+      })
+      .finally(() => {
+        if (current) setLoading(false);
+      });
+    return () => {
+      current = false;
+      sessionListRequest.current += 1;
+    };
   }, [loadSessions]);
   useEffect(() => {
     if (!sessionId) return;
@@ -1030,7 +1081,7 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
     };
   }, [sessionId, offset]);
   async function toggle() {
-    if (!session) return;
+    if (!session || archived || passive) return;
     setBusy(true);
     setError("");
     try {
@@ -1044,6 +1095,18 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
     } finally {
       setBusy(false);
     }
+  }
+  function switchScope() {
+    sessionListRequest.current += 1;
+    setLoading(true);
+    setError("");
+    setSessions([]);
+    setSessionId("");
+    setOffset(0);
+    setCreating(false);
+    setShowFunding(false);
+    setFundingDraft(undefined);
+    setViewScope(archived ? "current" : "archived");
   }
   async function openTrade(trade: PaperTrade) {
     try {
@@ -1068,23 +1131,31 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
           </h2>
         </div>
         <div className="paper-actions">
-          <Button
-            variant="outline"
-            size="sm"
-            aria-expanded={showFunding}
-            aria-controls="virtual-funding-planner"
-            onClick={() => setShowFunding(!showFunding)}
-          >
-            {showFunding ? "Hide funding planner" : "Virtual Funding Planner"}
+          <Button variant="outline" size="sm" onClick={switchScope}>
+            {archived ? "Current portfolios" : "Archived"}
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setCreating(!creating)}>
-            <Plus size={14} /> New portfolio
-          </Button>
+          {!archived && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-expanded={showFunding}
+                aria-controls="virtual-funding-planner"
+                onClick={() => setShowFunding(!showFunding)}
+              >
+                {showFunding ? "Hide funding planner" : "Virtual Funding Planner"}
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setCreating(!creating)}>
+                <Plus size={14} /> New portfolio
+              </Button>
+            </>
+          )}
         </div>
       </div>
       <Notice>
-        Virtual funds and simulated executions only. Research results are excluded from validated
-        performance. Real exchange orders are never submitted.
+        {archived
+          ? "Archived portfolios are available for reviewing balances, historical trades and accounting."
+          : "Virtual funds and simulated executions only. Research results are excluded from validated performance. Real exchange orders are never submitted."}
       </Notice>
       {error && (
         <div className="notice" role="alert">
@@ -1138,23 +1209,64 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
             {session && (
               <>
                 <Classification value={session.classification} />
-                <span className="subtle-tag">{session.status}</span>
-                <Button variant="outline" size="sm" disabled={busy} onClick={toggle}>
-                  {session.status.toLowerCase() === "active" ? (
-                    <CirclePause size={14} />
-                  ) : (
-                    <Play size={14} />
-                  )}
-                  {session.status.toLowerCase() === "active"
-                    ? "Pause simulations"
-                    : "Resume simulations"}
-                </Button>
+                <span className="subtle-tag">
+                  {passive && !archived ? "Passive control" : session.status}
+                </span>
+                {!archived && !passive && (
+                  <Button variant="outline" size="sm" disabled={busy} onClick={toggle}>
+                    {session.status.toLowerCase() === "active" ? (
+                      <CirclePause size={14} />
+                    ) : (
+                      <Play size={14} />
+                    )}
+                    {session.status.toLowerCase() === "active"
+                      ? "Pause simulations"
+                      : "Resume simulations"}
+                  </Button>
+                )}
               </>
             )}
           </div>
           {session && (
             <>
+              {(profile || archived) && (
+                <section className="paper-limitations" aria-label="Portfolio identity">
+                  <strong>
+                    {session.name}
+                    {profile && ` · ${STRATEGY_LAB_PROFILES[profile]}`}
+                  </strong>
+                  <p className="break-all">
+                    Portfolio ID {session.id} · Opened {utcLabel(session.started_at)}
+                  </p>
+                  {session.archived_at && <p>Archived {utcLabel(session.archived_at)}</p>}
+                  {session.lab_cohort && (
+                    <p className="break-all">
+                      Experiment {session.lab_cohort.id} · T0{" "}
+                      {utcLabel(session.lab_cohort.started_at)}
+                    </p>
+                  )}
+                  {profile && <p>{STRATEGY_LAB_ENTRY[profile]}</p>}
+                  {profile && !passive && session.lab_cohort && (
+                    <p>
+                      Minimum purchase{" "}
+                      <Exact value={session.settings.min_buy_capital_cad} unit="CAD" /> · Maximum
+                      purchase <Exact value={session.settings.trade_amount_cad} unit="CAD" />
+                    </p>
+                  )}
+                  {archived && (
+                    <Link href={`/analytics?scope=archived&session=${session.id}`}>
+                      Review historical analytics and custom export
+                    </Link>
+                  )}
+                </section>
+              )}
               <Summary session={session} portfolio={portfolio} metrics={metrics} />
+              {session.lab_cohort?.allocation && (
+                <CohortOpening
+                  allocation={session.lab_cohort.allocation}
+                  proposalId={session.lab_cohort.proposal_id}
+                />
+              )}
               {showFunding && (
                 <FundingPlanner
                   key={`${session.id}:${fundingDraft?.capital ?? ""}:${fundingDraft?.name ?? ""}`}
@@ -1165,16 +1277,23 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
                 />
               )}
               {view === "settings" ? (
-                <StrategyForm
-                  key={session.id}
-                  session={session}
-                  options={options}
-                  onSaved={loadSessions}
-                />
+                archived || passive || session.lab_cohort ? (
+                  <p className="paper-help">
+                    Original strategy settings are retained with this portfolio.
+                  </p>
+                ) : (
+                  <StrategyForm
+                    key={session.id}
+                    session={session}
+                    options={options}
+                    onSaved={loadSessions}
+                  />
+                )
               ) : view === "portfolio" ? (
                 <>
-                  <PortfolioDetails portfolio={portfolio} />
+                  <PortfolioDetails portfolio={portfolio} metrics={metrics} />
                   <Balances portfolio={portfolio} />
+                  <ExecutionReasons metrics={metrics} />
                 </>
               ) : (
                 <>
@@ -1202,7 +1321,10 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
                   <ExecutionReasons metrics={metrics} />
                   <div className="section-heading paper-ledger-heading">
                     <h3>Simulation history</h3>
-                    <Link href={`/portfolio?session=${session.id}`} className="text-link">
+                    <Link
+                      href={`/portfolio?session=${session.id}${archived ? "&scope=archived" : ""}`}
+                      className="text-link"
+                    >
                       Inspect virtual balances <ChevronRight size={14} />
                     </Link>
                   </div>
@@ -1344,8 +1466,8 @@ export function PaperWorkspace({ view }: { view: "trading" | "portfolio" | "sett
       ) : (
         <>
           <div className="paper-empty">
-            <h3>No paper portfolios initialized</h3>
-            <p>Create a portfolio to allocate virtual capital.</p>
+            <h3>{archived ? "No archived portfolios" : "No paper portfolios initialized"}</h3>
+            {!archived && <p>Create a portfolio to allocate virtual capital.</p>}
           </div>
           {showFunding && (
             <FundingPlanner

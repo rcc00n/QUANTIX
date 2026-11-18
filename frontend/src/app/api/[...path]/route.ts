@@ -28,6 +28,8 @@ const allowed = new Map([
   ["paper/funding/proposal", "POST"],
   ["paper/funding/compare", "POST"],
   ["paper/funding/experiments", "POST"],
+  ["paper/funding/cohort-plan", "POST"],
+  ["paper/funding/cohorts", "POST"],
   ["paper/replay", "POST"],
   ["notifications/status", "GET"],
   ["notifications/history", "GET"],
@@ -59,7 +61,9 @@ async function proxy(request: NextRequest, context: { params: Promise<{ path: st
         ? "POST"
         : /^notifications\/[0-9a-f-]{36}\/(acknowledge|cancel)$/.test(path)
           ? "POST"
-          : /^paper\/sessions\/[0-9a-f-]{36}\/(pause|resume|rebalance(?:\/preview)?)$/.test(path)
+          : /^paper\/sessions\/[0-9a-f-]{36}\/(pause|resume|archive|rebalance(?:\/preview)?)$/.test(
+                path,
+              )
             ? "POST"
             : /^paper\/sessions\/[0-9a-f-]{36}\/strategy$/.test(path)
               ? "PUT"

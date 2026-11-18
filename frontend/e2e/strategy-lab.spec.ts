@@ -174,3 +174,188 @@ test("SYNTHETIC: Strategy Lab compares independent equal-capital portfolios over
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
     .toBe(true);
 });
+
+test("SYNTHETIC: the common cohort defaults to Hybrid and previous portfolios stay in Archived", async ({
+  page,
+}) => {
+  const browserErrors: string[] = [];
+  page.on("pageerror", (error) => browserErrors.push(error.message));
+  const comparisons: unknown[] = [];
+  const archivedId = "92000000-0000-4000-8000-000000000001";
+  const t0 = "2026-01-02T03:04:05.123456Z";
+  const group = {
+    id: "93000000-0000-4000-8000-000000000001",
+    proposal_id: "94000000-0000-4000-8000-000000000001",
+    started_at: t0,
+    allocation: {
+      target_trade_cad: "250",
+      reserve_cad: "500",
+      unallocated_cad: "0",
+      allocations: [
+        {
+          exchange: "synthetic_a",
+          asset: "fiat:CAD",
+          quantity: "5000",
+          cad_value: "5000",
+          cad_rate: "1",
+        },
+        {
+          exchange: "synthetic_b",
+          asset: "asset:SOL",
+          quantity: "50",
+          cad_value: "5000",
+          cad_rate: "100",
+        },
+      ],
+      coverage_by_size: ["50", "100", "250", "500"].map((size) => ({
+        trade_amount_cad: size,
+        effective_minimum_cad: "50",
+        considered_routes: 4,
+        funded_alternative_routes: 2,
+        simultaneous_funded_routes: 1,
+        profitable_funded_routes: 0,
+      })),
+      funded_routes: [
+        {
+          route_id: "synthetic-sol-route",
+          base_asset: "asset:SOL",
+          buy_exchange: "synthetic_a",
+          sell_exchange: "synthetic_b",
+          maximum_funded_acquisition_cad: "500",
+          net_profit_cad: "-0.25",
+        },
+      ],
+    },
+  };
+  const rows = [
+    ["Liquid Arbitrage", "LIQUID_ARBITRAGE"],
+    ["Anomaly Hunter", "ANOMALY_HUNTER"],
+    ["Hybrid Optimizer", "HYBRID_OPTIMIZER"],
+    ["Hold Control — No trading", "NO_TRADING"],
+  ].map(([name, profile], index) => ({
+    id: ids[index],
+    name,
+    status: profile === "NO_TRADING" ? "PAUSED" : "ACTIVE",
+    classification: "RESEARCH",
+    initial_equity_cad: "10000",
+    started_at: t0,
+    strategy_version_id: strategyVersion,
+    mode: "RESEARCH_SHADOW",
+    settings: { strategy_lab_profile: profile, min_buy_capital_cad: "50", trade_amount_cad: "500" },
+    lab_cohort: group,
+  }));
+  const archived = {
+    id: archivedId,
+    name: "SYNTHETIC archived predecessor",
+    status: "ARCHIVED",
+    archived_at: t0,
+    classification: "VALIDATED",
+    initial_equity_cad: "10000",
+    started_at: fundingTime,
+    strategy_version_id: strategyVersion,
+    mode: "PRE_FUNDED",
+    settings: {},
+  };
+  await page.route(/\/api\/paper\/sessions(?:\?.*)?$/, (route) => {
+    const isArchived = new URL(route.request().url()).searchParams.get("scope") === "archived";
+    return route.fulfill({ json: { items: isArchived ? [archived] : rows } });
+  });
+  await page.route("**/api/strategies", (route) => route.fulfill({ json: {} }));
+  await page.route("**/api/paper/trades?**", (route) =>
+    route.fulfill({ json: { items: [], total: 0, limit: 25, offset: 0 } }),
+  );
+  await page.route("**/api/paper/sessions/*/metrics", (route) =>
+    route.fulfill({ json: { counts: {} } }),
+  );
+  await page.route("**/api/paper/sessions/*/portfolio", (route) =>
+    route.fulfill({
+      json: {
+        balances: [
+          {
+            exchange: "synthetic_a",
+            asset: "fiat:CAD",
+            quantity: "500",
+            available_quantity: "500",
+            reserved_quantity: "0",
+            market_value_cad: "500",
+          },
+          {
+            exchange: "synthetic_b",
+            asset: "asset:SYNTHZERO",
+            quantity: "0.000000000000000000",
+            available_quantity: "0",
+            reserved_quantity: "0",
+            market_value_cad: "0",
+          },
+        ],
+        limitations: [],
+      },
+    }),
+  );
+  await page.route("**/api/analytics/sessions/**", (route) =>
+    route.fulfill({ json: { metrics: {}, portfolio: null, items: [] } }),
+  );
+  await page.route("**/api/analytics/strategy-lab/compare", (route) => {
+    comparisons.push(route.request().postDataJSON());
+    return route.fulfill({
+      json: {
+        period: { start: t0, end },
+        initial_capital_cad: "10000",
+        rows: [],
+        limitations: [],
+      },
+    });
+  });
+  const password =
+    process.env.QUANTIX_E2E_PASSWORD ||
+    readFileSync(resolve(__dirname, "../../.secrets/admin-password"), "utf8").trim();
+  const origin = new URL(process.env.QUANTIX_E2E_URL || "http://127.0.0.1:3100").origin;
+  const authenticated = await page.request.post("/api/auth/login", {
+    headers: { Origin: origin },
+    data: { username: process.env.QUANTIX_E2E_USERNAME || "quantix", password },
+  });
+  expect(authenticated.ok()).toBe(true);
+  await page.goto("/portfolio", { waitUntil: "networkidle" });
+  const selector = page.getByRole("combobox", { name: "Paper portfolio" });
+  await expect(selector).toHaveValue(ids[2]);
+  await expect(selector.getByRole("option")).toHaveCount(4);
+  const inventory = page.getByRole("table", { name: "Virtual balances" });
+  await expect(inventory.getByText("SYNTHZERO")).toHaveCount(0);
+  await page.getByRole("button", { name: "Show zero balances" }).click();
+  await expect(inventory.getByText("SYNTHZERO")).toBeVisible();
+  await selector.selectOption(ids[3]);
+  await expect(page.getByText("Passive control", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /pause simulations|resume simulations/ }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Archived", exact: true }).click();
+  await expect(selector).toHaveValue(archivedId);
+  await expect(selector.getByRole("option")).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: /pause simulations|resume simulations|new portfolio/i }),
+  ).toHaveCount(0);
+  await page.getByRole("link", { name: "Review historical analytics and custom export" }).click();
+  await expect(page.getByRole("combobox", { name: "Analytics portfolio" })).toHaveValue(archivedId);
+  await expect(page.getByRole("region", { name: "Strategy Lab" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Current portfolios", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Analytics portfolio" })).toHaveValue(ids[2]);
+  const lab = page.getByRole("region", { name: "Strategy Lab" });
+  await expect(lab.locator("input:checked")).toHaveCount(4);
+  await expect(lab.getByText(/fresh REST rechecks of both legs/)).toBeVisible();
+  await expect(lab.getByText(/without submitting orders or rebalancing/)).toBeVisible();
+  await lab.getByText("Common opening funding", { exact: true }).click();
+  const sizes = lab.getByRole("table", { name: "Opening route capacity by purchase size" });
+  await expect(sizes.getByRole("rowheader")).toHaveCount(4);
+  await expect(sizes.getByRole("columnheader", { name: "Funded together" })).toBeVisible();
+  await expect(sizes.getByRole("columnheader", { name: "Positive after costs" })).toBeVisible();
+  await expect(
+    lab.getByRole("table", { name: "Routes funded at opening" }).getByText("SOL"),
+  ).toBeVisible();
+  await lab.getByLabel("Comparison end · UTC").fill("2026-01-04T00:00:00");
+  await lab.getByRole("button", { name: "Compare strategy portfolios" }).click();
+  await expect(
+    lab.getByRole("region", { name: "Recorded forward paper comparison" }),
+  ).toBeVisible();
+  expect(comparisons).toEqual([{ session_ids: ids, start: t0, end }]);
+  expect(browserErrors).toEqual([]);
+});

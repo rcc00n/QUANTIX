@@ -17,8 +17,14 @@ import {
   JsonDetails,
 } from "@/components/terminal-ui";
 import { asRecord, asRecords, text, useLive } from "@/lib/terminal";
-import type { PaperSession, PaperPortfolio } from "@/lib/paper";
-import { utcLabel } from "@/lib/paper";
+import {
+  paperSessionsPath,
+  preferredPaperSession,
+  utcLabel,
+  type PaperSession,
+  type PaperSessionScope,
+  type PaperPortfolio,
+} from "@/lib/paper";
 
 type AnalyticsResult = {
   schema_version: string;
@@ -74,7 +80,9 @@ function GroupTable({ rows, title }: { rows: Record<string, unknown>[]; title: s
   );
 }
 export function AnalyticsWorkspace() {
-  const sessions = useLive<{ items: PaperSession[] }>("/paper/sessions", 60000);
+  const [scope, setScope] = useState<PaperSessionScope>("current");
+  const archived = scope === "archived";
+  const sessions = useLive<{ items: PaperSession[] }>(paperSessionsPath(scope), 60000);
   const [sessionId, setSessionId] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -82,24 +90,25 @@ export function AnalyticsWorkspace() {
   const [query, setQuery] = useState("");
   const [formError, setFormError] = useState("");
   useEffect(() => {
+    if (new URLSearchParams(location.search).get("scope") === "archived") {
+      setScope("archived");
+    }
+  }, []);
+  useEffect(() => {
     if (sessions.data && !sessions.data.items.some((s) => s.id === sessionId)) {
       const requested = new URLSearchParams(location.search).get("session");
-      setSessionId(
-        sessions.data.items.find((s) => s.id === requested)?.id ||
-          sessions.data.items.find((s) => s.classification === "VALIDATED")?.id ||
-          sessions.data.items[0]?.id ||
-          "",
-      );
+      setSessionId(preferredPaperSession(sessions.data.items, requested)?.id ?? "");
     }
   }, [sessions.data, sessionId]);
   const session = sessions.data?.items.find((s) => s.id === sessionId);
+  const selected = session?.id;
   const suffix = query ? `&${query}` : "";
   const live = useLive<AnalyticsResult>(
-    sessionId ? `/analytics/sessions/${sessionId}?${query}` : null,
+    selected ? `/analytics/sessions/${selected}?${query}` : null,
     30000,
   );
   const series = useLive<SeriesResult>(
-    sessionId ? `/analytics/sessions/${sessionId}/series?limit=240${suffix}` : null,
+    selected ? `/analytics/sessions/${selected}/series?limit=240${suffix}` : null,
     30000,
   );
   const m = live.data?.metrics || {};
@@ -140,15 +149,17 @@ export function AnalyticsWorkspace() {
     { label: "FX conversion", value: expense.fx_conversion_costs_cad },
   ];
   const exportQuery = new URLSearchParams(query);
-  if (sessionId) exportQuery.set("session_id", sessionId);
+  if (selected) exportQuery.set("session_id", selected);
   return (
     <div className="terminal-workspace analytics-workspace">
-      <FullExport custom={sessionId ? Object.fromEntries(exportQuery) : null} />
-      <StrategyLab
-        sessions={sessions.data?.items ?? []}
-        loading={sessions.loading}
-        sessionError={sessions.error}
-      />
+      <FullExport custom={selected ? Object.fromEntries(exportQuery) : null} />
+      {!archived && (
+        <StrategyLab
+          sessions={sessions.data?.items ?? []}
+          loading={sessions.loading}
+          sessionError={sessions.error}
+        />
+      )}
       <div className="terminal-workspace-top">
         <div>
           <span className="small-label">NUMERICAL ACCOUNTING</span>
@@ -160,7 +171,7 @@ export function AnalyticsWorkspace() {
       </div>
       <form className="terminal-filterbar analytics-filterbar" onSubmit={apply}>
         <label>
-          Paper portfolio
+          {archived ? "Archived portfolio" : "Paper portfolio"}
           <select
             aria-label="Analytics portfolio"
             value={sessionId}
@@ -177,6 +188,21 @@ export function AnalyticsWorkspace() {
             ))}
           </select>
         </label>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            setScope(archived ? "current" : "archived");
+            setSessionId("");
+            setStart("");
+            setEnd("");
+            setStrategy("");
+            setQuery("");
+            setFormError("");
+          }}
+        >
+          {archived ? "Current portfolios" : "Archived"}
+        </Button>
         <label>
           Period start · UTC
           <input
@@ -232,6 +258,10 @@ export function AnalyticsWorkspace() {
         Filters below affect portfolio analytics and the optional custom export. Export Everything
         always includes all retained data without these filters.
       </p>
+      {archived && !sessions.loading && !sessions.data?.items.length && !sessions.error && (
+        <Empty title="No archived portfolios">Archived accounting remains available here.</Empty>
+      )}
+      {sessions.error && <Warning>{sessions.error}</Warning>}
       {formError && <Warning>{formError}</Warning>}
       {(live.error || series.error) && <Warning>{live.error || series.error}</Warning>}
       {session?.classification === "RESEARCH" && (

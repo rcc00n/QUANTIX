@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
+import { CohortOpening } from "@/components/cohort-opening";
 import { Empty, Exact, SectionTitle, Warning } from "@/components/terminal-ui";
 import { terminalFetch } from "@/lib/terminal";
 import {
+  STRATEGY_LAB_ENTRY,
   STRATEGY_LAB_PROFILES,
+  preferredPaperSession,
   utcLabel,
   type PaperSession,
   type PortfolioValuationStatus,
@@ -252,7 +255,7 @@ export function StrategyLab({
   sessionError: string;
 }) {
   const [capital, setCapital] = useState(capitalOptions[0]);
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[] | null>(null);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [result, setResult] = useState<LabResult | null>(null);
@@ -260,9 +263,25 @@ export function StrategyLab({
   const [busy, setBusy] = useState(false);
   const candidates = sessions.filter(
     (row) =>
-      row.classification === "RESEARCH" && row.initial_equity_cad.replace(/\.0+$/, "") === capital,
+      row.classification === "RESEARCH" &&
+      row.status !== "ARCHIVED" &&
+      row.initial_equity_cad.replace(/\.0+$/, "") === capital,
   );
-  const cohort = selected.filter((id) => candidates.some((row) => row.id === id));
+  const opening = preferredPaperSession(candidates)?.lab_cohort;
+  const peers = opening ? candidates.filter((row) => row.lab_cohort?.id === opening.id) : [];
+  const common =
+    peers.length === 4 &&
+    Object.keys(STRATEGY_LAB_PROFILES).every((profile) =>
+      peers.some((row) => row.settings.strategy_lab_profile === profile),
+    )
+      ? opening
+      : null;
+  const defaultIds = common ? peers.map((row) => row.id) : [];
+  const cohort = (selected ?? defaultIds).filter((id) => candidates.some((row) => row.id === id));
+  const openingInput = common?.started_at.slice(0, 19) ?? "";
+  useEffect(() => {
+    if (openingInput) setStart((previous) => previous || openingInput);
+  }, [openingInput]);
 
   async function compare(event: FormEvent) {
     event.preventDefault();
@@ -271,9 +290,11 @@ export function StrategyLab({
     setResult(null);
     setBusy(true);
     try {
-      const from = new Date(`${start}Z`).toISOString();
+      const from =
+        common && start === openingInput ? common.started_at : new Date(`${start}Z`).toISOString();
       const to = new Date(`${end}Z`).toISOString();
-      if (from >= to) throw new Error("Comparison end must follow the start.");
+      if (Date.parse(from) >= Date.parse(to))
+        throw new Error("Comparison end must follow the start.");
       const comparison = await terminalFetch<LabResult>(
         "/analytics/strategy-lab/compare",
         undefined,
@@ -297,6 +318,14 @@ export function StrategyLab({
         Compare independent research portfolios with equal starting capital over a shared UTC window
         of up to 31 days. Each portfolio keeps its own no-trading benchmark.
       </p>
+      {common && (
+        <p className="terminal-scope-note break-all">
+          PAPER ONLY · RESEARCH · Experiment {common.id} · T0 {utcLabel(common.started_at)}
+        </p>
+      )}
+      {common?.allocation && (
+        <CohortOpening allocation={common.allocation} proposalId={common.proposal_id} />
+      )}
       {sessionError && <Warning>{sessionError}</Warning>}
       <form onSubmit={compare}>
         <fieldset disabled={busy} className="paper-form-grid">
@@ -306,7 +335,9 @@ export function StrategyLab({
               value={capital}
               onChange={(event) => {
                 setCapital(event.target.value);
-                setSelected([]);
+                setSelected(null);
+                setStart("");
+                setEnd("");
                 setResult(null);
                 setError("");
               }}
@@ -353,7 +384,9 @@ export function StrategyLab({
                     disabled={!checked && cohort.length >= 4}
                     onChange={(event) => {
                       setSelected((ids) =>
-                        event.target.checked ? [...ids, row.id] : ids.filter((id) => id !== row.id),
+                        event.target.checked
+                          ? [...(ids ?? defaultIds), row.id]
+                          : (ids ?? defaultIds).filter((id) => id !== row.id),
                       );
                     }}
                   />
@@ -362,6 +395,14 @@ export function StrategyLab({
                     <small>
                       {profileNames[profile] ?? label(profile)} · {utcLabel(row.started_at)}
                     </small>
+                    {common && row.lab_cohort?.id === common.id && (
+                      <>
+                        <small className="break-all">
+                          {row.id} · <Exact value={row.initial_equity_cad} places={2} unit="CAD" />
+                        </small>
+                        {profile !== "BASELINE" && <small>{STRATEGY_LAB_ENTRY[profile]}</small>}
+                      </>
+                    )}
                   </span>
                 </label>
               );

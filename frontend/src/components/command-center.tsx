@@ -23,7 +23,7 @@ import {
 } from "@/components/reliability-health";
 import { StorageHealth } from "@/components/storage-health";
 import type { PaperSession, PaperPortfolio, PaperMetrics } from "@/lib/paper";
-import { utcLabel } from "@/lib/paper";
+import { preferredPaperSession, utcLabel } from "@/lib/paper";
 
 type Overview = {
   as_of?: string;
@@ -44,11 +44,7 @@ export function CommandCenter() {
   const [selected, setSelected] = useState("");
   useEffect(() => {
     if (sessions.data && !sessions.data.items.some((x) => x.id === selected))
-      setSelected(
-        sessions.data.items.find((x) => x.classification === "VALIDATED")?.id ||
-          sessions.data.items[0]?.id ||
-          "",
-      );
+      setSelected(preferredPaperSession(sessions.data.items)?.id ?? "");
   }, [sessions.data, selected]);
   const session = sessions.data?.items.find((x) => x.id === selected);
   const portfolio = useLive<PaperPortfolio>(
