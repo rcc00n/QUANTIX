@@ -58,8 +58,13 @@ def _record_route(row: AssetCoverage, route: dict) -> None:
     evidence = route.get("evidence") or {}
     timing = evidence.get("timing") or {}
     duration = timing.get("route_evaluation_ms")
-    if duration is not None:
-        row.retained_route_evaluation_ms.append(duration)
+    # Retained projections encode timing floats as strings. These are elapsed
+    # milliseconds, independent of the exact Decimal financial evidence below.
+    if isinstance(duration, (str, int, float)) and not isinstance(duration, bool):
+        try:
+            row.retained_route_evaluation_ms.append(float(duration))
+        except (ValueError, OverflowError):
+            pass
     if route["status"] not in {"RESEARCH_ONLY", "VERIFIED_MARKET", "RECHECKING"}:
         return
     profit = route.get("net_profit_cad")

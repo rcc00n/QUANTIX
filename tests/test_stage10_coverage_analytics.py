@@ -8,6 +8,7 @@ from arbiq.collector.config import CollectorConfig
 from arbiq.market_data.discovery import normalize_market
 from arbiq.market_data.quality import DataState
 from arbiq.opportunities.coverage_analytics import asset_coverage
+from arbiq.opportunities.evidence import shared_json
 from test_market_data import synthetic_capture, synthetic_market
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
@@ -97,14 +98,20 @@ def test_scanner_route_samples_exclude_expired_unselected_and_nonpositive_eviden
         "maximum_executable": {"acquisition_cost_cad": "2500.001000000000000001"},
         "evidence": {"timing": {"route_evaluation_ms": 2.5}},
     }
-    rejected = {**current, "status": "INVALIDATED"}
+    rejected = shared_json({**current, "status": "INVALIDATED"})
+    assert rejected["evidence"]["timing"]["route_evaluation_ms"] == "2.5"
     expired = {**current, "expires_at": NOW.isoformat()}
     unselected = {**current, "sell_exchange": "synthetic-retired"}
-    route_rows = (current, rejected, expired, unselected)
+    invalid_timing = (
+        {**rejected, "evidence": {"timing": {"route_evaluation_ms": value}}}
+        for value in ("not-a-duration", "NaN", "Infinity", "-5", True)
+    )
+    route_rows = (current, rejected, expired, unselected, *invalid_timing)
     result = coverage(markets, routes=route_rows)["asset:SOL"]
     assert result["positive_after_cost_routes"] == 1
     assert result["maximum_executable_buy_cad"] == "2500.001000000000000001"
     assert result["retained_route_evaluation_ms"]["sample_count"] == 2
+    assert result["retained_route_evaluation_ms"]["p50"] == 2.5
     assert result["retained_route_evaluation_ms"]["p95"] is None
     untrusted = coverage(markets, routes=route_rows, clock={"trusted": False})[
         "asset:SOL"
