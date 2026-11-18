@@ -5,13 +5,19 @@ from pydantic import Field
 from sqlalchemy import select
 
 from arbiq.auth.dependencies import DB, AuthenticatedUser
-from arbiq.db.models import Asset, Exchange, SystemEvent
+from arbiq.db.models import Asset, Exchange
 from arbiq.finance.contracts import Contract
 from arbiq.market_data.api import utc_reference
 from arbiq.notifications.service import delivery_status
 from arbiq.paper_trading.api import now_checked
 from arbiq.settings.models import TerminalSettingsVersion
-from arbiq.settings.terminal import TerminalSettings, read_effective_terminal, save_terminal
+from arbiq.settings.terminal import (
+    TerminalSettings,
+    read_effective_terminal,
+    save_terminal,
+    terminal_version_payload,
+    terminal_version_query,
+)
 
 router = APIRouter(prefix="/settings", tags=["persistent terminal settings"])
 
@@ -65,26 +71,14 @@ async def update_terminal(body: UpdateTerminal, request: Request, db: DB, user: 
         raise HTTPException(
             409, "Settings changed; reload the applied version before saving"
         ) from None
-    db.add(
-        SystemEvent(
-            actor_user_id=user.id,
-            event_type="terminal.settings_changed",
-            severity="info",
-            message="Versioned terminal preferences saved",
-            details={
-                "version": row.version,
-                "telegram_enabled": body.settings.notifications.telegram_enabled,
-            },
-        )
-    )
     await db.commit()
     return settings_dto(row, body.settings, await delivery_status(db, user.id, now))
 
 
 @router.get("/terminal/history")
 async def terminal_history(db: DB, user: AuthenticatedUser):
-    rows = await db.scalars(
-        select(TerminalSettingsVersion)
+    rows = await db.execute(
+        terminal_version_query()
         .where(TerminalSettingsVersion.user_id == user.id)
         .order_by(TerminalSettingsVersion.version.desc())
         .limit(50)
@@ -95,9 +89,9 @@ async def terminal_history(db: DB, user: AuthenticatedUser):
                 "id": str(x.id),
                 "version": x.version,
                 "effective_at": x.effective_at.isoformat(),
-                "settings": x.settings,
+                "settings": terminal_version_payload(x, profile),
             }
-            for x in rows
+            for x, profile in rows
         ],
         "limit": 50,
     }

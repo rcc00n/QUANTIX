@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 
 from arbiq.auth.dependencies import DB, AuthenticatedUser
 from arbiq.core.clock import elapsed_seconds
+from arbiq.core.storage_health import StorageHealth
 from arbiq.core.telemetry import ProcessTelemetry
 from arbiq.db.models import ArbitrageRoute, PaperSession, PaperTrade, SystemEvent
 from arbiq.market_data.api import exchanges
@@ -18,6 +19,7 @@ from arbiq.market_data.timing import distribution
 from arbiq.notifications.models import NotificationEvent
 from arbiq.opportunities.api import collector_diagnostics, project
 from arbiq.paper_trading.coordinator import trade_dto
+from arbiq.paper_trading.health import paper_valuation_health
 
 router = APIRouter(prefix="/terminal", tags=["terminal telemetry"])
 
@@ -147,7 +149,8 @@ async def health(request: Request, db: DB, user: AuthenticatedUser):
     events = list(
         await db.scalars(select(SystemEvent).order_by(SystemEvent.created_at.desc()).limit(30))
     )
-    sampler = request.app.state.process_telemetry
+    process = request.app.state.process_telemetry.sample()
+    storage = await request.app.state.storage_health.sample(db)
     latency = list(request.app.state.http_latencies)
     delivery_rows = list(
         await db.scalars(
@@ -161,9 +164,10 @@ async def health(request: Request, db: DB, user: AuthenticatedUser):
         **value,
         "database": "connected",
         "schema_revision": revision,
-        "uptime_seconds": sampler.sample()["uptime_seconds"],
+        "storage": storage,
+        "uptime_seconds": process["uptime_seconds"],
         "telemetry": {
-            "api": sampler.sample(),
+            "api": process,
             "api_memory_maintenance": request.app.state.memory_maintenance,
             "collector": data.get("telemetry"),
             "postgres_process": None,
@@ -186,6 +190,7 @@ async def health(request: Request, db: DB, user: AuthenticatedUser):
             ),
             "scope": "last_600_retained_delivered_events; no device-receipt measurement",
         },
+        "paper_valuation": await paper_valuation_health(db, user.id),
         "events": [
             {
                 "id": str(x.id),
@@ -201,5 +206,6 @@ async def health(request: Request, db: DB, user: AuthenticatedUser):
 
 def initialize_terminal(app):
     app.state.terminal_cache = TerminalCache()
+    app.state.storage_health = StorageHealth()
     app.state.process_telemetry = ProcessTelemetry()
     app.state.http_latencies = deque(maxlen=1000)

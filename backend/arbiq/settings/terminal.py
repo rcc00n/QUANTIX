@@ -3,13 +3,15 @@
 from typing import Literal
 
 from pydantic import Field, model_validator
-from sqlalchemy import select
+from sqlalchemy import String, cast, select
 
 from arbiq.collector.config import MarketProfile
-from arbiq.db.models import User
+from arbiq.db.models import SystemEvent, User
 from arbiq.finance.contracts import Contract, NonNegativeDecimal
 from arbiq.notifications.urgent import LocalClock
 from arbiq.settings.models import TerminalSettingsVersion
+
+SETTINGS_CHANGED_EVENT = "terminal.settings_changed"
 
 
 class MarketPreferences(Contract):
@@ -97,16 +99,46 @@ class TerminalSettings(Contract):
     notifications: NotificationPreferences = Field(default_factory=NotificationPreferences)
 
 
+def terminal_version_query():
+    # The Stage 8A.1 notifier and Stage 8C rollback parse this row's terminal-v1
+    # contract strictly. Match new collector-only evidence by owner and exact row ID.
+    row = TerminalSettingsVersion
+    profile = (
+        select(SystemEvent.details["market_profile"].as_string())
+        .where(
+            SystemEvent.event_type == SETTINGS_CHANGED_EVENT,
+            SystemEvent.actor_user_id == row.user_id,
+            SystemEvent.details["settings_version_id"].as_string() == cast(row.id, String),
+        )
+        .order_by(SystemEvent.created_at.desc(), SystemEvent.id.desc())
+        .limit(1)
+        .correlate(row)
+        .scalar_subquery()
+    )
+    return select(row, profile.label("market_profile"))
+
+
+def terminal_version_payload(row, profile):
+    if profile is None:
+        return row.settings
+    return {**row.settings, "market": {**row.settings.get("market", {}), "market_profile": profile}}
+
+
 async def read_effective_terminal(db, user_id=None):
-    query = select(TerminalSettingsVersion)
+    query = terminal_version_query()
     if user_id is not None:
         query = query.where(TerminalSettingsVersion.user_id == user_id)
-    row = await db.scalar(
-        query.order_by(
-            TerminalSettingsVersion.version.desc(), TerminalSettingsVersion.effective_at.desc()
-        ).limit(1)
-    )
-    return row, TerminalSettings.model_validate(row.settings) if row else TerminalSettings()
+    result = (
+        await db.execute(
+            query.order_by(
+                TerminalSettingsVersion.version.desc(), TerminalSettingsVersion.effective_at.desc()
+            ).limit(1)
+        )
+    ).first()
+    if result is None:
+        return None, TerminalSettings()
+    row, profile = result
+    return row, TerminalSettings.model_validate(terminal_version_payload(row, profile))
 
 
 async def save_terminal(db, user_id, settings, now, expected_version=None):
@@ -118,9 +150,23 @@ async def save_terminal(db, user_id, settings, now, expected_version=None):
     row = TerminalSettingsVersion(
         user_id=user_id,
         version=version + 1,
-        settings=settings.model_dump(mode="json"),
+        settings=settings.model_dump(mode="json", exclude={"market": {"market_profile"}}),
         effective_at=now,
     )
     db.add(row)
     await db.flush()
+    db.add(
+        SystemEvent(
+            actor_user_id=user_id,
+            event_type=SETTINGS_CHANGED_EVENT,
+            severity="info",
+            message="Versioned terminal preferences saved",
+            details={
+                "settings_version_id": str(row.id),
+                "version": row.version,
+                "market_profile": settings.market.market_profile,
+                "telegram_enabled": settings.notifications.telegram_enabled,
+            },
+        )
+    )
     return row

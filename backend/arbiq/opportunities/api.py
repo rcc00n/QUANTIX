@@ -33,6 +33,7 @@ from arbiq.opportunities.diagnostics import size_diagnostics
 router = APIRouter(prefix="/opportunities", tags=["arbitrage research"])
 CANDIDATE_WINDOW = 500
 CUSTOM_BUDGET_WINDOW = 50
+COLLECTOR_RETRY_SECONDS = 2
 # Lists never return these fields. Preserve the full immutable inputs in detail,
 # custom sizing, diagnostics and exports, while avoiding large decoded Python trees
 # for same-budget list freshness/quality/filter projection.
@@ -171,49 +172,89 @@ def live_diagnostics(value: dict) -> dict:
     }
 
 
+class CollectorOutage:
+    def __init__(self):
+        self.retry_at: float | None = None
+        self.last_contact: float | None = None
+        self.probe_active = False
+
+
+async def collector_engine_json(request: Request, path: str, **kwargs) -> dict | None:
+    """Share only transport failure timing. Every live result comes from its own IPC reply."""
+    app_state = request.app.state
+    client = app_state.collector_http
+    request_state = getattr(request, "state", None)
+    if client is None or getattr(request_state, "collector_unavailable", False):
+        return None
+    outage = getattr(app_state, "collector_engine_outage", None)
+    if outage is None:
+        outage = app_state.collector_engine_outage = CollectorOutage()
+    started = elapsed_seconds()
+    retry_at = outage.retry_at
+    recovering = retry_at is not None
+    if recovering:
+        if outage.probe_active or started < retry_at:
+            if request_state is not None:
+                request_state.collector_unavailable = True
+            return None
+        outage.probe_active = True
+
+    value = None
+    try:
+        async with client.get(path, **kwargs) as response:
+            unavailable = response.status in {502, 503, 504}
+            if response.status == 200:
+                try:
+                    value = await response.json()
+                except (aiohttp.ContentTypeError, ValueError):
+                    # The endpoint returned a reply. Its peer diagnostics may
+                    # still be usable even when this payload is malformed.
+                    pass
+    except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError, TimeoutError):
+        unavailable = True
+    except (aiohttp.ClientError, ValueError):
+        return None
+    finally:
+        if recovering:
+            outage.probe_active = False
+
+    finished = elapsed_seconds()
+    if unavailable:
+        if request_state is not None:
+            request_state.collector_unavailable = True
+        if outage.last_contact is None or started >= outage.last_contact:
+            outage.retry_at = finished + COLLECTOR_RETRY_SECONDS
+        return None
+    outage.last_contact = finished
+    outage.retry_at = None
+    return value if isinstance(value, dict) else None
+
+
 async def collector_current(
     request: Request, *, full=True, route_id=None, route_ids=None
 ) -> tuple[dict, dict | None]:
-    client = request.app.state.collector_http
-    if client is not None:
-        try:
-            params = {"summary": "0" if full else "1"}
-            if route_id:
-                params["route_id"] = str(route_id)
-            elif route_ids and len(route_ids) <= CUSTOM_BUDGET_WINDOW:
-                params["route_ids"] = ",".join(map(str, route_ids))
-            async with client.get("/engine/current", params=params) as response:
-                if response.status == 200:
-                    value = await response.json()
-                    if isinstance(value, dict) and isinstance(value.get("items"), list):
-                        items = {
-                            item["id"]: item
-                            for item in value["items"][:5000]
-                            if isinstance(item, dict) and isinstance(item.get("id"), str)
-                        }
-                        diagnostics = value.get("diagnostics")
-                        return items, live_diagnostics(diagnostics) if isinstance(
-                            diagnostics, dict
-                        ) else None
-        except (aiohttp.ClientError, TimeoutError, ValueError):
-            pass
+    params = {"summary": "0" if full else "1"}
+    if route_id:
+        params["route_id"] = str(route_id)
+    elif route_ids and len(route_ids) <= CUSTOM_BUDGET_WINDOW:
+        params["route_ids"] = ",".join(map(str, route_ids))
+    value = await collector_engine_json(request, "/engine/current", params=params)
+    if value is not None and isinstance(value.get("items"), list):
+        items = {
+            item["id"]: item
+            for item in value["items"][:5000]
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        }
+        diagnostics = value.get("diagnostics")
+        return items, live_diagnostics(diagnostics) if isinstance(diagnostics, dict) else None
     return {}, None
 
 
 async def collector_diagnostics(request: Request, db) -> dict:
     """Live IPC proves process liveness; persisted heartbeats cannot prove UTC trust."""
-    client = request.app.state.collector_http
-    if client is not None and not getattr(
-        getattr(request, "state", None), "collector_unavailable", False
-    ):
-        try:
-            async with client.get("/engine/diagnostics") as response:
-                if response.status == 200:
-                    value = await response.json()
-                    if isinstance(value, dict):
-                        return live_diagnostics(value)
-        except (aiohttp.ClientError, TimeoutError, ValueError):
-            pass
+    value = await collector_engine_json(request, "/engine/diagnostics")
+    if value is not None:
+        return live_diagnostics(value)
     run = await db.scalar(
         select(CollectorRun)
         .order_by((CollectorRun.status == "running").desc(), CollectorRun.created_at.desc())
