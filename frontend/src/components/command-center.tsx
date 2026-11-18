@@ -15,6 +15,13 @@ import {
   JsonDetails,
 } from "@/components/terminal-ui";
 import { HistoryChart, type SeriesPoint } from "@/components/terminal-charts";
+import {
+  CollectorReliability,
+  PaperHealth,
+  TelegramWorkerHealth,
+  type ReliabilitySnapshot,
+} from "@/components/reliability-health";
+import { StorageHealth } from "@/components/storage-health";
 import type { PaperSession, PaperPortfolio, PaperMetrics } from "@/lib/paper";
 import { utcLabel } from "@/lib/paper";
 
@@ -415,6 +422,13 @@ export function SystemHealthWorkspace() {
           notifications: value.notification_timings,
         }}
       />
+      <CollectorReliability
+        snapshot={collector.reliability as ReliabilitySnapshot | undefined}
+        stale={live.stale}
+      />
+      <TelegramWorkerHealth clockTrusted={clock.trusted === true && !live.stale} />
+      <StorageHealth snapshot={value.storage} stale={live.stale} />
+      <PaperHealth paper={paper} valuation={asRecord(value.paper_valuation)} stale={live.stale} />
       {assetCoverage.length > 0 && (
         <section className="terminal-panel">
           <SectionTitle title="Market coverage by asset" />
@@ -602,6 +616,7 @@ export function SystemHealthWorkspace() {
           {Object.keys(telemetry).length ? (
             Object.entries(telemetry).map(([name, raw]) => {
               const row = asRecord(raw);
+              const cgroup = asRecord(row.cgroup);
               return (
                 <div key={name}>
                   <h3>{name.replaceAll("_", " ")}</h3>
@@ -630,6 +645,37 @@ export function SystemHealthWorkspace() {
                         <Exact value={row.cpu_seconds} />
                       </dd>
                     </div>
+                    {cgroup.scope === "current_process_cgroup_v2" && (
+                      <>
+                        <div>
+                          <dt>Cgroup memory charge / cap</dt>
+                          <dd>
+                            <Exact value={cgroup.memory_charged_bytes} places={0} unit="bytes" /> /{" "}
+                            <Exact value={cgroup.memory_limit_bytes} places={0} unit="bytes" />
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Memory charge share / lifetime cap events</dt>
+                          <dd>
+                            <Exact value={cgroup.memory_pct_of_limit} unit="%" /> /{" "}
+                            <Exact value={cgroup.memory_limit_events_total} places={0} />
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>CPU cap usage / throttled scheduling periods</dt>
+                          <dd>
+                            <Exact value={cgroup.cpu_pct_of_limit} unit="%" /> /{" "}
+                            <Exact value={cgroup.cpu_throttled_period_pct} unit="%" />
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Lifetime cgroup OOM kills</dt>
+                          <dd>
+                            <Exact value={cgroup.oom_kills_total} places={0} />
+                          </dd>
+                        </div>
+                      </>
+                    )}
                   </dl>
                 </div>
               );
@@ -692,7 +738,7 @@ export function SystemHealthWorkspace() {
         </div>
       </section>
       <section className="terminal-panel">
-        <SectionTitle eyebrow="AUDIT HISTORY" title="Recent warnings and failures" />
+        <SectionTitle eyebrow="AUDIT HISTORY" title="Recent operational events" />
         {events.length ? (
           <div className="terminal-recent-list">
             {events.slice(0, 20).map((e, i) => (
