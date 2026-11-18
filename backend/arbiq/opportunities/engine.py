@@ -252,7 +252,8 @@ class ArbitrageEngine:
         self.metrics["fx_graph_rebuilds"] += 1
         return self.fx_snapshot
 
-    def market_input(self, rt, market, book, fx, *, fee: FeeAssessment, side):
+    @staticmethod
+    def market_input(rt, market, book, fx, *, fee: FeeAssessment, side):
         metadata = market.metadata
 
         def optional_limit(name):
