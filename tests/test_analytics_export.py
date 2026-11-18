@@ -575,7 +575,7 @@ async def test_cancelled_archive_drains_inflight_thread_before_member_close(
 async def test_terminal_preferences_export_excludes_later_versions(
     private_api, monkeypatch
 ):
-    from arbiq.settings.models import TerminalSettingsVersion
+    from arbiq.settings.terminal import TerminalSettings, save_terminal
 
     c, dbs, _ = private_api
     now = datetime(2026, 11, 22, 6, 10, tzinfo=UTC)
@@ -589,20 +589,21 @@ async def test_terminal_preferences_export_excludes_later_versions(
     ).json()
     async with dbs() as db:
         session = await db.get(PaperSession, UUID(p["id"]))
-        for version, minutes, assets in (
-            (1, 9, ["SYNTH_BTC"]),
-            (2, 1, ["SYNTH_FUTURE"]),
+        for version, minutes, assets, profile in (
+            (1, 9, ["SYNTH_BTC"], "BALANCED_ADAPTIVE"),
+            (2, 1, ["SYNTH_FUTURE"], "BROAD_EXPLORATION"),
         ):
-            db.add(
-                TerminalSettingsVersion(
-                    user_id=session.user_id,
-                    version=version,
-                    effective_at=now - timedelta(minutes=minutes),
-                    settings={
-                        "market": {"enabled_assets": assets},
+            await save_terminal(
+                db,
+                session.user_id,
+                TerminalSettings.model_validate(
+                    {
+                        "market": {"enabled_assets": assets, "market_profile": profile},
                         "notifications": {"telegram_enabled": False},
-                    },
-                )
+                    }
+                ),
+                now - timedelta(minutes=minutes),
+                expected_version=version - 1,
             )
         await db.commit()
     response = c.get(
@@ -616,8 +617,16 @@ async def test_terminal_preferences_export_excludes_later_versions(
     assert response.status_code == 200, response.text
     with zipfile.ZipFile(io.BytesIO(response.content)) as z:
         config = json.loads(z.read("config_snapshot.json"))
-        assert config["terminal_preferences_at_cutoff"]["version"] == 1
+        retained = config["terminal_preferences_at_cutoff"]
+        assert retained["version"] == 1
+        assert retained["settings"]["market"]["market_profile"] == "BALANCED_ADAPTIVE"
         assert config["notification_delivery_active"] is False
-        assert len(rows(z, "terminal_settings_history.csv")) == 1
+        past = rows(z, "terminal_settings_history.csv")
+        assert len(past) == 1
+        assert (
+            json.loads(past[0]["settings"])["market"]["market_profile"]
+            == "BALANCED_ADAPTIVE"
+        )
+        assert b"BROAD_EXPLORATION" not in z.read("terminal_settings_history.csv")
         assert b"SYNTH_FUTURE" not in z.read("terminal_settings_history.csv")
         assert b"SYNTH_FUTURE" not in z.read("config_snapshot.json")

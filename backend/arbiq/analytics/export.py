@@ -57,6 +57,7 @@ from arbiq.paper_trading.models import ExecutionObservation
 from arbiq.portfolio.contracts import ACCOUNTING_VERSION
 from arbiq.portfolio.models import AccountingMovement, PortfolioCheckpoint
 from arbiq.settings.models import TerminalSettingsVersion
+from arbiq.settings.terminal import terminal_version_payload, terminal_version_query
 
 # Wide immutable evaluation/book JSON can be hundreds of KiB per row. Bound the
 # decoded cursor batch independently of the total export record/byte limits.
@@ -326,6 +327,17 @@ async def records(db, query):
     result = await db.stream_scalars(query.execution_options(yield_per=BATCH_ROWS))
     async for row in result:
         yield record(row)
+
+
+def terminal_record(row, profile):
+    return {**record(row), "settings": terminal_version_payload(row, profile)}
+
+
+async def terminal_records(db, query):
+    rows = await db.stream(query.execution_options(yield_per=BATCH_ROWS))
+    async for row, profile in rows:
+        data = terminal_record(row, profile)
+        yield {**data, "record_json": data}
 
 
 async def make_export(db, session, control, period, generated_at, clock, strategy_version_id=None):
@@ -886,7 +898,7 @@ async def make_export(db, session, control, period, generated_at, clock, strateg
             ),
             "terminal_settings_history.csv": (
                 TerminalSettingsVersion,
-                select(TerminalSettingsVersion)
+                terminal_version_query()
                 .where(
                     TerminalSettingsVersion.user_id == session.user_id,
                     TerminalSettingsVersion.effective_at < period.end,
@@ -992,7 +1004,8 @@ async def make_export(db, session, control, period, generated_at, clock, strateg
         }
         for name, (model, query) in extra_queries.items():
             columns = tuple(c.name for c in model.__table__.columns) + ("record_json",)
-            await archive.csv(name, columns, raw(query))
+            source = terminal_records(db, query) if model is TerminalSettingsVersion else raw(query)
+            await archive.csv(name, columns, source)
 
         async def benchmarks():
             async for row in equity():
@@ -1025,17 +1038,20 @@ async def make_export(db, session, control, period, generated_at, clock, strateg
             ("session_id", "classification", "name", "initial_equity_cad", "benchmark_json"),
             scenarios(),
         )
-        terminal_at_cutoff = await db.scalar(
-            select(TerminalSettingsVersion)
-            .where(
-                TerminalSettingsVersion.user_id == session.user_id,
-                TerminalSettingsVersion.effective_at < period.end,
+        terminal_at_cutoff, profile_at_cutoff = (
+            await db.execute(
+                terminal_version_query()
+                .where(
+                    TerminalSettingsVersion.user_id == session.user_id,
+                    TerminalSettingsVersion.effective_at < period.end,
+                )
+                .order_by(
+                    TerminalSettingsVersion.version.desc(),
+                    TerminalSettingsVersion.effective_at.desc(),
+                )
+                .limit(1)
             )
-            .order_by(
-                TerminalSettingsVersion.version.desc(), TerminalSettingsVersion.effective_at.desc()
-            )
-            .limit(1)
-        )
+        ).first() or (None, None)
         config = {
             "schema_version": "quantix-export-v1",
             "paper_only": True,
@@ -1047,7 +1063,7 @@ async def make_export(db, session, control, period, generated_at, clock, strateg
             else None,
             "current_strategy_version_id": str(control.strategy_version_id),
             "initial_conditions": session.benchmark_snapshot,
-            "terminal_preferences_at_cutoff": record(terminal_at_cutoff)
+            "terminal_preferences_at_cutoff": terminal_record(terminal_at_cutoff, profile_at_cutoff)
             if terminal_at_cutoff
             else None,
             "terminal_preferences_limitation": None
