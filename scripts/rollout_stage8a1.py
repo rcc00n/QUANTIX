@@ -39,6 +39,10 @@ OVERLAYS = {
         "candidate": "compose.marathon.candidate.yaml",
         "rollback": "compose.marathon.rollback.yaml",
     },
+    "paper-cohort": {
+        "candidate": "compose.paper-cohort.candidate.yaml",
+        "rollback": "compose.paper-cohort.rollback.yaml",
+    },
 }
 EXPORT_MOUNT = "/var/tmp/quantix-export"
 STAGE8C_PAPER_COMPATIBILITY = """

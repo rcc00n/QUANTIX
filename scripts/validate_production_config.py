@@ -26,31 +26,34 @@ def read_config(*files):
     return json.loads(raw.stdout)
 
 
-def validate_marathon_overlays(base):
+def validate_release_overlays(base, release):
     from production_preflight import REPLACEMENT_ROLES, replacement_image_transition
 
     for mode in ("candidate", "rollback"):
         selected = read_config(
-            "compose.production.yaml", f"compose.marathon.{mode}.yaml"
+            "compose.production.yaml", f"compose.{release}.{mode}.yaml"
         )
-        for role in REPLACEMENT_ROLES["marathon"]:
-            previous, candidate = replacement_image_transition(role, "marathon")
+        for role in REPLACEMENT_ROLES[release]:
+            previous, candidate = replacement_image_transition(role, release)
             assert selected["services"][role]["image"] == (
                 candidate if mode == "candidate" else previous
-            ), "Unexpected marathon application image"
+            ), "Unexpected release application image"
         assert (
             selected["services"]["notifications"]["image"]
             == replacement_image_transition("notifications", "stage8a1")[1]
         ), "The original Telegram worker must remain pinned"
-        for role in (*REPLACEMENT_ROLES["marathon"], "notifications"):
+        for role in (*REPLACEMENT_ROLES[release], "notifications"):
             selected["services"][role]["image"] = base["services"][role]["image"]
-        assert selected == base, "A marathon overlay changed more than image tags"
+        assert selected == base, "A release overlay changed more than image tags"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--marathon", action="store_true", help="Verify the combined image overlays"
+    )
+    parser.add_argument(
+        "--paper-cohort", action="store_true", help="Verify the paper cohort image overlays"
     )
     args = parser.parse_args()
     config = read_config("compose.production.yaml")
@@ -94,8 +97,11 @@ def main():
             assert all(
                 s["source"] != "telegram_bot_token" for s in service.get("secrets", [])
             )
-    if args.marathon:
-        validate_marathon_overlays(config)
+    overlays = {}
+    for release, requested in (("marathon", args.marathon), ("paper-cohort", args.paper_cohort)):
+        if requested:
+            validate_release_overlays(config, release)
+            overlays[f"{release.replace('-', '_')}_image_overlays"] = "PASS"
     print(
         json.dumps(
             {
@@ -104,7 +110,7 @@ def main():
                 "public_internal_ports": 0,
                 "swap_allowed": False,
                 "environment_values_printed": False,
-                **({"marathon_image_overlays": "PASS"} if args.marathon else {}),
+                **overlays,
             }
         )
     )

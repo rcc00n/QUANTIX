@@ -102,7 +102,12 @@ def test_changed_old_instance_fails_before_any_stop(transaction):
 @pytest.mark.parametrize("mode", ("candidate", "rollback"))
 @pytest.mark.parametrize(
     ("release", "previous"),
-    (("stage8b1", "stage8a1"), ("stage8c", "stage8a1"), ("marathon", "stage8c")),
+    (
+        ("stage8b1", "stage8a1"),
+        ("stage8c", "stage8a1"),
+        ("marathon", "stage8c"),
+        ("paper-cohort", "marathon"),
+    ),
 )
 def test_new_release_uses_exact_rollback_and_candidate_tags(
     monkeypatch, role, mode, release, previous
@@ -121,7 +126,7 @@ def test_new_release_uses_exact_rollback_and_candidate_tags(
         rollout.inspect_images(role, image_ids[replacement], image_ids[current], mode, release)
 
 
-@pytest.mark.parametrize("release", ("stage8b1", "stage8c", "marathon"))
+@pytest.mark.parametrize("release", ("stage8b1", "stage8c", "marathon", "paper-cohort"))
 def test_new_release_cannot_restart_the_active_notification_consumer(transaction, release):
     args, outcome, calls = transaction
     args.release = release

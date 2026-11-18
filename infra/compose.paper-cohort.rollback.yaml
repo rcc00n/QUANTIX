@@ -1,0 +1,10 @@
+# Return application roles to the profile-aware marathon release.
+services:
+  backend:
+    image: quantix-backend:0.7.1-marathon
+  collector:
+    image: quantix-backend:0.7.1-marathon
+  frontend:
+    image: quantix-frontend:0.7.1-marathon
+  notifications:
+    image: quantix-backend:0.7.1-stage8a1
