@@ -67,6 +67,41 @@ def allowed_paper_asset(allowed, ticker, canonical):
     return not allowed or any((canonical if ":" in asset else ticker) == asset for asset in allowed)
 
 
+def profit_threshold_satisfied(strategy, net_cad, acquisition_cad):
+    if net_cad is None or acquisition_cad is None or acquisition_cad <= 0:
+        return False
+    passes = (
+        net_cad >= strategy.minimum_profit_cad,
+        net_cad / acquisition_cad * 100 >= strategy.minimum_profit_pct,
+    )
+    return all(passes) if strategy.threshold_logic == "AND" else any(passes)
+
+
+def scheduled_projection(buy, sell, strategy, evaluated_at):
+    """Prefer an eligible target-size projection before trying the hard budget."""
+    budgets = [strategy.trade_amount_cad]
+    if strategy.target_trade_cad is not None and strategy.target_trade_cad != budgets[0]:
+        budgets.insert(0, strategy.target_trade_cad)
+    for cap in budgets:
+        best = optimize_route(
+            buy,
+            sell,
+            budget_cad=floor_derived(cap / (1 + strategy.slippage_bps / 10000), Decimal("1e-18")),
+            now=evaluated_at,
+            costs=Costs(slippage_bps=strategy.slippage_bps, rebalancing_bps=strategy.rebalance_bps),
+            budgets=(),
+            max_search_evaluations=128,
+        ).best
+        if cap == strategy.trade_amount_cad or (
+            best
+            and minimum_buy_satisfied(strategy, best.acquisition_cost_cad)
+            and best.acquisition_cost_cad >= strategy.minimum_liquidity_cad
+            and profit_threshold_satisfied(strategy, best.net_profit_cad, best.acquisition_cost_cad)
+        ):
+            return best
+    return None
+
+
 def event(db, trade, status, now, reason="", details=None):
     trade.status = status
     trade.reason = reason or None
@@ -313,8 +348,20 @@ class PaperCoordinator:
         strategy = read_pinned_strategy(control.settings)
         if strategy.strategy_lab_profile == "NO_TRADING":
             return
+        # A pause or archive can win the lock after the candidate list was read.
+        # Lock both rows so PostgreSQL rechecks the status even on that race.
+        current = (
+            await db.execute(
+                select(PaperSession.ended_at, PaperControl.status, PaperControl.strategy_version_id)
+                .select_from(PaperSession)
+                .join(PaperControl)
+                .where(PaperSession.id == session.id)
+                .with_for_update(of=(PaperSession, PaperControl))
+            )
+        ).one_or_none()
+        if current is None or current != (None, "ACTIVE", control.strategy_version_id):
+            return
         key = f"paper:{session.id}:{evaluation.id}:{control.strategy_version_id}"
-        await accounting.lock_session(db, session.id)
         if await db.scalar(select(PaperTrade.id).where(PaperTrade.idempotency_key == key)):
             return
         hour_count = await db.scalar(
@@ -458,22 +505,9 @@ class PaperCoordinator:
                     "versioned paper strategy taker assumption",
                 ),
             )
-            result = await asyncio.to_thread(
-                optimize_route,
-                buy,
-                sell,
-                budget_cad=floor_derived(
-                    strategy.trade_amount_cad / (1 + strategy.slippage_bps / 10000),
-                    Decimal("1e-18"),
-                ),
-                now=evaluation.evaluated_at,
-                costs=Costs(
-                    slippage_bps=strategy.slippage_bps, rebalancing_bps=strategy.rebalance_bps
-                ),
-                budgets=(),
-                max_search_evaluations=128,
+            best = await asyncio.to_thread(
+                scheduled_projection, buy, sell, strategy, evaluation.evaluated_at
             )
-            best = result.best
         except (ValueError, TypeError, KeyError, ArithmeticError):
             reject("CALCULATION_EVIDENCE_INCOMPLETE")
             return
@@ -511,12 +545,7 @@ class PaperCoordinator:
                 risk_net -= (
                     strategy.transfer.withdrawal_fee_base + strategy.transfer.network_fee_base
                 ) * mark.cad_per_unit
-        passes = [
-            risk_net is not None and risk_net >= strategy.minimum_profit_cad,
-            risk_net is not None
-            and risk_net / best.acquisition_cost_cad * 100 >= strategy.minimum_profit_pct,
-        ]
-        if not (all(passes) if strategy.threshold_logic == "AND" else any(passes)):
+        if not profit_threshold_satisfied(strategy, risk_net, best.acquisition_cost_cad):
             reject("PROFIT_THRESHOLD")
             return
         if (
@@ -1246,11 +1275,18 @@ class PaperCoordinator:
             await db.scalars(
                 select(RebalanceRequest)
                 .where(RebalanceRequest.status == "PENDING", RebalanceRequest.eligible_at <= now)
+                .order_by(
+                    RebalanceRequest.session_id, RebalanceRequest.eligible_at, RebalanceRequest.id
+                )
                 .limit(20)
             )
         )
         for row in rows:
             await accounting.lock_session(db, row.session_id)
+            await db.refresh(row, attribute_names=["status"])
+            if row.status != "PENDING":
+                # An archive request may have released its reservation while waiting.
+                continue
             request = row.request
             key = f"rebalance:{row.id}"
             rate = self.market.mark(
@@ -1326,7 +1362,7 @@ class PaperCoordinator:
                 await db.execute(
                     select(PaperControl, PaperSession)
                     .join(PaperSession)
-                    .where(PaperControl.status == "ACTIVE")
+                    .where(PaperControl.status == "ACTIVE", PaperSession.ended_at.is_(None))
                     .where(
                         PaperControl.settings["strategy_lab_profile"]
                         .as_string()
@@ -1360,7 +1396,10 @@ class PaperCoordinator:
             async with self.sessions() as db:
                 rows = (
                     await db.execute(
-                        select(PaperControl, PaperSession).join(PaperSession).limit(20)
+                        select(PaperControl, PaperSession)
+                        .join(PaperSession)
+                        .where(PaperSession.ended_at.is_(None))
+                        .limit(20)
                     )
                 ).all()
                 for control, session in rows:
@@ -1380,6 +1419,14 @@ class PaperCoordinator:
                         benchmark[key] = self.market.mark(
                             *key, Decimal(h["quantity"]), now, control.classification == "RESEARCH"
                         )
+                    ended_at = await db.scalar(
+                        select(PaperSession.ended_at)
+                        .where(PaperSession.id == session.id)
+                        .with_for_update()
+                    )
+                    if ended_at is not None:
+                        await db.commit()
+                        continue
                     await valuation.snapshot(
                         db,
                         session.id,

@@ -2,7 +2,7 @@
 
 from collections import Counter
 
-from sqlalchemy import select, true
+from sqlalchemy import or_, select, true
 
 from arbiq.db.models import PaperSession
 from arbiq.paper_trading.models import PaperControl
@@ -29,7 +29,14 @@ async def paper_valuation_health(db, owner_id):
             .select_from(PaperSession)
             .join(PaperControl, PaperSession.id == PaperControl.session_id)
             .outerjoin(checkpoint, true())
-            .where(PaperSession.user_id == owner_id, PaperControl.status == "ACTIVE")
+            .where(
+                PaperSession.user_id == owner_id,
+                PaperSession.ended_at.is_(None),
+                or_(
+                    PaperControl.status == "ACTIVE",
+                    PaperControl.settings["strategy_lab_profile"].as_string() == "NO_TRADING",
+                ),
+            )
             .order_by(PaperSession.started_at.desc(), PaperSession.id.desc())
             .limit(MAX_ACTIVE_PORTFOLIOS + 1)
         )

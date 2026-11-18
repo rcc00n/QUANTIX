@@ -31,6 +31,7 @@ from arbiq.market_data.api import router as market_router
 from arbiq.notifications.api import router as notification_router
 from arbiq.opportunities.api import router as opportunity_router
 from arbiq.paper_trading.api import router as paper_router
+from arbiq.paper_trading.cohort import router as cohort_router
 from arbiq.paper_trading.funding import router as funding_router
 from arbiq.paper_trading.replay_api import router as replay_router
 from arbiq.settings.api import router as settings_router
@@ -183,6 +184,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(paper_router, prefix="/api/v1")
     app.include_router(terminal_router, prefix="/api/v1")
     app.include_router(funding_router, prefix="/api/v1")
+    app.include_router(cohort_router, prefix="/api/v1")
     app.include_router(replay_router, prefix="/api/v1")
     app.include_router(settings_router, prefix="/api/v1")
     app.include_router(analytics_router, prefix="/api/v1")

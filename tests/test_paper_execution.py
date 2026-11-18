@@ -18,6 +18,7 @@ from arbiq.db.models import (
     Market,
     PaperFill,
     PaperOrder,
+    PaperSession,
     PaperTrade,
     User,
 )
@@ -35,6 +36,7 @@ from arbiq.opportunities.contracts import (
 )
 from arbiq.opportunities.math import optimize_route
 from arbiq.opportunities.storage import OpportunityStore
+from arbiq.paper_trading.archive import archive_portfolio
 from arbiq.paper_trading.config import PaperConfig
 from arbiq.paper_trading.coordinator import PaperCoordinator, allowed_paper_asset
 from arbiq.paper_trading.execution import (
@@ -518,6 +520,44 @@ async def advance(env):
         await env.coordinator.advance(db, t, env.state["now"])
         await db.commit()
         await env.coordinator.refresh_targets(db)
+
+
+async def test_archive_stops_stale_admission_and_drains_existing_attempt(environment):
+    env = environment
+    async with env.sessions() as stale:
+        trade = await stale.get(PaperTrade, env.ids["trade"])
+        session = await stale.get(PaperSession, trade.session_id)
+        old_control = await stale.get(PaperControl, session.id)
+        assert old_control.status == "ACTIVE"
+        async with env.sessions() as archive:
+            archived, control, pending = await archive_portfolio(
+                archive, session.user_id, session.id, NOW
+            )
+            assert control.status == "PAUSED" and archived.ended_at is None
+            assert pending["attempts"] == 1 and pending["reserved_positions"]
+            await archive.commit()
+        # The collector's previous ACTIVE sample cannot admit another candidate.
+        # Passing no evaluation is safe because current status is checked first.
+        await env.coordinator.schedule(stale, old_control, session, None, None, NOW)
+        sid, owner = trade.session_id, session.user_id
+        await stale.rollback()
+    await at(env, 300)
+    await advance(env)
+    async with env.sessions() as db:
+        trade = await db.get(PaperTrade, env.ids["trade"])
+        assert trade.status == "EXPIRED"
+        archived, control, pending = await archive_portfolio(db, owner, sid, env.state["now"])
+        assert pending == {} and control.status == "PAUSED"
+        assert archived.ended_at == env.state["now"]
+        fills = await db.scalar(
+            select(func.count())
+            .select_from(PaperFill)
+            .join(PaperOrder)
+            .where(PaperOrder.trade_id == trade.id)
+        )
+        assert fills == 0
+        assert await reconcile(db, sid)
+        await db.commit()
 
 
 @pytest.mark.parametrize("environment", ["future_evaluation"], indirect=True)

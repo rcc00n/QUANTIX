@@ -22,7 +22,17 @@ class Allocation(Contract):
 
 @decimal_context
 async def create_portfolio(
-    db, user_id, name, settings, initial_equity, allocations, now, *, observed_funding=False
+    db,
+    user_id,
+    name,
+    settings,
+    initial_equity,
+    allocations,
+    now,
+    *,
+    observed_funding=False,
+    lab_cohort=None,
+    passive=False,
 ):
     await db.scalar(select(User).where(User.id == user_id).with_for_update())
     count = await db.scalar(
@@ -33,7 +43,14 @@ async def create_portfolio(
     )
     if count >= 20:
         raise ValueError("Maximum20active portfolios; pause an existing scenario first")
-    version = await save_strategy(db, user_id, settings, now, "Created isolated paper portfolio")
+    version = await save_strategy(
+        db,
+        user_id,
+        settings,
+        now,
+        "Created isolated paper portfolio",
+        update_head=lab_cohort is None,
+    )
     research = settings.mode == "RESEARCH_SHADOW"
     if allocations is None:
         exchanges = list(
@@ -84,6 +101,7 @@ async def create_portfolio(
             "initial_equity_cad": str(initial_equity),
             "simulation_only": True,
             "holdings": [],
+            **({"lab_cohort": lab_cohort} if lab_cohort is not None else {}),
         },
     )
     db.add(session)
@@ -93,7 +111,7 @@ async def create_portfolio(
         strategy_version_id=version.id,
         classification="RESEARCH" if research else "VALIDATED",
         mode=settings.mode,
-        status="ACTIVE",
+        status="PAUSED" if passive else "ACTIVE",
         settings=settings.model_dump(mode="json"),
         updated_at=now,
     )
@@ -126,9 +144,11 @@ def session_dto(session, control):
         "name": session.name,
         "classification": control.classification,
         "mode": control.mode,
-        "status": control.status,
+        "status": "ARCHIVED" if session.ended_at is not None else control.status,
+        "archived_at": session.ended_at,
         "initial_equity_cad": str(session.initial_equity_cad),
         "started_at": session.started_at,
         "strategy_version_id": str(control.strategy_version_id),
         "settings": control.settings,
+        "lab_cohort": session.benchmark_snapshot.get("lab_cohort"),
     }

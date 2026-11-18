@@ -1,18 +1,22 @@
 """Authenticated paper interfaces with SYNTHETIC isolated funds, never live executions."""
 
 from datetime import UTC, datetime
-from uuid import uuid4
+from decimal import Decimal
+from uuid import UUID, uuid4
 
 import pytest
-from arbiq.db.models import Asset, Exchange, PaperSession, StrategyVersion
+from arbiq.db.models import Asset, Exchange, Journal, LedgerEntry, PaperSession, StrategyVersion
 from arbiq.main import create_app
-from arbiq.paper_trading.models import PaperControl
+from arbiq.paper_trading.models import PaperControl, RebalanceRequest, StrategyHead
+from arbiq.paper_trading.service import create_portfolio
 from arbiq.portfolio.accounting import reconcile
-from arbiq.settings.strategy import presets
+from arbiq.portfolio.models import PortfolioPosition
+from arbiq.settings.strategy import presets, strategy_lab_settings
 from conftest import SYNTHETIC_PASSWORD
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from test_stage8a1_rollout import rollout
 
 
 @pytest.fixture
@@ -68,6 +72,116 @@ def test_private_paper_endpoints_require_sessions(client):
     client.cookies.clear()
     for path in ("/paper/sessions", "/paper/trades", "/strategies"):
         assert client.get("/api/v1" + path).status_code == 401
+
+
+async def test_archival_releases_unperformed_transfer_once_and_preserves_history(
+    private_api,
+):
+    c, dbs, _ = private_api
+    old = c.post("/api/v1/paper/sessions", json={"name": "SYNTHETIC replace"}).json()
+    kept = c.post("/api/v1/paper/sessions", json={"name": "SYNTHETIC retain"}).json()
+    path = f"/api/v1/paper/sessions/{old['id']}"
+    transfer = {
+        "from_exchange": "kraken",
+        "to_exchange": "ndax",
+        "asset": "fiat:CAD",
+        "quantity": "100",
+        "network": "SYNTHETIC",
+        "network_verified": True,
+    }
+    accepted = c.post(path + "/rebalance", json=transfer)
+    assert accepted.status_code == 202
+    request_id = UUID(accepted.json()["id"])
+    sid = UUID(old["id"])
+    async with dbs() as db:
+        ledger = (
+            select(LedgerEntry.id, LedgerEntry.quantity, LedgerEntry.cad_value)
+            .join(Journal)
+            .where(Journal.session_id == sid)
+        )
+        before = set((await db.execute(ledger)).all())
+    archived = c.post(path + "/archive")
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["status"] == "ARCHIVED"
+    assert archived.json()["archived_at"]
+    assert archived.json()["pending"] == {}
+    assert c.post(path + "/archive").json() == archived.json()
+    assert [s["id"] for s in c.get("/api/v1/paper/sessions").json()["items"]] == [kept["id"]]
+    assert c.get("/api/v1/paper/sessions?scope=archived").json()["items"] == [
+        {key: value for key, value in archived.json().items() if key != "pending"}
+    ]
+    assert c.get("/api/v1/paper/sessions?scope=all").json()["total"] == 2
+    assert c.get(path + "/portfolio").json()["archived_at"] == archived.json()["archived_at"]
+    assert c.get(path + "/metrics").status_code == 200
+    assert c.post(path + "/resume").status_code == 409
+    assert c.post(path + "/rebalance", json=transfer).status_code == 409
+    assert c.put(path + "/strategy", json=old["settings"]).status_code == 409
+    async with dbs() as db:
+        assert before < set((await db.execute(ledger)).all())
+        request = await db.get(RebalanceRequest, request_id)
+        assert request.status == "CANCELLED" and request.result["reason"] == "PORTFOLIO_ARCHIVE"
+        events = list(await db.scalars(select(Journal.event_type).where(Journal.session_id == sid)))
+        assert events.count("RESERVATION_RELEASE") == 1
+        assert "TRANSFER" not in events
+        positions = (
+            await db.execute(
+                select(PortfolioPosition.quantity, PortfolioPosition.reserved_quantity).where(
+                    PortfolioPosition.session_id == sid
+                )
+            )
+        ).all()
+        assert positions == [(Decimal("5000"), Decimal("0"))] * 2
+        assert await reconcile(db, sid)
+
+
+async def test_pausing_lab_keeps_its_history_and_satisfies_stage8c_guard(private_api):
+    c, dbs, _ = private_api
+    legacy = c.post("/api/v1/paper/sessions", json={}).json()
+    async with dbs() as db:
+        owner = (await db.get(PaperSession, UUID(legacy["id"]))).user_id
+        lab, _ = await create_portfolio(
+            db,
+            owner,
+            "SYNTHETIC rollback trial",
+            strategy_lab_settings("HYBRID_OPTIMIZER"),
+            Decimal("10000"),
+            None,
+            datetime(2026, 11, 22, 6, tzinfo=UTC),
+            lab_cohort={"id": str(uuid4())},
+        )
+        lab_id = lab.id
+        await db.commit()
+
+    async def guard_result():
+        # Scope the unchanged deployed SQL to this owner without touching other fixtures.
+        scopes = {
+            "paper_controls": (
+                "SELECT c.* FROM public.paper_controls c JOIN public.paper_sessions s "
+                "ON c.session_id = s.id WHERE s.user_id = :owner"
+            ),
+            "paper_trades": (
+                "SELECT t.* FROM public.paper_trades t JOIN public.paper_sessions s "
+                "ON t.session_id = s.id WHERE s.user_id = :owner"
+            ),
+            "strategy_heads": "SELECT * FROM public.strategy_heads WHERE user_id = :owner",
+            "strategy_versions": "SELECT * FROM public.strategy_versions WHERE user_id = :owner",
+        }
+        async with dbs() as db:
+            for table, scope in scopes.items():
+                await db.execute(text(f"CREATE TEMP TABLE {table} (LIKE public.{table})"))
+                await db.execute(text(f"INSERT INTO pg_temp.{table} {scope}"), {"owner": owner})
+            return await db.scalar(text(rollout.STAGE8C_PAPER_COMPATIBILITY))
+
+    assert await guard_result() == "incompatible"
+    assert c.post(f"/api/v1/paper/sessions/{lab_id}/pause").status_code == 200
+    assert await guard_result() == "compatible"
+    async with dbs() as db:
+        head = await db.get(StrategyHead, owner)
+        assert str(head.strategy_version_id) == legacy["strategy_version_id"]
+        session = await db.get(PaperSession, lab_id)
+        pinned = await db.get(StrategyVersion, session.strategy_version_id)
+        assert pinned.settings["strategy_lab_profile"] == "HYBRID_OPTIMIZER"
+        assert await reconcile(db, lab_id)
 
 
 async def test_funded_portfolios_and_mode_isolation(private_api):

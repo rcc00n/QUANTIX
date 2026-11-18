@@ -6,7 +6,7 @@ from typing import Literal
 from uuid import UUID
 
 import aiohttp
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import Field
 from sqlalchemy import func, or_, select
 
@@ -25,11 +25,18 @@ from arbiq.db.models import (
     SimulationEvent,
     StrategyVersion,
     SystemEvent,
+    User,
     VirtualAccount,
 )
 from arbiq.finance.contracts import Contract, NonNegativeDecimal, PositiveDecimal
 from arbiq.market_data.api import utc_reference
 from arbiq.market_data.quality import safe_json
+from arbiq.paper_trading.archive import (
+    PortfolioLifecycleError,
+    PortfolioNotFound,
+    archive_portfolio,
+    lock_portfolio,
+)
 from arbiq.paper_trading.coordinator import trade_dto
 from arbiq.paper_trading.lifecycle import lifecycle_rank
 from arbiq.paper_trading.models import (
@@ -68,6 +75,16 @@ async def now_checked(request):
     return now
 
 
+async def writable_portfolio(db, user, session_id):
+    try:
+        session, control = await lock_portfolio(db, user.id, session_id)
+    except PortfolioNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    if session.ended_at is not None:
+        raise HTTPException(409, "Archived portfolios are read-only")
+    return session, control
+
+
 def record(row):
     return safe_json({c.name: getattr(row, c.name) for c in row.__table__.columns})
 
@@ -81,15 +98,18 @@ class CreatePortfolio(Contract):
 
 
 @router.get("/paper/sessions")
-async def sessions(db: DB, user: AuthenticatedUser):
+async def sessions(
+    db: DB, user: AuthenticatedUser, scope: Literal["current", "archived", "all"] = "current"
+):
+    query = (
+        select(PaperSession, PaperControl).join(PaperControl).where(PaperSession.user_id == user.id)
+    )
+    if scope == "current":
+        query = query.where(PaperSession.ended_at.is_(None))
+    elif scope == "archived":
+        query = query.where(PaperSession.ended_at.is_not(None))
     rows = (
-        await db.execute(
-            select(PaperSession, PaperControl)
-            .join(PaperControl)
-            .where(PaperSession.user_id == user.id)
-            .order_by(PaperSession.started_at)
-            .limit(100)
-        )
+        await db.execute(query.order_by(PaperSession.started_at, PaperSession.id).limit(100))
     ).all()
     return {
         "items": [session_dto(*r) for r in rows],
@@ -128,7 +148,7 @@ async def portfolio(session_id: UUID, request: Request, db: DB, user: Authentica
     session, control = await owned(db, user, session_id)
     await db.commit()  # Ownership is read-only; release the pool slot before live IPC.
     client = request.app.state.collector_http
-    if client:
+    if client and session.ended_at is None:
         try:
             async with client.get(f"/paper/portfolios/{session_id}") as response:
                 if response.status == 200:
@@ -146,6 +166,7 @@ async def portfolio(session_id: UUID, request: Request, db: DB, user: Authentica
     if last:
         return {
             **last.payload,
+            "archived_at": session.ended_at,
             "storage_origin": "retained_snapshot",
             "stale": True,
             "valuation_status": "STALE",
@@ -154,6 +175,7 @@ async def portfolio(session_id: UUID, request: Request, db: DB, user: Authentica
         }
     return {
         "session_id": str(session.id),
+        "archived_at": session.ended_at,
         "classification": control.classification,
         "initial_equity_cad": str(session.initial_equity_cad),
         "equity_cad": None,
@@ -207,9 +229,12 @@ async def daily(
 
 @router.post("/paper/sessions/{session_id}/pause")
 async def pause(session_id: UUID, request: Request, db: DB, user: AuthenticatedUser):
-    _, control = await owned(db, user, session_id)
+    now = await now_checked(request)
+    _, control = await writable_portfolio(db, user, session_id)
+    if control.status == "PAUSED":
+        return {"status": "PAUSED", "existing_reserved_legs": "continue_with_audit"}
     control.status = "PAUSED"
-    control.updated_at = await now_checked(request)
+    control.updated_at = now
     db.add(
         SystemEvent(
             actor_user_id=user.id,
@@ -225,9 +250,14 @@ async def pause(session_id: UUID, request: Request, db: DB, user: AuthenticatedU
 
 @router.post("/paper/sessions/{session_id}/resume")
 async def resume(session_id: UUID, request: Request, db: DB, user: AuthenticatedUser):
-    _, control = await owned(db, user, session_id)
+    now = await now_checked(request)
+    _, control = await writable_portfolio(db, user, session_id)
+    if control.settings.get("strategy_lab_profile") == "NO_TRADING":
+        raise HTTPException(409, "The no-trading benchmark cannot be enabled for execution")
+    if control.status == "ACTIVE":
+        return {"status": "ACTIVE"}
     control.status = "ACTIVE"
-    control.updated_at = await now_checked(request)
+    control.updated_at = now
     db.add(
         SystemEvent(
             actor_user_id=user.id,
@@ -241,11 +271,34 @@ async def resume(session_id: UUID, request: Request, db: DB, user: Authenticated
     return {"status": "ACTIVE"}
 
 
+@router.post("/paper/sessions/{session_id}/archive")
+async def archive_session(
+    session_id: UUID, request: Request, response: Response, db: DB, user: AuthenticatedUser
+):
+    now = await now_checked(request)
+    try:
+        session, control, pending = await archive_portfolio(db, user.id, session_id, now)
+        await db.commit()
+    except PortfolioNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    except (PortfolioLifecycleError, AccountingError) as exc:
+        await db.rollback()
+        raise HTTPException(409, str(exc)) from None
+    if pending:
+        response.status_code = 202
+    return {**session_dto(session, control), "pending": pending}
+
+
 @router.put("/paper/sessions/{session_id}/strategy")
 async def strategy_update(
     session_id: UUID, body: PaperStrategy, request: Request, db: DB, user: AuthenticatedUser
 ):
-    session, control = await owned(db, user, session_id)
+    now = await now_checked(request)
+    # Strategy versioning locks the owner. Match the cohort's owner → session order.
+    await db.scalar(select(User.id).where(User.id == user.id).with_for_update())
+    session, control = await writable_portfolio(db, user, session_id)
+    if session.benchmark_snapshot.get("lab_cohort"):
+        raise HTTPException(409, "This comparison preserves its shared original strategy settings")
     if body.strategy_lab_profile != control.settings.get("strategy_lab_profile"):
         raise HTTPException(409, "Create a new funded portfolio to change its Strategy Lab profile")
     if (body.mode == "RESEARCH_SHADOW") != (control.classification == "RESEARCH"):
@@ -255,7 +308,6 @@ async def strategy_update(
             409,
             "Create a new funded portfolio to change starting capital; history cannot be rewritten",
         )
-    now = await now_checked(request)
     version = await save_strategy(db, user.id, body, now)
     control.strategy_version_id = version.id
     control.settings = body.model_dump(mode="json")
@@ -295,6 +347,8 @@ async def trades(
     query = select(PaperTrade).join(PaperSession).where(PaperSession.user_id == user.id)
     if session_id:
         query = query.where(PaperTrade.session_id == session_id)
+    else:
+        query = query.where(PaperSession.ended_at.is_(None))
     if status:
         query = query.where(PaperTrade.status == status.upper())
     total = await db.scalar(select(func.count()).select_from(query.subquery()))
@@ -466,10 +520,12 @@ async def preview_rebalance(
 async def rebalance(
     session_id: UUID, body: RebalanceBody, request: Request, db: DB, user: AuthenticatedUser
 ):
-    _, control = await owned(db, user, session_id)
+    now = await now_checked(request)
+    _, control = await writable_portfolio(db, user, session_id)
     if control.settings.get("strategy_lab_profile") == "NO_TRADING":
         raise HTTPException(409, "The no-trading benchmark preserves its original inventory")
-    now = await now_checked(request)
+    if control.status != "ACTIVE":
+        raise HTTPException(409, "Paused portfolios cannot admit a new simulation transfer")
     if not body.network or (
         not body.network_verified
         and not (control.classification == "RESEARCH" and body.research_assumption)

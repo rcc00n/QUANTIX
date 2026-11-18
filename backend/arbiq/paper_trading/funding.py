@@ -1361,10 +1361,14 @@ async def experiment(body: ExperimentRequest, request: Request, db: DB, user: Au
     proposal_row = await db.get(FundingProposal, body.proposal_id) if body.proposal_id else None
     if body.proposal_id and (proposal_row is None or proposal_row.user_id != user.id):
         raise HTTPException(404, "Funding proposal not found")
+    if proposal_row and proposal_row.payload.get("cohort_plan_version"):
+        raise HTTPException(422, "Use the common opening proposal to publish a complete cohort")
     optimized = bool(proposal_row and proposal_row.payload.get("allocation_version"))
     if body.settings and body.settings.strategy_lab_profile and not optimized:
         raise HTTPException(422, "Select an immutable Strategy Lab funding proposal")
-    if not optimized and body.idempotency_key.startswith("allocation:v2:"):
+    if body.idempotency_key.startswith("cohort-v1:") or (
+        not optimized and body.idempotency_key.startswith("allocation:v2:")
+    ):
         raise HTTPException(422, "Reserved allocation idempotency namespace")
     key = f"allocation:v2:{body.proposal_id}" if optimized else body.idempotency_key
     fingerprint = body.model_dump(mode="json")

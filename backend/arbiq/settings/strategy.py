@@ -33,6 +33,9 @@ class PaperStrategy(Contract):
     )
     starting_capital_cad: PositiveDecimal = "10000"
     trade_amount_cad: PositiveDecimal = "1000"
+    target_trade_cad: PositiveDecimal | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     min_buy_capital_cad: NonNegativeDecimal = "50"
     minimum_profit_cad: NonNegativeDecimal = "5"
     minimum_profit_pct: NonNegativeDecimal = "0.5"
@@ -63,6 +66,11 @@ class PaperStrategy(Contract):
 
     @model_validator(mode="after")
     def coherent(self):
+        if self.target_trade_cad is not None and (
+            not self.strategy_lab_profile
+            or not self.min_buy_capital_cad <= self.target_trade_cad <= self.trade_amount_cad
+        ):
+            raise ValueError("A Strategy Lab target must fit its minimum buy and hard maximum")
         if self.maximum_slippage_bps is not None and self.slippage_bps > self.maximum_slippage_bps:
             raise ValueError("Modeled slippage exceeds the owner's maximum acceptable slippage")
         if self.mode != "RESEARCH_SHADOW" and (
@@ -155,7 +163,9 @@ def presets():
     }
 
 
-async def save_strategy(db, user_id, settings, now, reason="Owner updated paper strategy"):
+async def save_strategy(
+    db, user_id, settings, now, reason="Owner updated paper strategy", *, update_head=True
+):
     await db.scalar(select(User).where(User.id == user_id).with_for_update())
     version = (
         await db.scalar(
@@ -168,12 +178,13 @@ async def save_strategy(db, user_id, settings, now, reason="Owner updated paper 
     )
     db.add(row)
     await db.flush()
-    head = await db.get(StrategyHead, user_id)
-    if head:
-        head.strategy_version_id = row.id
-        head.updated_at = now
-    else:
-        db.add(StrategyHead(user_id=user_id, strategy_version_id=row.id, updated_at=now))
+    if update_head:
+        head = await db.get(StrategyHead, user_id)
+        if head:
+            head.strategy_version_id = row.id
+            head.updated_at = now
+        else:
+            db.add(StrategyHead(user_id=user_id, strategy_version_id=row.id, updated_at=now))
     db.add(
         SystemEvent(
             actor_user_id=user_id,
