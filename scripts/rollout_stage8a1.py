@@ -315,7 +315,7 @@ def replace(args, outcome):
         keep_notification_worker = "notifications" not in gate.REPLACEMENT_ROLES[args.release]
         if keep_notification_worker:
             verify_notification_pin(snapshot)
-        if args.release == "marathon" and args.mode == "rollback":
+        if args.release in {"marathon", "paper-cohort"} and args.mode == "rollback":
             verify_stage8c_paper_compatibility(snapshot["owned"]["db"]["id"])
         old = snapshot["owned"][args.role]
         if old["id"] != args.current_container_id or old["image_id"] != args.current_image_id:
@@ -340,7 +340,7 @@ def replace(args, outcome):
                 raise gate.CapacityProofError("PROTECTED_SENTINEL_CHANGED")
             if keep_notification_worker:
                 verify_notification_pin(stopped)
-            if args.release == "marathon" and args.mode == "rollback":
+            if args.release in {"marathon", "paper-cohort"} and args.mode == "rollback":
                 verify_stage8c_paper_compatibility(stopped["owned"]["db"]["id"])
             inspect_images(
                 args.role, args.current_image_id, args.replacement_image_id, args.mode, args.release

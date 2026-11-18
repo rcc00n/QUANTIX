@@ -147,6 +147,22 @@ def test_stage8b1_notification_pin_rejects_image_drift(monkeypatch):
         rollout.verify_notification_pin(snapshot)
 
 
+def test_paper_cohort_rollback_holds_before_stopping_on_incompatible_state(monkeypatch, transaction):
+    args, outcome, calls = transaction
+    args.mode = "rollback"
+    args.release = "paper-cohort"
+    monkeypatch.setattr(rollout, "verify_notification_pin", lambda _snapshot: None)
+
+    def incompatible(_db_id):
+        raise preflight.CapacityProofError("STAGE8C_PAPER_COMPATIBILITY_NOT_PROVEN")
+
+    monkeypatch.setattr(rollout, "verify_stage8c_paper_compatibility", incompatible)
+    with pytest.raises(preflight.CapacityProofError, match="STAGE8C_PAPER_COMPATIBILITY"):
+        rollout.replace(args, outcome)
+    assert outcome["state"] == "UNCHANGED"
+    assert not calls
+
+
 @pytest.mark.parametrize("reply", ["compatible\n", "incompatible\n", ""])
 def test_stage8c_paper_check_requires_a_positive_read_only_database_result(monkeypatch, reply):
     calls = []

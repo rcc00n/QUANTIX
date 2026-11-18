@@ -1,4 +1,4 @@
-# Return application roles to the profile-aware marathon release.
+# Return to marathon only after the pinned paper compatibility guard passes.
 services:
   backend:
     image: quantix-backend:0.7.1-marathon
