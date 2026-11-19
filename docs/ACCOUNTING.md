@@ -115,3 +115,25 @@ The global pending budget bounds work. Loss controls cannot guarantee a future p
 or prevent an already-open position from losing value; its later marks remain visible.
 Pause stops new scheduling; existing reserved legs continue with an audit trail.
 
+## Valuation and analytical interfaces
+
+PortfolioCheckpoint is immutable, normally written every60seconds. Live reads can
+compute an unpersisted checkpoint. Marks use observed liquidation depth and explicit
+CAD conversions; unavailable/stale FX or depth yields incomplete valuation. A retained
+snapshot is explicitly labeled and never presented as fresh.
+
+DailyAccountingSnapshot revisions use America/Edmonton, including DST, with an
+explicit as_of. The worker creates current-day snapshots hourly/on local day change.
+They are provisional numerical daily/cumulative views, not a falsely exact midnight
+close. Data limitations, late processing and missing marks remain explicit.
+Financial history is never pruned by transient market-data retention.
+
+Private endpoints include `/paper/sessions`, per-session `/portfolio`, `/metrics`,
+`/daily`, `/strategy`, `/pause`, `/resume`, `/rebalance`, `/paper/trades` and trade
+details. Exact decimal strings, classification, versions, orders/fills/events,
+mark/fee/FX provenance and null-value reasons support independent recalculation.
+Queries are paginated/bounded; numerical totals use SQL aggregates over full periods.
+Stage5 analytics and the complete authenticated ZIP now consume these JSON/ledger
+interfaces; see REPORTING.md and TERMINAL.md. AI text never modifies records or
+supplies numerical conclusions.
+
