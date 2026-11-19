@@ -74,3 +74,44 @@ closed arbitrage profit. No completed observations means null win rate/average,
 not an invented success statistic. Hypothetical research never enters validated
 primary totals.
 
+## Time, independent legs and failure
+
+Lifecycle: CANDIDATE → ELIGIBILITY_CHECK → SCHEDULED → RECHECKING → EXECUTING →
+COMPLETED/PARTIAL/MISSED/FAILED/EXPIRED. Immutable SimulationEvents retain transitions.
+Default reaction delay is30seconds;5/15/30/60/120/custom are supported. Fast/manual
+profiles are counterfactual simulation settings, not measured real exchange latency.
+An explicit UTC-uncertainty buffer and raw monotonic deadline prevent early execution.
+
+The collector captures the first valid available book after each order's deadline.
+It pins source/ingestion UTC, causal ingestion index, complete depth, clock uncertainty
+and available FX. Receipt cannot come after the decision. Missing source timestamps
+or extreme anomalies require an explicitly permissive research profile; malformed,
+crossed, stale, disconnected and untrusted-UTC data never create fills.
+
+First-leg preflight uses only the opposing book available by that observation, never
+later evidence. Disappeared spreads/limits/threshold failures cancel preflight.
+Orders then execute independently, one journal/fill per committed transaction. The
+second leg can fail, fill partially or time out. Processing uses earliest captured
+availability; late out-of-order evidence is rejected rather than costed with future
+inventory basis. Restart reuses pinned evidence, unique trade/fill keys and owned
+reservations, preserving completed legs without repeating balances.
+
+Adverse slippage is an explicit modeling assumption applied to observed VWAP,
+retained separately from the observed price. It is never represented as an actual
+exchange fill. Future rebalancing reserves affect candidate approval; actual simulated
+rebalancing expenses enter the ledger only when the configured transfer is performed.
+
+Transfer scenarios buy first, reserve the acquired base while in flight, wait for
+configured network/confirmation/settlement assumptions, charge configured costs,
+reserve credited destination units and require a genuinely new selling book after
+settlement. The original sale quote is never guaranteed. A configurable haircut is
+pretrade scenario risk, not an extra adjustment to the later observed sale price.
+Networks/costs remain unverified unless explicitly sourced; exploratory assumptions
+stay isolated in research. Rounding dust remains unmatched inventory, not closed P&L.
+
+Maximum concurrency, per-venue allocation, inventory exposure, loss, hourly activity,
+asset/exchange filters and AND/OR profit thresholds are enforced before reservation.
+The global pending budget bounds work. Loss controls cannot guarantee a future price
+or prevent an already-open position from losing value; its later marks remain visible.
+Pause stops new scheduling; existing reserved legs continue with an audit trail.
+
