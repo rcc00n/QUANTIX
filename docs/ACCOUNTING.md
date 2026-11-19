@@ -190,3 +190,57 @@ in this preview use the transferred asset. A fee in a different asset needs its
 own inventory and pricing evidence. This endpoint
 never schedules an order or rebalance, reserves inventory, or posts a journal.
 
+## Stage 12 Strategy Lab
+
+New profile-based research sessions use the existing immutable funding proposals.
+The proposal pins the strategy profile, exact contributed CAD and selected
+allocations. An owner selects a feasible current proposal and explicitly creates
+the session. Retries resolve to the original portfolio under the same proposal
+identity. Previous strategies without a profile retain their original behavior.
+
+| Profile | Market admission | Default allocation choice |
+| --- | --- | --- |
+| Liquid Arbitrage | Healthy, synchronized order books with source times. A resolved-anomaly marker assigns that observation to the anomaly cohort. | Liquidity Weighted |
+| Anomaly Hunter | Healthy books with independent rechecks of both sides and a retained resolution marker from a previously quarantined book. | Route Optimized |
+| Hybrid Optimizer | Both kinds of healthy, synchronized evidence. | Diversified Hybrid |
+| No-trading benchmark | Values the funded portfolio and its original holdings through the same paper accounting interfaces. Scheduling and simulated transfers are disabled. | Diversified Hybrid |
+
+The trading profiles require two-sided inventory, positive CAD profit and return
+thresholds, and compatible fresh FX evidence. Preflight checks the delayed pair's
+receive and source skew with clock uncertainty. The existing simulator owns the
+reservations, independent legs and ledger entries. The owner can compare allocation
+policies before funding. The strategy profile stays fixed for the session, and the
+original portfolio and earlier strategy versions remain available for comparison.
+
+The anomaly marker is emitted when a fresh recheck resolves a previously unresolved
+book after independent reference checks. A routine recheck provides no such marker.
+Historical observations without the marker can remain in legacy research. A no-trading
+portfolio can retain crypto exposure and changes in valuation. Its realized trading
+P&L stays separate from unrealized marks and its original-holdings benchmark.
+
+### Common opening inventory and archival
+
+An owner can preview a common opening through `POST /paper/funding/cohort-plan`.
+The planner reads existing monitored books and builds both-sided capacity from
+fresh, synchronized market and CAD evidence. Coverage can include a losing route.
+That route still needs to pass the separate profit and profile gates at execution.
+The preview reports reserve, unallocated capital, and alternative and simultaneous
+capacity. A publishable plan needs at least two funded base assets at the common
+CAD 250 target and exactly CAD 10,000 of placed initial capital. Immutable
+creation proposals expire with the opening evidence.
+
+`POST /paper/funding/cohorts` pins that proposal, a unique experiment ID, and the
+exact set of owner portfolios being replaced. The transaction rechecks market
+evidence and uses the normal portfolio locks, reservation settlement and exact
+accounting. If work remains in flight, pause admission and let it settle through
+the normal worker before obtaining a fresh proposal. A failed publication keeps
+the previous scope intact. A successful retry returns the four existing sessions.
+
+The four sessions share native opening holdings, source evidence and a common
+observation start, with separate strategy versions, deposit journals and native
+accounts. The three trading profiles prefer a qualified CAD 250 projection and
+can fall back to a CAD 500 hard budget under the same economic and risk gates.
+The CAD 50 buy minimum remains independent. Hold Control is passive and receives
+the same recurring valuation as the trading portfolios. Session strategy versions
+do not move the global strategy head. Prior sessions use the archived view and
+retain all historical export and ledger evidence.
