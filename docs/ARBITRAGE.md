@@ -135,3 +135,16 @@ secret and no published host port. Engine diagnostics contain no credentials. Th
 Radar displays actual results or honest empty/loading/error states; estimates are
 never realized P&L. Telegram, AI, paid providers and production hosting are unchanged.
 
+## Clock and replay
+
+[Clock diagnostics](CLOCK.md) document WSL host jumps and the externally checked,
+monotonic RAW UTC projection. Source timestamps and uncertainty remain intact; no
+freshness limits were relaxed. Host health remains separately gated. The OS clock
+has not been repaired. Keep all live routes non-actionable until owner-controlled
+host synchronization and eligibility/funding checks are established.
+
+`opportunities.replay.replay_route()` consumes labeled immutable observations sorted by
+availability. Both observation and ingestion times must precede each decision; future
+FX availability is rejected. Use captured evaluation calculation_inputs to reproduce
+or resize a retained decision. Synthetic replay tests are explicitly labeled and
+never inserted into live tables. Run `make test`; live verification is separate.
