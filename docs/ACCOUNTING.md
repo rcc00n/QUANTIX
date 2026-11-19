@@ -137,3 +137,18 @@ Stage5 analytics and the complete authenticated ZIP now consume these JSON/ledge
 interfaces; see REPORTING.md and TERMINAL.md. AI text never modifies records or
 supplies numerical conclusions.
 
+## Verification and remaining scope
+
+All financial/execution fixtures are explicitly synthetic and use an isolated `_test`
+database. Live owner portfolios use actual public observations and genuine virtual
+state; no fixture fill is inserted into the application database. Resource/stress
+fixtures make zero external API requests. See docs/PERFORMANCE.md and VPS_AUDIT.md.
+
+
+Stage5 valuation selects timestamped source evidence. If a holding venue omits its
+source timestamp, a fresh independently timestamped reference may be used with
+verified=false and reference_venue provenance; it never proves executable liquidity
+on the holding venue. No timestamp is invented. If no such reference exists, equity
+and benchmark remain unavailable. Pending lifecycle reasons are separate from
+terminal missed/failed/expired/partial reason counts.
+
