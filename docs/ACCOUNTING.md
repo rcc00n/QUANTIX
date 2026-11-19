@@ -152,3 +152,41 @@ on the holding venue. No timestamp is invented. If no such reference exists, equ
 and benchmark remain unavailable. Pending lifecycle reasons are separate from
 terminal missed/failed/expired/partial reason counts.
 
+## Stage 8B paper execution and portfolio marks
+
+The `paper-depth-v1.2.0` fill calculator sizes a buy against the same 18-place
+grid as the ledger. It rounds the allowed modeled principal down before using
+depth to solve for base quantity. Actual buy principal and the explicit fee round
+up. The simulator checks the final debit against the owned reservation and
+rejects zero-principal or zero-credit legs before posting. Existing strategy delay,
+price, minimums, slippage, freshness and independent-leg logic still apply.
+Scheduling rejects evaluations dated after its decision time. Insufficient
+inventory rejections retain both requested units and ledger-derived shortfalls.
+Canonical strategy allowlists match pinned asset identity. Older ticker-based
+strategies retain their ticker behavior.
+
+Marking a non-CAD balance still requires observed depth and a causal conversion
+route for its canonical asset. A shared symbol cannot equate a wrapped asset to
+EUR, USD, USDT or USDC. Composite bid liquidation uses the source age of the
+older component and the availability time of the newer component. A missing,
+future or expired conversion does not price the position. Bulk valuation builds the
+existing FX graph once for each batch instead of rebuilding it for each position.
+The portfolio response distinguishes `COMPLETE_FRESH`, `PARTIAL`, `STALE` and
+`UNKNOWN`. A partial subtotal only sums priced positive inventory. Total equity,
+return and reconciliation remain null when the required inventory is unpriced.
+Zero holdings do not cause price blockers. Fallback checkpoint values retain their
+original timing and are labeled stale.
+
+The authenticated research-only `/paper/sessions/{id}/rebalance/preview` reads
+unreserved units and compares an explicit delayed same-asset transfer assumption
+with keeping both balances unchanged. The owner supplies source withdrawal and
+destination deposit availability, network, separate withdrawal and network fees,
+and settlement time. Missing or unsupported terms block an estimate. An owner
+can protect the source allocation with a minimum remaining balance. A transfer
+preview reports exact asset conservation, the remaining shortfall and estimated
+settlement, and leaves future CAD benefits null. Cross-asset conversion requires
+separate executable evidence and receives no transfer projection. Transfer fees
+in this preview use the transferred asset. A fee in a different asset needs its
+own inventory and pricing evidence. This endpoint
+never schedules an order or rebalance, reserves inventory, or posts a journal.
+
