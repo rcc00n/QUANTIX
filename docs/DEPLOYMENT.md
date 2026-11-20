@@ -57,3 +57,12 @@ python3 scripts/retention_runway.py --help
 Private database archives, financial exports and restore proofs never belong in the
 repository. No backup or restoration was performed by the reconstructed import.
 
+## TLS and protected NGINX
+
+The templates use an exact-host vhost and isolated certificate configuration,
+work and logs. `scripts/guarded_nginx_reload.py` and
+`scripts/renew_quantix_tls.py` enforce protected-configuration boundaries. A strict
+unit must not gain write access to unrelated host logs or shared PID files. Never
+refresh a protected baseline blindly after another application's change. Validate
+full configuration and rollback before an explicitly authorized additive route.
+
