@@ -33,3 +33,26 @@ late asynchronous trade details cannot appear under another selected session.
 Zero completed trades produces unavailable win-rate statistics, with sample counts
 and small-sample caveats where applicable.
 
+## Workspaces
+
+- Command Center combines actual connectivity, coverage, confidence, coordinator
+  state, selected portfolio results, benchmark history and recent recorded activity.
+- Radar prioritizes current rows. Main filters are compact; extra profit/liquidity/
+  custom budget/quality controls are collapsed by default. Mobile uses summary
+  cards and a full-height evidence inspector with large recheck controls. Official
+  market links are displayed only when supplied by the verified backend registry.
+- Paper Trading and Portfolio retain scope-separated history and a structured
+  lifecycle/leg/depth/fee/ledger inspector. Funding proposals account for each asset's
+  initial CAD basis, show paired inventory constraints and create new experiments.
+  Opening the planner scrolls to its working surface, including on mobile. Manual
+  non-CAD starting rates are required research assumptions and clear on asset change;
+  CAD uses a read-only identity rate.
+- Analytics supports explicit UTC period and strategy filters, recorded history,
+  equity/benchmark/P&L/drawdown/outcome/expense/group views and authenticated ZIP
+  downloads. Whole-session equity remains clearly separate from filtered trade cohorts.
+- Settings exposes the actual versioned financial controls, market preferences
+  and inactive Stage 6 notification policy. Protected financial boundaries cannot
+  be switched off through an editable display control.
+- System Health shows actual process/database/feed/clock/queue measurements and
+  unavailable telemetry honestly. No estimated container/VPS numbers enter live UI.
+
