@@ -83,3 +83,23 @@ separate sessions, idempotent creation and ledger locks. In-flight work must set
 through the normal coordinator before incompatible state transitions. Private cohort
 identifiers and balances are withheld. See [accounting](ACCOUNTING.md).
 
+## Combined Stages 9–13 candidate and Stage 8C rollback
+
+The retained historical changes are source evidence. Release overlays and the guarded
+rollout script preserve role-scoped compatibility checks. A reconstructed intermediate
+commit is not a runnable-release claim, and source reconstruction performs no rollout.
+
+## Historical Stage 8C release
+
+Historical deployment evidence is preserved privately. Public transport and recovery
+contracts are described in [WEBSOCKET_ARCHITECTURE.md](WEBSOCKET_ARCHITECTURE.md).
+
+## Stage 8B.1 replacement procedure
+
+Owner-specific pinned image and protection evidence is private. Any future replacement
+requires fresh acceptance, exact compatibility checks and an authorized rollback.
+
+## Stage 8A.1 replacement procedure
+
+Private historical operating procedures are withheld. The checked-in guarded rollout
+implementation must be reviewed against the intended release and current host state.
