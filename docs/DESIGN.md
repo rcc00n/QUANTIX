@@ -56,3 +56,21 @@ and small-sample caveats where applicable.
 - System Health shows actual process/database/feed/clock/queue measurements and
   unavailable telemetry honestly. No estimated container/VPS numbers enter live UI.
 
+## Live update boundary
+
+The terminal uses bounded authenticated polling, not a second market-data stream.
+Command Center and System Health normally refresh at15s; analytics30s; session/
+configuration metadata60s. Only one poll per resource is in flight. Hidden tabs
+pause work, disposed views abort requests, and reusable hooks back off after errors
+with a60s maximum retry interval. Retained data remains accompanied by a reconnect
+warning. Existing explorer/scanner polls are also guarded against overlapping work.
+No browser performs exchange requests or replays finance calculations.
+
+The BFF allowlists methods and paths, preserves session authentication and same-origin
+writes, bounds request bodies and streams ZIP bytes directly. Downloads do not make
+an extra full-size text/blob copy. Safe attachment filenames and SHA-256 headers
+are retained; report credentials and private operational secrets are excluded.
+
+Tokens and responsive rules live in frontend/src/app/globals.css. Local shadcn/ui
+Button follows Radix Slot/CVA composition. Recharts is the existing plotting library;
+no dependency or paid service was added for this stage.
