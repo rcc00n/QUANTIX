@@ -76,3 +76,10 @@ Production ownership of Telegram requires the local consumer to stay disabled.
 See [notifications](NOTIFICATIONS.md), [accounting](ACCOUNTING.md),
 [reporting](REPORTING.md) and [history disclosure](HISTORY_IMPORT.md).
 
+## Common opening paper cohort rollout and recovery
+
+Common-opening publication uses immutable proposals, exact contributed capital,
+separate sessions, idempotent creation and ledger locks. In-flight work must settle
+through the normal coordinator before incompatible state transitions. Private cohort
+identifiers and balances are withheld. See [accounting](ACCOUNTING.md).
+
