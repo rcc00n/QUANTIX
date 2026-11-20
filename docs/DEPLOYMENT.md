@@ -66,3 +66,13 @@ unit must not gain write access to unrelated host logs or shared PID files. Neve
 refresh a protected baseline blindly after another application's change. Validate
 full configuration and rollback before an explicitly authorized additive route.
 
+## Production smoke and local cutover boundary
+
+A running release needs independent evidence for authenticated HTTPS, exact schema,
+internal-service isolation, trusted clock, collector health, accounting invariants,
+export integrity, recovery and protected dependencies. New paper portfolios require
+explicit funding; starting services never establishes profitable execution.
+Production ownership of Telegram requires the local consumer to stay disabled.
+See [notifications](NOTIFICATIONS.md), [accounting](ACCOUNTING.md),
+[reporting](REPORTING.md) and [history disclosure](HISTORY_IMPORT.md).
+
