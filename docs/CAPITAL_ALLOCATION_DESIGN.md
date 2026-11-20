@@ -62,3 +62,35 @@ constructive coverage under that ordering. The optimizer makes no global
 optimality claim. Idle reserve is excluded from planned trade coverage. The
 current balance view uses actual available ledger balances.
 
+## Evidence, immutability and time
+
+The authenticated comparison uses one fixed UTC cutoff and the same bounded
+window and shortlist for all four modes. The shortlist orders retained
+quality-compatible route frequency before admitting lower-quality routes.
+Ranked evidence includes evaluation and book identifiers, original receive and
+source times, depth, FX paths and fee evidence. Both recorded availability
+and observation times must precede the decision. Local durations use monotonic
+time. Trusted clock, plausible/stable book timestamps, coherent cross-book
+receipt, admissible book quality and causal conversion evidence are checked
+before sizing. Evaluation counts outside the scan window or expired history
+remain unavailable. No look-up substitutes a modern mark into a historical
+comparison.
+
+Historical proposals are read-only. Current portfolios require a feasible
+selected proposal, trusted UTC and fresh marks at selection and commit.
+An owner row lock serializes creation, and a proposal-scoped idempotency key
+returns the same session receipt on replay. A changed request for that
+proposal conflicts. Session configuration, market scope and chosen allocation
+are pinned. Existing sessions and previously pinned execution remain
+independent. There is no schema migration. The existing proposal and experiment
+rows and initial ledger evidence carry the allocation version and source
+references. They are included in the retained full ZIP. The v1 custom
+export schema and 512,000,000-byte full ZIP cap remain in force.
+
+Pricing is on demand, uses at most 30 routes and at most nine distinct size
+points, and runs in a single serialized planning slot per backend process
+with the existing request rate limit. CPU-bound preparation uses a worker
+thread. No allocator runs in the collector. Selection uses the existing
+append-only ledger and session locks. Market cohorts are deliberately bounded.
+The result shows the limit, excluded evidence and infeasible size targets.
+
