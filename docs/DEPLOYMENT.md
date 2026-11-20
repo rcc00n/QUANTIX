@@ -24,3 +24,15 @@ make production-config
 This validates the checked-in production templates. It is not a deployment or a
 capacity, recovery or security acceptance result for a running host.
 
+## Resource safety and stopping
+
+The production templates cap memory, swap, CPU, logs and process counts. Collector
+queues, persistence batches, caches and exports are bounded independently. A cold
+cache or restart is not sustained optimization evidence. Financial evidence is
+never pruned to meet a capacity target. Retention is limited to explicitly transient,
+unreferenced market samples. Keep rollback evidence and protect unrelated services.
+
+Notification delivery has its own singleton worker. Never start a second consumer
+for the same Telegram token. Collector and notification ownership, durable offsets,
+ambiguous send outcomes and clock uncertainty must survive release transitions.
+
