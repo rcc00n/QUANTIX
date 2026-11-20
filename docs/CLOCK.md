@@ -51,3 +51,57 @@ HTTPS exchange clocks provide independently corroborated UTC with bounded networ
 uncertainty. This is not NTS/PTP, submillisecond synchronization, or a long-term
 host repair. Reference outages and disagreements disable verified calculations.
 
+## Read-only diagnostics and owner-controlled host repair
+
+Run from the repository with backend dependencies installed:
+
+```bash
+PYTHONPATH=backend backend/.venv/bin/python scripts/clock_diagnostics.py --rounds 8 --interval 15
+timedatectl show --property=NTPSynchronized --property=NTP --property=Timezone
+timedatectl timesync-status
+cat /sys/devices/system/clocksource/clocksource0/current_clocksource
+cat /proc/cmdline
+```
+
+Read-only Windows PowerShell checks:
+
+```powershell
+Get-Service W32Time
+w32tm /query /status /verbose
+w32tm /query /source
+wsl --version
+wsl --list --verbose
+```
+
+An owner/admin should first establish which host-time policy is intended and review
+other WSL distributions: they can share kernel clock state. If normal Hyper-V
+host synchronization is intended, verify and correct Windows UTC/time service, then
+consider Canonical's documented removal of conflicting guest timesyncd. These are
+**system-wide changes, not commands executed by QUANTIX**:
+
+```powershell
+# Elevated Windows PowerShell, only after reviewing the intended time policy:
+Start-Service W32Time
+w32tm /resync /rediscover
+```
+
+```bash
+# In each affected Ubuntu WSL distribution, only after Windows UTC is verified:
+sudo systemctl disable --now systemd-timesyncd.service
+# Reversal if a guest-managed clock is the intended policy:
+sudo systemctl enable --now systemd-timesyncd.service
+```
+
+Starting/resynchronizing Windows time can adjust the clock used by other Windows
+and WSL applications. Disabling guest NTP changes the distribution's persistent
+time policy and relies on verified Windows time/Hyper-V synchronization. Do not
+disable synchronization blindly or force time with `date -s`. No WSL shutdown or
+reboot is needed for the proposed service-policy review. Repeat external/reference
+and monotonic comparisons for at least several minutes afterwards and again after
+sleep/resume before declaring the shared host stable.
+
+Technical endpoint references: [Kraken server time](https://docs.kraken.com/api-reference/market-data/get-server-time),
+[Coinbase Exchange time](https://docs.cdp.coinbase.com/exchange/reference/exchangerestapi_gettime),
+[Binance server time](https://developers.binance.com/en/docs/catalog/core-trading-spot-trading/api/rest-api/general),
+[OKX system time](https://www.okx.com/docs-v5/en/#rest-api-public-data-get-system-time),
+[systemd-timesyncd](https://www.freedesktop.org/software/systemd/man/248/systemd-timesyncd.service.html).
