@@ -94,3 +94,24 @@ thread. No allocator runs in the collector. Selection uses the existing
 append-only ledger and session locks. Market cohorts are deliberately bounded.
 The result shows the limit, excluded evidence and infeasible size targets.
 
+## Execution, valuation and transfer previews
+
+New simulations record `paper-depth-v1.2.0`. Paper legs reserve both requirements
+before scheduling and settle independently using the first valid observation
+after their execution delay. Adverse principal and fees are rounded exactly
+before a virtual debit. A partial or one-sided outcome is reconciled as native
+inventory exposure and does not become matched-cycle profit. Previously recorded
+strategies, calculations and fills retain their versions and values. Current risk valuations batch
+source resolution and the FX graph while keeping the same Decimal rules.
+Marks and converted account exposure remain nullable. Fresh, partial, stale
+and unknown valuation show exact affected assets and venues. The original
+holdings benchmark remains a separate valuation.
+
+The read-only rebalance preview takes the owner's scenario assumptions for a
+same-asset network, withdrawal/deposit availability, fees and settlement
+delay. It compares remaining destination deficit and native fees with doing
+nothing. It accounts for existing reservations and a requested source floor.
+Unavailable networks and unknown timing or fees block estimates. A conversion
+would require a separate executable FX path and is shown as blocked. Unknown
+CAD fee and future P&L stay null. No transfer, conversion, deposit, withdrawal,
+balance update or external order is performed.
