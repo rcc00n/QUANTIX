@@ -36,3 +36,24 @@ Notification delivery has its own singleton worker. Never start a second consume
 for the same Telegram token. Collector and notification ownership, durable offsets,
 ambiguous send outcomes and clock uncertainty must survive release transitions.
 
+## Backups, restore and disk runway
+
+`scripts/backup_database.py` creates private PostgreSQL custom-format archives with
+checksummed metadata, atomic publication and a directory lock. Retention recognizes
+verified archive/metadata pairs; an arbitrary file is not a proven backup.
+`scripts/verify_restore.py` restores to disposable isolated resources, checks schema
+and accounting, and can require PAPER ONLY. A copied file, matching hash and successful
+restore are distinct evidence. Recurring offsite recovery and unattended disk runway
+require separate measured verification.
+
+Inspect available command arguments before planning an operation:
+
+```bash
+python3 scripts/backup_database.py --help
+python3 scripts/verify_restore.py --help
+python3 scripts/retention_runway.py --help
+```
+
+Private database archives, financial exports and restore proofs never belong in the
+repository. No backup or restoration was performed by the reconstructed import.
+
