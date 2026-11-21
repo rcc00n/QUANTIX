@@ -149,3 +149,84 @@ confirmations, delay and their evidence remain explicit. Today's sell quote is
 never guaranteed after arrival. `guaranteed_executable` and `actual_execution`
 are always false. Unknown network/funding/timing costs remain research blockers.
 
+## Replay and verification
+
+`opportunities/replay.py` accepts retained `ReplayBook` inputs, their observed and
+received UTC timestamps and evidence IDs. A decision uses only evidence both observed
+and received by that decision, and enforces source/ingestion freshness. Non-CAD FX
+also requires observed/available timestamps no later than the decision; missing
+provenance is rejected. Replays use pinned fee/config inputs and cannot query future
+market data. Synthetic fixtures explicitly set `synthetic=True`; results retain that
+label. Replay does not generate fills.
+
+`tests/test_arbitrage_math.py` uses only synthetic fixtures. It checks multilevel
+execution, precision/minimum/maximum limits, quote/base fees, unknown assumptions,
+stablecoin deviations, bid/ask conversion direction, multi-hop depth, stale/missing
+FX, reserves, shallow extreme anomalies, negative net spreads, budget sizing,
+exhaustive sizing oracles, large-lattice bounds, duplicate venues, wrapped identity,
+transfer counterfactuals and no-look-ahead replay. Deterministic invariant matrices
+prove increasing fees cannot improve the tested fixed/optimized outcomes and that
+impossible depth cannot create executable quantity. These tests are distinct from
+live public-feed verification.
+
+Run the explicit synthetic replay without network access or database writes:
+
+```bash
+backend/.venv/bin/python -m arbiq.opportunities.replay \
+  --input tests/fixtures/synthetic_arbitrage_replay_v1.json --budget-cad 100
+backend/.venv/bin/pytest -c backend/pyproject.toml tests/test_arbitrage_math.py -q
+```
+
+`--at 2026-01-01T00:00:00+00:00` selects a UTC decision; earlier decisions cannot
+use later records. Fixture documents require `schema_version=quantix-replay-v1`
+and an explicit `kind` of `SYNTHETIC` or `RETAINED_EVIDENCE`. Input size, frame count
+and decision count are bounded. The bundled fixture labels its prices and venues
+synthetic throughout; its projected profit does not describe current markets.
+
+The same CLI accepts a saved authenticated opportunity detail containing full pinned
+`buy_book`/`sell_book` timestamps and `calculation_inputs`. It defaults to the original
+evaluation time and retains the original risk warnings. A live dashboard projection
+without pinned timestamps is rejected. Output remains `actionable=false`, includes
+all evidence IDs and decimal units, and does not contact an exchange or modify records.
+Older malformed/truncated evidence cannot be reconstructed silently: budget resizing
+and replay fail closed, while a later fresh evaluation can pin complete structured levels.
+Retained bundles cannot be replayed before their original evaluation time: older
+book timestamps alone do not establish earlier availability of fee/config assumptions.
+# Stage 9 public spot trading rules
+
+The collector records `public-spot-rules-v1` during its existing public market
+discovery. It retains the source, exact native amount step and price tick, known
+size limits, and explicit market-order restrictions. The collector records the
+observation time using independently corroborated UTC when available. The route
+evidence pins the rule observation used in that evaluation. Legacy inputs retain
+their original rules when replayed. Discovery uses the existing metadata requests.
+
+| Feed | Fields used for sizing and eligibility checks | Public evidence limitation |
+| --- | --- | --- |
+| Kraken | Lot decimal places, price tick, minimum base quantity and minimum native quote notional. The public pair status controls market-order availability. | Published cost decimal places describe quote precision. Account tier, fee currency and fee rounding require separate evidence. [AssetPairs](https://docs.kraken.com/api-reference/market-data/get-tradable-asset-pairs) |
+| Coinbase Advanced | Size minimums and maximums for base and quote, base increment, price increment, quote increment, and product restriction flags. | The independent venue grouping still combines the Coinbase adapters. [Public products](https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/rest-api/public/list-public-products) |
+| Coinbase Exchange | Base and price increments and product restriction flags. The existing CCXT minimum remains an estimated research constraint. | The public `min_market_funds` field is documented for limit orders. A market-order minimum remains unverified. [Exchange products](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/products/get-all-known-trading-pairs) |
+| OKX | Base lot size, minimum base quantity, price tick and instrument state. | `maxMktSz` is scoped to USDT and `maxMktAmt` to USD. The evidence retains both original denominations. The pre-existing CCXT capacity bounds remain research estimates while a depth-aware conversion of the external caps is unavailable. [Public instruments](https://www.okx.com/docs-v5/en/#public-data-rest-api-get-instruments) |
+| Other configured spot adapters | Exact CCXT amount and cost limits, tick-size or decimal-place precision when supplied, and inactive status. | Public market-order eligibility and exchange-specific settlement precision remain unknown. |
+
+An explicit restriction rejects a projection before depth optimization and
+preserves the sided rejection reason. Paper execution records time-valid restrictions
+that become known before the delayed observation. It checks both markets at preflight
+and the individual market before a later independent leg. An unavailable assumption
+keeps the route research-only. A historical decision cannot use a subsequent rules
+observation. The simulator keeps the existing 18-place ledger rounding and applies
+the market-specific quantity lattice. Native quote increments and exchange fee
+precision have separate meanings, so unknown fee-rounding rules stay estimates.
+
+Four read-only public responses dated 2026-11-24 05:49:25 UTC contained 16 sampled
+spot products across three independent venue groups. There were four products per
+adapter. Kraken and both Coinbase adapters returned BTC, ETH, SOL and XRP against
+USD. OKX returned the same four assets against USDT. All sampled products reported
+normal public trading status. These are public instrument observations.
+
+| Feed | BTC minimum base | ETH | SOL | XRP | Observed native quote details |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Kraken | 0.00006 | 0.002 | 0.05 | 4 | 0.5 USD minimum across all four |
+| Coinbase Advanced | 0.00000001 | 0.00000001 | 0.00000001 | 0.000001 | 1 USD minimum quote size across all four |
+| Coinbase Exchange | Unknown | Unknown | Unknown | Unknown | 1 USD `min_market_funds` across all four, limit-order scope |
+| OKX | 0.00001 | 0.0001 | 0.01 | 1 | `maxMktAmt` at 1,000,000 USD for BTC, ETH and SOL, 310,000 USD for XRP |
