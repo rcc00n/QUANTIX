@@ -92,3 +92,50 @@ half-round-trip drag diagnostic using executable opposite-side routes, explicitl
 All route rates, fees, source IDs, availability times and snapshots must be retained
 with the calling scanner's immutable evaluation evidence.
 
+## Sizing and bounded optimization
+
+`maximum_quantity` intersects buy asks, sell bids, both markets' maximum limits,
+base-fee quantities and step sizes. `optimize_route` evaluates the default CAD budgets
+50/100/250/500/1000/2000/2500/5000/10000 and custom budgets. Continuous scans can pass
+`budgets=()` and calculate other budgets from pinned evidence on demand.
+
+The optimizer evaluates book-depth breakpoints, market-limit boundaries, the budget
+boundary and nearby rounded buy/sell steps. For at most 32 buy ticks it enumerates
+the complete feasible lattice. Larger lattices use deterministic branch-and-bound:
+the unrounded depth/FX cashflow function is concave, and endpoint tangent envelopes
+upper-bound all rounded outcomes in an interval. It prunes an interval only when it
+cannot improve the best feasible profit. Search is bounded to 4096 additional
+evaluations per budget. If global optimality cannot be certified within that limit,
+the result explicitly says `OPTIMIZER_GLOBAL_OPTIMUM_UNCONFIRMED`, is not verified,
+and reports the best evaluated feasible size. The engine never silently calls an
+uncertified size the global optimum. Equal-profit initial candidates prefer lower
+acquisition capital.
+The `max_search_evaluations` keyword accepts an integer from 1 through 4096; the
+default remains 4096 for deterministic replay and detailed on-demand analysis.
+Continuous scanners can select a smaller proof budget to protect collection latency.
+A smaller budget does not relax financial validation: an unfinished proof retains
+the feasible result with the explicit unconfirmed-optimum classification above.
+Retained replay honors the search cap pinned with the original evaluation, reproducing
+its bounded result. On-demand budget resizing uses the full 4096-evaluation bound
+and identifies that different analysis budget explicitly in its optimizer metadata.
+
+The retained-size comparison evaluates trade sizes at C$50, C$100, C$250, C$500,
+C$1,000, C$2,500 and C$5,000 alongside the best size found within the chosen budget.
+It reports which side's observed depth, native limits or conversion evidence limits
+the size. It also reports the projected costs and both reserves using ledger rounding.
+The comparison API caps search at the stricter pinned and configured evaluation
+limits, and releases the database connection before CPU work. The response states
+whether the optimum was certified. FX drag is a round-trip diagnostic. The net CAD
+calculation already accounts for directional exchange rates in its cash flows.
+
+For a non-increasing continuous profit envelope, the engine starts from the exact
+minimum feasible quantity and a rationally aligned inventory size. Concave bounds
+then prove whether larger sizes can improve the result, without evaluating every
+depth level or thousands of tiny orders. It still considers rounding: the smallest
+feasible order can lose more than a slightly larger order with less residual inventory.
+Synthetic performance tests bound evaluation counts for fee-negative routes with
+25-level books, and compare incompatible-step results against an exhaustive oracle.
+
+Loss-making sizes remain available for diagnostics. A positive top-of-book spread
+does not guarantee positive net profit, a minimum order, or meaningful capacity.
+
