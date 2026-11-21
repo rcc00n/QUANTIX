@@ -77,3 +77,25 @@ BACKEND_URL=http://127.0.0.1:8000 npm run dev
 The server-only BACKEND_URL is not embedded in client bundles. Dashboard rendering
 and all backend routes independently verify database sessions.
 
+## Test boundaries
+
+Synthetic backend tests cover financial primitives, UTC and report contracts,
+authentication/rotation/history preservation, discovery and asset identity, capabilities,
+exact L2 decoding, malformed/crossed/shallow/stale books, reference confirmation,
+clock drift, bounded cache/queue, global/per-exchange rate limits, Retry-After,
+timeouts/backoff, checksum/sequence gaps, disconnect/new-snapshot recovery,
+PostgreSQL upserts/restart idempotency, transient retention and immutable financial
+history. API integration tests cover protected catalogs/books, stale fallback and
+unavailable collector responses. No test mocks count as live exchange verification.
+
+Actual live checks are separate:
+
+```bash
+make live-check
+make collector-logs
+```
+
+Reports show measured adapter/venue counts, market coverage, sources and timestamps.
+A historical successful public book does not imply that its exchange is currently
+healthy or legally actionable. See docs/LIVE_VERIFICATION.md for the stage snapshot.
+
