@@ -63,3 +63,32 @@ not pretend the pre-funded seller inventory is free. Projected inventory deltas 
 separate from balances and accounting. Stage 4 implements actual virtual balances
 and simulated execution.
 
+## CAD and executable FX
+
+`ConversionLeg` represents source→target executable depth. Rates are target units
+per source unit, and quantities are source units. Selling A from an A/B book consumes
+bids. Buying A with B consumes asks using reciprocal rates and converted source depth.
+Each leg includes its fee once. Source-denominated commission is included in the
+source depth and effective price. Target-denominated commission is deducted from
+output. Routes contain at most three hops and have no cycles.
+
+`convert(route, source_amount)` gives executable liquidation proceeds.
+`required_input(route, target_amount)` works backward through fee-adjusted levels
+to calculate exact acquisition cost. A quote's `FXConversion` holds independent
+currency→CAD and CAD→currency sides from the same causal set of observed books.
+The selector prefers paths that support the configured CAD probe, then fewer hops
+and lower round-trip drag. Its deterministic breadth-first search is bounded to
+128 edge examinations per currency and three parallel books per pair. CAD uses an
+explicit identity. Stablecoin deviations, spreads and FX depth change projected
+profitability. The oldest participating capture governs FX expiry. Both receipt
+and source spans must fit the skew budget including recorded clock uncertainty.
+
+Missing, stale, future or insufficient FX evidence suppresses CAD profitability;
+the same-quote native result can remain visible with its limitations. Unverified
+fee/funding evidence on an FX route prevents verified profitability. Acquisition and
+liquidation cashflows already include FX spreads/fees. `fx_cost_cad` is an optional
+half-round-trip drag diagnostic using executable opposite-side routes, explicitly
+**not** an additional cost subtraction. It is null if that diagnostic lacks depth.
+All route rates, fees, source IDs, availability times and snapshots must be retained
+with the calling scanner's immutable evaluation evidence.
+
