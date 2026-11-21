@@ -119,3 +119,20 @@ least-privilege database roles, firewall, recovery and resource verification.
 Local development does not require SSH or production credentials.
 
 
+## Stage 4 paper and capacity checks
+
+```bash
+make paper-check
+make engine-check
+make capacity-check
+QUANTIX_LIVE_E2E=1 make test-ui
+```
+
+The capacity harness is explicitly synthetic and generates zero exchange traffic.
+It profiles 120/200/300/500 books in separate processes; see PERFORMANCE.md for
+measurement boundaries and the isolated SQL accounting benchmark. `make test`
+force-recreates the disposable test database: do not run a separate SQL benchmark
+against it concurrently. The app database volume is never a test fixture.
+Paper/Portfolio/Settings browser tests include isolated synthetic outcomes and
+separate actual authenticated state checks. The latter append an unchanged strategy
+version to verify PUT without fabricating funds or executions.
