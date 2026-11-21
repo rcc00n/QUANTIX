@@ -93,3 +93,20 @@ initial inventory contribution, not a fictional exchange purchase/fill. Research
 valuation may use unverified/reference-venue marks; all such evidence remains explicitly
 hypothetical and excluded from validated performance.
 
+## Creation, comparisons and reset
+
+`POST /api/v1/paper/funding/experiments` takes either a proposal ID or explicit
+allocations, a unique idempotency key and a RESEARCH_SHADOW strategy. Custom non-CAD
+allocations require a positive CAD valuation; owner-supplied assumptions remain
+research-only. Starting values must equal the requested capital exactly. A user row lock
+and immutable key/fingerprint receipt prevent duplicate funding on retry; reusing a key
+with different contents is rejected. A proposal's target trade budget is applied to the
+created strategy; an explicitly mismatched strategy is rejected. Existing session locks,
+journal balance guards, active-session caps and scope isolation remain in force.
+
+Comparisons should use equal starting capital and contemporaneous evidence, with
+benchmark/exposure differences disclosed. `reset_from_session_id` requires an owned
+research session and the same initial capital; it creates a new session and never
+changes the source. The immutable initial holdings define a separate no-trading
+benchmark for every experiment.
+
