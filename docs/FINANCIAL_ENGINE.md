@@ -139,3 +139,13 @@ Synthetic performance tests bound evaluation counts for fee-negative routes with
 Loss-making sizes remain available for diagnostics. A positive top-of-book spread
 does not guarantee positive net profit, a minimum order, or meaningful capacity.
 
+## Transfer scenarios
+
+`transfer_scenario` is separate from pre-funded evaluation. It subtracts explicit
+withdrawal and network base charges, checks remaining visible sell capacity/limits,
+and shows today's hypothetical proceeds separately from a user-configured future
+price haircut scenario. Network identity, deposit/withdrawal availability,
+confirmations, delay and their evidence remain explicit. Today's sell quote is
+never guaranteed after arrival. `guaranteed_executable` and `actual_execution`
+are always false. Unknown network/funding/timing costs remain research blockers.
+
