@@ -126,3 +126,22 @@ process; excess requests receive429 instead of building an unbounded queue. The 
 paper coordinator remains the only owner of actual simulated execution and causal
 first-arrival capture.
 
+## Terminal and notification settings
+
+`GET/PUT /api/v1/settings/terminal` stores immutable per-user versions under a user
+lock. Optional `expected_version` prevents lost updates. Reset-to-default saves a new
+version. The collector reloads the operator's market preferences at a bounded interval;
+existing scheduled paper work keeps its pinned strategy version.
+
+Market preferences cover exchange/asset allowlists, preferred quotes, CAD focus, anomaly
+exploration, freshness, minimum reported liquidity and per-venue book caps. Unknown
+exchanges/assets, oversized lists and unsafe freshness values are rejected.
+
+Notification preferences store daytime/nighttime thresholds, AND-independent normal
+versus emergency choices, Edmonton quiet hours, cooldown/repetition/acknowledgment, push
+and voice preferences. Night thresholds cannot be lower than daytime thresholds.
+Notification delivery uses the separate worker and private pairing contracts in
+[NOTIFICATIONS.md](NOTIFICATIONS.md). Saved preferences alone do not establish active
+delivery. Paid push/voice remain disabled. Tokens and private destinations never
+belong to these public preferences and are not accepted as schema fields.
+
