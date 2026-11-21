@@ -110,3 +110,19 @@ research session and the same initial capital; it creates a new session and neve
 changes the source. The immutable initial holdings define a separate no-trading
 benchmark for every experiment.
 
+## Historical replay
+
+`POST /api/v1/paper/replay` accepts a retained evaluation ID, reaction delay and budget.
+Original deterministic replay obeys fee/FX/book availability times. Delayed assessment
+uses the earliest retained valid snapshot after the deadline on each market, with no
+snapshot beyond trustworthy current UTC. FX availability/freshness and the original
+quantitative inputs remain checked. Insufficient retained books produce an explicit
+limitation, not an invented fill.
+
+Selective snapshot retention cannot prove the first live post-delay observation. The
+endpoint therefore returns counterfactual **projections**, not executed trades, and
+never changes orders, balances or journals. Only two replay jobs may run per API
+process; excess requests receive429 instead of building an unbounded queue. The live
+paper coordinator remains the only owner of actual simulated execution and causal
+first-arrival capture.
+
