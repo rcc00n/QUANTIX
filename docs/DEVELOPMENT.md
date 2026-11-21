@@ -99,3 +99,23 @@ Reports show measured adapter/venue counts, market coverage, sources and timesta
 A historical successful public book does not imply that its exchange is currently
 healthy or legally actionable. See docs/LIVE_VERIFICATION.md for the stage snapshot.
 
+## Operational inspection
+
+```bash
+make status
+docker compose exec -T db psql -U arbiq -d arbiq -c 'SELECT version_num FROM alembic_version'
+docker compose exec -T backend python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/health/ready').read().decode())"
+docker compose restart collector
+make live-check
+```
+
+The explicit SQL command assumes the example internal DB name/user; adjust it to
+POSTGRES_DB/POSTGRES_USER if customized. Never print environment dumps or database
+connection URLs. `make down` preserves the application volume. No destructive reset
+target is provided. Do not use down -v on valuable data.
+
+Public deployment is a separate operational action requiring TLS, secure cookies,
+least-privilege database roles, firewall, recovery and resource verification.
+Local development does not require SSH or production credentials.
+
+
