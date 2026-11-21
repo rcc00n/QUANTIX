@@ -30,3 +30,36 @@ product. An explicit market-order prohibition blocks a market execution. Unknown
 precision, limits and external-denomination restrictions remain visible in the
 calculation evidence.
 
+## Pre-funded depth calculation
+
+`evaluate_route(buy, sell, requested_buy_quantity, now=..., costs=...)` consumes
+buy-side asks and sell-side bids from best to worst. It fails if observed depth is
+insufficient, without extrapolating a fill. Quantities are rounded down independently
+using each exchange's step size. Both legs must satisfy their minimum/maximum amounts
+and notionals.
+
+For base-denominated buy fee `fb`, acquired base is `buy_quantity × (1 − fb)`.
+For base-denominated sell fee `fs`, seller inventory required is
+`sell_quantity × (1 + fs)`. Selling quantity is rounded down after accounting for
+both base fees. Any residual acquired base is explicitly retained as inventory;
+it is assigned no fabricated cash proceeds.
+
+Quote-denominated buy fees increase purchase currency required; quote-denominated
+sell fees reduce sale proceeds. Base fees already affect quantities. Their CAD
+disclosure value uses the corresponding executed-side VWAP and is never deducted
+twice. `fees_cad` includes these disclosed base-fee values. The defined gross cash
+projection adds disclosed trading fees back to the cashflow before reserves, making
+`gross_profit_cad − fees_cad − expenses_cad = net_profit_cad`.
+
+`net_profit_cad` equals fee-inclusive sale cash proceeds in CAD minus fee-inclusive
+acquisition cost in CAD minus configured slippage/rebalancing reserves. Return is
+this net amount divided by total CAD acquisition cost, expressed in percent.
+Reserves are configurable estimates; they do not assert liquidity beyond observed
+levels or claim transfers have occurred. Unverified reserves are clearly classified.
+
+Capital requirements list purchase currency on the buying venue **and** base inventory
+on the selling venue. The buy budget limits fee-inclusive acquisition cost; it does
+not pretend the pre-funded seller inventory is free. Projected inventory deltas are
+separate from balances and accounting. Stage 4 implements actual virtual balances
+and simulated execution.
+
