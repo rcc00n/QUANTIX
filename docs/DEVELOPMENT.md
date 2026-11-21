@@ -46,3 +46,34 @@ uv run python -m arbiq.collector.worker
 In host development set COLLECTOR_URL=http://127.0.0.1:8001 and protect local service
 access. The supported Compose worker exposes no host port and uses an internal token.
 
+## Frontend and browser verification
+
+Node.js 22 and npm:
+
+```bash
+cd frontend
+npm ci
+npm run typecheck
+npm run format:check
+npm run build
+npx playwright install chromium
+npm run test:e2e
+QUANTIX_LIVE_E2E=1 npm run test:e2e
+```
+
+Browser tests use the local owner credential file or QUANTIX_E2E_USERNAME /
+QUANTIX_E2E_PASSWORD environment values. Traces are disabled; do not enable secret-
+containing debug traces or point tests at public production. The opt-in live test
+checks actual normalized bid/ask records from the current private API and real brand
+assets; it does not install synthetic data. Base URL override: QUANTIX_E2E_URL.
+PLAYWRIGHT_CHROMIUM_EXECUTABLE may select an existing local Chromium installation.
+
+For frontend host development:
+
+```bash
+BACKEND_URL=http://127.0.0.1:8000 npm run dev
+```
+
+The server-only BACKEND_URL is not embedded in client bundles. Dashboard rendering
+and all backend routes independently verify database sessions.
+
