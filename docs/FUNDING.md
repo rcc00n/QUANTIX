@@ -145,3 +145,15 @@ Notification delivery uses the separate worker and private pairing contracts in
 delivery. Paid push/voice remain disabled. Tokens and private destinations never
 belong to these public preferences and are not accepted as schema fields.
 
+## Database and verification
+
+Additive migration `0009_terminal_settings` adds three append-only tables:
+terminal_settings_versions, funding_proposals and funding_experiments. No applied
+migration or earlier financial table is rewritten. SYNTHETIC tests cover exact missing
+inventory, depth/budget/rounding fallbacks, immutable equal-capital/reset accounting,
+retries, settings validation/version conflicts, private access and causal
+missing-evidence replay. The tests include paired-route funding under constrained
+capital, no half-route funding, full-size mark failure, max-unit sharing, target-budget
+persistence and expiry exclusion. Independent pure collector/IPC/telemetry tests use no
+database or network sockets. Full regression is owned by the Stage 5 integration
+handoff. Test data never enters the application database.
