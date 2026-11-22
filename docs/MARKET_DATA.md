@@ -109,3 +109,21 @@ Operational exchange health is separate from individual-book confidence. API fai
 immediately downgrades cached confidence, retains the last real record and adds the
 error; old values are never presented as a successful new fetch.
 
+## WebSocket recovery
+
+Kraken v2 uses public snapshots and incremental updates. Every message is applied
+atomically to price levels, zero quantities delete levels, depth is truncated to the
+subscription scope, and CRC32 over the top ten asks/bids is checked using exact
+strings. Updates without a snapshot, checksum mismatch, unknown symbols, rejected
+subscriptions, idle timeout or disconnect trigger reconnection and a new snapshot.
+REST continues as fallback when stream updates are unavailable/stale.
+
+Kraken v2 has checksums rather than contiguous sequence IDs. SequenceGuard supports
+feeds that explicitly provide contiguous sequences and is tested with synthetic gaps;
+it is **not** falsely applied to REST nonces or represented as a live Kraken sequence
+feed. Native Coinbase Exchange and OKX protocols provide additional bounded depth
+slots, each with protocol-specific integrity checks and REST fallback. Selection is
+independent of the wider discovery catalog. Other installed CCXT Pro capabilities
+are recorded as advertised, not claimed as implemented or live-verified coverage.
+See [WEBSOCKET_ARCHITECTURE.md](WEBSOCKET_ARCHITECTURE.md) for current transports.
+
