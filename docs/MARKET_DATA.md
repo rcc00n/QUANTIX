@@ -127,3 +127,18 @@ independent of the wider discovery catalog. Other installed CCXT Pro capabilitie
 are recorded as advertised, not claimed as implemented or live-verified coverage.
 See [WEBSOCKET_ARCHITECTURE.md](WEBSOCKET_ARCHITECTURE.md) for current transports.
 
+## Anomaly confirmation
+
+The cache checks temporal jumps and fresh independent same-canonical-asset/same-quote
+reference midprices. USD and stablecoins cannot cross-confirm each other. Coinbase
+and Coinbase Exchange count as one venue. At least two independent references are
+required for confirmation. Outliers remain visible with raw evidence and a confidence
+flag. An anomalous record is quarantined across updates until a fresh REST recheck
+and agreeing references resolve it. A repeatable price that disagrees with references
+remains SUSPICIOUS; Stage 3 must evaluate that evidence rather than assuming profit.
+
+Rechecks are automatic for suspicious books and manually available in the explorer.
+A bounded queue (32), per-market 30s cooldown, existing exchange backoff and global
+concurrency/rate limits apply. Recheck responses say queued, not confirmed. Insufficient
+references, disagreement and recovery have explicit verification statuses.
+
