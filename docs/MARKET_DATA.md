@@ -200,3 +200,12 @@ Technical references: [CCXT manual](https://github.com/ccxt/ccxt/wiki/Manual),
 [Kraken checksum guide](https://docs.kraken.com/exchange/guides/websockets/book-checksum-v2),
 [Bitfinex book formats](https://docs.bitfinex.com/reference/rest-public-book).
 
+## Stage 3 integration
+
+The default monitoring cap is ten per adapter. Catalog intersections and currency
+conversion anchors now guide bounded allocation; incremental scanning runs beside
+the collector under its singleton lock. See [ARBITRAGE.md](ARBITRAGE.md).
+Externally checked UTC projection supplements ClockGuard without changing the OS
+clock or relaxing freshness limits; evidence preserves uncertainty. See [CLOCK.md](CLOCK.md).
+
+
