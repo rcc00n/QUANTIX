@@ -209,3 +209,15 @@ Externally checked UTC projection supplements ClockGuard without changing the OS
 clock or relaxing freshness limits; evidence preserves uncertainty. See [CLOCK.md](CLOCK.md).
 
 
+## Stage 4 paper evidence capture
+
+The singleton collector calls the paper coordinator for every normalized arrival.
+Pending orders capture their first valid post-delay observation under an order row
+lock, with immutable snapshot, source/ingestion UTC, uncertainty, available FX and
+opposite-as-of evidence. Delayed paper work does not make additional unconstrained
+public polling loops. A bounded recheck path retains existing exchange rate limits.
+No future mark or discarded transient sample can retrospectively invent a fill.
+Pinned execution evidence and all accounting records are excluded from retention.
+`make paper-check` inspects actual state; `make engine-check` reports active coverage.
+Persisted latest-book rows can include earlier allocations in the same collector run;
+they are not the number of currently selected/monitored books.
