@@ -142,3 +142,22 @@ A bounded queue (32), per-market 30s cooldown, existing exchange backoff and glo
 concurrency/rate limits apply. Recheck responses say queued, not confirmed. Insufficient
 references, disagreement and recovery have explicit verification statuses.
 
+## Bounded persistence and retention
+
+- latest_market_books: one mutable fallback row per market; old rows expire after 24h.
+- market_data_samples: one observation per market/time bucket (default 300s), retained
+  24h by default, maximum seven days. Unique buckets prevent restart duplicates.
+- market_quality_events: bounded raw/confirmation evidence, deduplicated per minute,
+  retained seven days by default, configurable up to 90 days.
+- Both transient history tables have a configurable global row budget, enforced by
+  hourly cleanup after time retention (default 100000 rows per table). Temporary
+  overshoot between cleanup passes is bounded by the configured collection budget.
+- Unusual samples may also receive an immutable order_book_snapshots record, at most
+  one per market/hour and 24 total/hour by default. Repeated content is deduplicated.
+  These low-frequency evidence records remain auditable; no financial references are
+  pruned. Stage 3 will explicitly pin trade/opportunity evidence when needed.
+- Durable system_events record startup/shutdown, discovery, connectivity changes and
+  distinct errors, with repeated error deduplication. They contain no tokens or secrets.
+- Stage 2 cleanup never deletes the Stage 1 immutable ledger, market observations,
+  fills, valuations, fee/config versions, user records, actual trades or snapshots.
+
