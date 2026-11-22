@@ -233,3 +233,22 @@ remains explicit throughout Stage5. Current route.run_id is mutable, so unproven
 historical collector-run configuration is not presented as pinned calculation input.
 
 
+## Stage6 notification evidence extension
+
+The stable quantix-export-v1 envelope and all11mandatory files remain. Current ZIPs
+have35members. signals.csv additionally contains owned AlertDecision rows joined to
+retained evaluation/route IDs with explicit ACTIONABLE/RESEARCH_ONLY classification
+and eligibility. alert_decisions.csv, alert_outbox.csv and alert_events.csv preserve
+source/rule/settings decisions and immutable delivery audit. These are owner-wide
+network alerts, never attributed to a selected paper portfolio or strategy P&L.
+Private pairing/bindings/destinations, provider message IDs and command/message text
+are excluded. No bot token is stored in these tables or exported.
+
+Mutable outbox outcomes after cutoff cannot establish an earlier status; unproven
+historical status, attempts, retry availability and errors stay unknown. Only a
+recorded delivery timestamp before cutoff proves delivery. Config activity is false
+when explicitly disabled at cutoff; otherwise null rather than inferred from today's
+pairing/runtime. notification_counts exposes owner-scoped decision/eligible/research,
+actual alert delivery and expiry-before-delivery counts, with period/scope labels.
+
+
