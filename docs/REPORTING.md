@@ -73,3 +73,26 @@ Do not claim full two-leg success when only one leg fills. All displayed P&L mus
 simulated; no estimate is realized real-world profit. Deterministic analytics, not AI,
 produces metrics. Missing/stale marks must produce quality notes and null affected totals.
 
+## Export for ChatGPT ZIP
+
+| File | Contents |
+| --- | --- |
+| SUMMARY.md | Human-readable scope, definitions, period, units, calculated metrics, caveats and manifest; all conclusions traceable to records |
+| metrics.json | AnalyticsExportMetrics numerical envelope plus scope/period metadata; explicit nulls for unknowns |
+| opportunities.csv | Estimates and reconstructable book/fee/FX/calculation provenance |
+| signals.csv | Decisions, reasons and delivery-attempt history |
+| paper_trades.csv | Attempts/outcomes, delays, reasons and versioned assumptions; nested order details in provenance |
+| paper_fills.csv | Every fill with quantities/prices/fees/FX/cost basis and journal linkage |
+| portfolio_equity.csv | Valuations, equity/P&L, utilization/drawdown, starting and no-trading bases |
+| balances.csv | Per session/exchange/currency/account role balances; nested immutable journal/ledger details for reconstruction |
+| fees.csv | Fees plus rebalancing/other expenses, units, FX and effective assumptions |
+| system_health.csv | Connectivity/data-quality/operational evidence for the period |
+| config_snapshot.json | Sanitized settings/versions and complete reproducibility metadata |
+
+All 11 files are required, even when CSV files have only headers. No extra filename
+is silently required. Referenced pre-period books, fee versions, FX, opening cost lots,
+initial holdings and ledger records must be embedded in provenance/config so the ZIP
+is self-contained. Stage 5 implements export reconciliation, stable serialization,
+size limits, access control and artifact checksums. AI-written commentary is optional
+and can never replace underlying records or change metrics.
+
