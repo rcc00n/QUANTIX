@@ -109,3 +109,28 @@ No Telegram message is guaranteed to bypass a phone's Focus mode or wake its own
 `DisabledPaidProvider` implements push/voice boundaries and rejects all delivery calls.
 No Pushover, Twilio, voice call, subscription or paid API is enabled by preferences.
 
+## Reports and API
+
+Daily reporting defaults to 09:00 America/Edmonton, after pairing and Telegram opt-in.
+Optional weekly reporting defaults off, scheduled on Monday at the same local time.
+Period boundaries follow local calendar/DST rules. A unique owner/date key prevents
+restart duplicates. Reports may catch up within six hours, and never emit a historical
+burst beyond that window. Each independent simulated portfolio has separate results,
+retained valuation time, matched-leg completed P&L, disposal/FX P&L, unrealized P&L,
+equity and original-holdings benchmark. Unknowns remain unavailable and zero completed
+simulations are explicit. Reports reject more than 20 sessions or a message exceeding
+3,900 characters instead of silently dropping requested accounting; use the dashboard
+and export for larger histories.
+
+Authenticated API prefix: `/api/v1/notifications`.
+
+- `GET /status`, `/history`, `/decisions`, `/events`, `/preview`.
+- `POST /pairing/challenge`, `/pairing/approve`, `/pairing/revoke`.
+- `POST /test`, `/pause`, `/resume`.
+- `POST /{alert_id}/acknowledge`, `/{alert_id}/cancel`.
+
+The preview is retained immutable evidence, not a new quote or automatic test send.
+Pairing approval/revocation, test sends and acknowledgments require trusted application
+UTC; status/history remain readable during clock outages. Actual delivery availability
+comes from pairing, pause, saved policy and recent worker health, not a hardcoded flag.
+
