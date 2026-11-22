@@ -175,3 +175,28 @@ latency and freshness. No mock data enters the application database. To verify l
 browser behavior use QUANTIX_LIVE_E2E=1; CI's synthetic backend tests never imply that
 a public exchange was connected.
 
+## Eligibility sources
+
+The Stage 9 review on 2026-11-24 records the listed Canadian entities and product-specific public evidence. The Exchanges page shows Canada, Alberta, and owner-account status separately, with direct source links, review dates, and an owner checklist. [CSA list of authorized platforms](https://www.securities-administrators.ca/crypto-platforms-regulation-and-enforcement-actions/crypto-platforms-authorized-to-do-business-with-canadians/), [Alberta Securities Commission platform guidance](https://www.asc.ca/Registrant-and-Market-Regulation/Registrant-Toolkit/Crypto-Asset-Trading-Platforms)
+
+| Public evidence | Adapters | Alberta scope |
+|---|---|---|
+| Canadian spot scope documented | Kraken, Ndax, Coinbase retail | Alberta appears in public registration or account terms. Individual pairs, assets and account access still require verification. Kraken's Canadian terms restrict USDT. |
+| Separate adapter product unverified | Coinbase Exchange, Crypto.com global Exchange | The Canadian retail entity has public documentation. Alberta access for the exact adapter product requires separate evidence. Coinbase adapters share one liquidity venue. |
+| Published Canadian restriction | OKX, Bybit, Bitget, MEXC, Gate | The restriction covers Canada, including Alberta. |
+| Published Canadian withdrawal | Binance | FINTRAC records a Canadian exit on 2023-09-25. The current CSA platform list does not show a return. |
+| Resident onboarding unavailable | Luno, Bitbank | Luno's supported residency list excludes Canada. Bitbank's individual onboarding requires Japanese residence. |
+| Documented restrictions elsewhere in Canada | Bitfinex, KuCoin, Poloniex | Published Ontario restrictions, including British Columbia for KuCoin. Alberta access remains unverified. |
+| Spot scope unverified | Bitstamp, Bitso, Gemini, HTX | Public evidence reviewed did not establish Canadian or Alberta spot access for the adapter. |
+
+The public product findings are dated reference evidence. Every owner account stays `UNVERIFIED`, and `product_verified` and `manual_trading_eligible` stay false. The authenticated `/exchanges` view projects the current review over retained capability snapshots. Existing historical versions retain their original recorded evidence. New collector discoveries record the current capability evidence through the existing versioned exchange model. Feed health and public eligibility remain independent.
+
+The owner checklist asks for the current contracting entity and province registration, account residency and identity verification, the exact spot pair and enabled order types, funding currencies and API permissions, and account-specific fees and limits. The interface collects no identity documents, account credentials or applications. [CSA registration search](https://www.securities-administrators.ca/registration/are-they-registered/)
+
+Public spot references for the documented products are the [Kraken jurisdiction and asset restrictions](https://support.kraken.com/ca/articles/where-is-kraken-licensed-or-regulated), [Ndax registration decision](https://www.securities-administrators.ca/wp-content/uploads/2024/12/Ndax-Canada-Inc.pdf) and [Coinbase Canadian regulatory FAQ](https://help.coinbase.com/en-ca/coinbase/other-topics/legal-policies/canada-regulatory-faq). Exact adapter evidence and terms for the remaining connectors are linked by the Exchanges API and UI.
+
+Technical references: [CCXT manual](https://github.com/ccxt/ccxt/wiki/Manual),
+[Kraken v2 book](https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/book),
+[Kraken checksum guide](https://docs.kraken.com/exchange/guides/websockets/book-checksum-v2),
+[Bitfinex book formats](https://docs.bitfinex.com/reference/rest-public-book).
+
