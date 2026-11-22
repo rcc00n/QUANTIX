@@ -134,3 +134,14 @@ Pairing approval/revocation, test sends and acknowledgments require trusted appl
 UTC; status/history remain readable during clock outages. Actual delivery availability
 comes from pairing, pause, saved policy and recent worker health, not a hardcoded flag.
 
+## Verification and limits
+
+The isolated synthetic test suite covers pairing authorization/hash/expiry/replay,
+minimum actual capital and combined threshold logic, retained small-capital research evidence,
+research isolation, quiet/emergency rules and historical DST folds, quote and clock
+uncertainty, retries/rate limits, explicit send ambiguity, restart deduplication,
+expiry/revocation, acknowledgment cancellation, daily report zeros/idempotency,
+provider receipts/webhook conflicts, secret redaction and immutable audit events.
+Tests use only the disposable `_test` database and mocked Telegram HTTP calls.
+
+Official provider contract: [Telegram Bot API](https://core.telegram.org/bots/api).
