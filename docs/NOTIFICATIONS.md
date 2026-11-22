@@ -46,3 +46,41 @@ Paired private commands are `/status`, `/radar`, `/paper`, `/portfolio`, `/alert
 and valuation timestamps remain visible; unavailable values remain unavailable.
 Pause/resume affect notification delivery, independently of paper trading.
 
+## Rules and evidence
+
+The minimum **actual executable Buy Capital** defaults to C$50. This uses immutable
+`ArbitrageEvaluation.acquisition_cost_cad`, including the purchase's modeled costs,
+independently of selected maximum budget, expected profit and percentage thresholds.
+Every monetary threshold must pass (AND). Quantities and sell-side prefunded inventory
+must be positive and known. The minimum liquidity CAD gate measures the depth-supported
+executable acquisition amount; native book depth and conversion assumptions remain
+in the referenced evaluation. Small research observations are retained unchanged.
+
+Eligible actionable alerts require every explicit eligibility, funding, fee, FX,
+market-limit and canonical-identity confirmation, HEALTHY books, trusted and healthy
+original clock evidence, current UTC trust, non-future fresh source/ingestion times,
+positive net profit, unexpired route evidence, route cooldown and owner policy.
+The source UTC uncertainty is read from preserved `uncertainty_ms`/seconds evidence;
+a conservative two-second bound for the current trusted UTC is added when checking
+age. Thresholds are never relaxed to compensate for an unreliable host clock.
+Existing research-only scanner routes remain non-actionable.
+
+Optional ordinary research delivery defaults off and always says **RESEARCH ONLY**,
+includes missing confirmations, and cannot trigger emergency repetition, push or voice.
+`telegram_enabled` defaults false and secure pairing alone does not enable alerts.
+
+Quiet hours use America/Edmonton zoneinfo rules, default 23:00–07:00. Ordinary messages
+are suppressed by default, or may be silent. Emergency rules default to C$250 minimum
+Buy Capital, C$500 depth-supported capital, C$25 profit, 1% return, maximum three-second
+quote age and ten seconds of independent fresh REST-confirmed persistence. All gates
+must pass. Repeats default off; when enabled, they stop on acknowledgment, cancellation,
+expiry, missing fresh confirmation, repeat budget or daily cap. Each repeated message
+pins its source evaluation and revalidates both that evidence and the current route.
+Daily cap defaults five messages; route escalation cooldown defaults ten minutes.
+
+Alert decisions and notification lifecycle events are immutable PostgreSQL evidence.
+Mutable outbox/lifecycle projections preserve delivery status without modifying orders
+or the financial ledger. Each source, configuration version, book and fee reference
+is retained. Authenticated history, decisions and events expose the delivery audit.
+The scanner remains separate: a Telegram alert is neither a fill nor simulated P&L.
+
