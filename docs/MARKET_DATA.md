@@ -161,3 +161,17 @@ references, disagreement and recovery have explicit verification statuses.
 - Stage 2 cleanup never deletes the Stage 1 immutable ledger, market observations,
   fills, valuations, fee/config versions, user records, actual trades or snapshots.
 
+## Configuration and diagnostics
+
+Environment nested prefix: COLLECTOR__. Arrays are JSON arrays; decimal thresholds
+are decimal strings/numeric environment text. Restart the collector after changes.
+Important settings are listed in .env.example; all options and bounds live in
+arbiq.collector.config. COLLECTOR__ENABLED=false leaves a disabled, network-inert
+collector endpoint. To stop the service entirely use docker compose stop collector.
+
+`make live-check` reads actual current-run records, reports separate adapter/venue
+counts, discovered and monitored listings, available books, source coverage, quality,
+latency and freshness. No mock data enters the application database. To verify live
+browser behavior use QUANTIX_LIVE_E2E=1; CI's synthetic backend tests never imply that
+a public exchange was connected.
+
