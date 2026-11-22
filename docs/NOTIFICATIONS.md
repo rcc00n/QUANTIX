@@ -27,3 +27,22 @@ and a recent CLOCK_MONOTONIC_RAW heartbeat. Missing tokens produce explicit degr
 health without stopping market collection or paper trading. The worker independently
 corroborates UTC with the existing TrustedClock and fails closed when trust expires.
 
+## Owner pairing
+
+1. Log into QUANTIX and create a challenge in Settings.
+2. Open the returned Telegram deep link, or send `/start <challenge>` privately.
+3. Return to the authenticated dashboard, inspect the requesting identity, and approve.
+4. Enable Telegram policy and use **Send test** if desired.
+
+Challenges expire after ten minutes, are hashed at rest, require a private chat with
+matching Telegram sender/chat identity, and can be consumed only once. Starting a new
+challenge invalidates the previous challenge. Only the authenticated initiating owner
+can approve. Arbitrary `/start` messages cannot enroll an account or reveal information.
+Unpaired users receive no private replies. Revoke pairing in Settings to cancel queued
+messages. Challenge, token and raw Telegram destination IDs are excluded from exports.
+
+Paired private commands are `/status`, `/radar`, `/paper`, `/portfolio`, `/alerts`,
+`/pause`, `/resume` and `/help`. They query genuine database state. Retained scanner
+and valuation timestamps remain visible; unavailable values remain unavailable.
+Pause/resume affect notification delivery, independently of paper trading.
+
