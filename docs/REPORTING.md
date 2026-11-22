@@ -96,3 +96,15 @@ is self-contained. Stage 5 implements export reconciliation, stable serializatio
 size limits, access control and artifact checksums. AI-written commentary is optional
 and can never replace underlying records or change metrics.
 
+## Stage 4 numerical evidence
+
+Authenticated per-session `/paper/sessions/{id}/metrics`, `/portfolio` and `/daily`
+return classification-scoped exact strings and limitations. Full-period SQL totals
+are independent of bounded detail/group pages. Daily revisions and checkpoints are
+append-only. `/paper/trades/{id}` uses `paper-trade-evidence-v1`, joining the pinned
+observations, orders, fills, events, fee/FX versions, journals/accounts/entries and
+initial benchmark. The dashboard downloads this JSON without AI-generated analysis.
+The requested_at attempt cohort, completed_at trade cashflow and effective_at
+accounting period are explicitly identified. Null win rate means no completed
+CAD-valued sample. Research never enters validated primary metrics.
+
