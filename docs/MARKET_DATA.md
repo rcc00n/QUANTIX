@@ -32,3 +32,39 @@ live cache access fails, FastAPI may return the last persisted book, clearly mar
 as a fallback with confidence downgraded and timestamps retained. No data is created
 for an empty/unavailable market. Backend/dashboard operation survives collector outages.
 
+## Discovery, filters and identity
+
+- Discover explicit spot, non-contract markets dynamically. Where CCXT supports a
+  product-type selector, restrict discovery to spot to avoid derivative traffic.
+- Persist all normalized discovered spot metadata, including inactive/unverified
+  status. Monitor only the bounded selection that passes configuration filters.
+- Filters: exchange allow/exclude, base asset list (empty means all), quote list,
+  active-only and allow-unknown-active switches, minimum native quote volume, CAD
+  preference, minimum visible book notional/depth, and freshness.
+- Select distinct base assets before redundant quote variants. CAD is preferred;
+  BTC/ETH/SOL/XRP/LTC/USDC/USDT are priorities, not the entire market universe.
+- Bulk ticker volume is optional and requested only for selected known single-call
+  public endpoints. Missing volume is unknown, not zero; a positive minimum-volume
+  filter excludes unknowns. Liquid markets get the faster interval. Unknown/less
+  active markets get the slower interval. Full-book REST endpoints get slower polling.
+- Volume and visible notional use **native quote units**. A threshold of 10000 CAD
+  is not silently equated to 10000 USD, USDC or USDT. Stage 3 adds explicit executable FX evidence; discovery liquidity thresholds remain native quote units.
+- Curated assets and fiat currencies have explicit canonical keys. Wrapped, staked,
+  bridged and synthetic names/symbols are isolated. Other unverified tickers remain
+  exchange-scoped even if their display symbols match. Funding-network compatibility
+  still needs verification in later risk/rebalancing stages.
+- `markets.native_symbol` retains the Stage 1 column name and stores the CCXT unified
+  symbol used for requests; metadata.native_id preserves the exchange-native ID.
+- Metadata changes cannot replace an existing market's base/quote asset FKs. A
+  conflict quarantines the listing, records an event and preserves old provenance.
+- During one discovery of one venue, normalized markets share immutable identities
+  resolved from that discovery's currency table. Each rediscovery resolves identities
+  against its own currency table. The collector releases bulk tickers after extracting
+  liquidity and invalidates the prior native archive after it loads a new catalog.
+  A selection update looks up the requested active symbols and writes rows whose
+  monitored flag changes, preserving other metadata attributes.
+- The collector loads persisted timestamp watermarks and prepares the native
+  adapter before publishing a changed market list and its schedules together.
+  An in-flight response from a retired schedule cannot update live books or
+  connector status, even if the same market is selected again.
+
