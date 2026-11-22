@@ -84,3 +84,28 @@ or the financial ledger. Each source, configuration version, book and fee refere
 is retained. Authenticated history, decisions and events expose the delivery audit.
 The scanner remains separate: a Telegram alert is neither a fill nor simulated P&L.
 
+## Delivery semantics
+
+The durable outbox has unique deduplication keys and at most 1,000 active jobs. The
+worker reads at most three deliveries per tick, 25 updates per poll, 32 current source
+evaluations per scan and ten due repeat jobs. Historical financial data is never pruned.
+Polling updates and their resulting queued command replies commit in one transaction.
+Delivery uses plain text, protected content, no link previews, one message per 1.1 seconds,
+explicit 429 server backoff, bounded exponential retries, and message expiry.
+
+Telegram does not provide an idempotency key for `sendMessage`. A network interruption
+after sending or a restart with an in-flight request is recorded as **ambiguous**.
+Such messages are not automatically resent; they may already have reached the owner.
+An explicit provider rejection can retry, with at most eight attempts. No exactly-once
+network-delivery claim is made. Acknowledgment/revocation cancel queued work; an already
+in-flight Telegram request can still arrive. Expired-before-delivery rows are counted.
+Messages show observation time and warn that historical prices may no longer execute.
+Mobile alert text formats CAD amounts to two decimal places, returns to at most four
+places and native prices/units to at most eight places. A rounded value carries `≈`;
+tiny nonzero units use scientific notation rather than appearing as zero. The linked
+portal preserves exact original values, and no display rounding feeds a rule or ledger.
+No Telegram message is guaranteed to bypass a phone's Focus mode or wake its owner.
+
+`DisabledPaidProvider` implements push/voice boundaries and rejects all delivery calls.
+No Pushover, Twilio, voice call, subscription or paid API is enabled by preferences.
+
