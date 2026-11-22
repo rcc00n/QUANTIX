@@ -108,3 +108,128 @@ The requested_at attempt cohort, completed_at trade cashflow and effective_at
 accounting period are explicitly identified. Null win rate means no completed
 CAD-valued sample. Research never enters validated primary metrics.
 
+## Stage 5 implemented API and export envelope
+
+`GET /api/v1/analytics/sessions/{session_id}` accepts explicit ISO UTC `start`, `end`
+and optional `strategy_version_id`. Authentication and portfolio ownership are
+mandatory. It returns period-scoped numerical trade/accounting results, the last
+retained portfolio checkpoint strictly before the cutoff, opening checkpoint where
+available, full-ledger reconciliation and limitations. Missing retained valuation
+is null, never an invented current price. The default period is from the later of
+session initialization or seven days before the cutoff; maximum period is 366 days.
+Naive timestamps, reversed ranges and future cutoffs are rejected.
+
+`GET /api/v1/analytics/sessions/{session_id}/series` returns at most 500 retained
+checkpoints, evenly sampled by row index with first/final endpoints retained. It
+never interpolates financial values. Full-period maximum drawdown still uses every
+checkpoint, so downsampling cannot conceal the numerical maximum. The response
+identifies available count, sampling and omissions. Exact values remain strings.
+
+Historical outcome counts exclude completions/fills recorded after the requested
+cutoff. They use immutable prior lifecycle evidence for pending states. Trade-size
+performance groups by the pinned configured CAD trade budget, not a claim that
+that entire budget was spent. Asset, route, delay and strategy groups retain exact
+known-CAD completed simulation results and explicit bounded group windows.
+
+A strategy filter selects trade metrics. Portfolio equity, benchmark and accounting
+remain whole-session: shared inventory cannot be retrospectively allocated to a
+strategy without inventing capital. ZIP reconstruction datasets preserve all
+session dependencies, including other versions and pre-period opening history;
+`paper_trades.csv` provenance includes `selected_strategy_member` and
+`in_reporting_period`. This scope is stated in metrics, configuration and README.
+Research and validated sessions are always independent and never aggregated together.
+
+`GET /api/v1/reports/export?session_id=...&start=...&end=...` additionally accepts
+`strategy_version_id` and streams an authenticated ZIP download. It is generated
+from one repeatable-read, read-only PostgreSQL snapshot and then audited through
+ReportExport/SystemEvent records. A private 0600 temporary file is deleted after
+serving or on error. No public static artifact URL, environment dump, auth session,
+password hash, API credential or chat ID is exported. Credential-bearing metadata
+keys and URL query values are redacted. CSV text formula prefixes are escaped;
+financial decimal signs and precision are preserved.
+
+The actual export envelope is `quantix-export-v1`, described by executable
+`AnalyticsExportMetrics` and `AnalyticsExportManifest`. The initial DailySummary/
+ExportManifest classes remain available as legacy contracts; they are not silently
+claimed as the richer ZIP envelope. Mandatory CSV headers and the eleven-file
+minimum remain unchanged. `export_manifest.json` lists every data member, exact
+uncompressed byte count, record count, ordered columns and SHA-256. Its own checksum
+is excluded to avoid circular hashing. The HTTP response supplies the whole-ZIP
+SHA-256 separately.
+
+The ZIP includes mandatory files plus these reconstruction tables:
+
+| File | Definition |
+|---|---|
+| journals.csv | All session journals effective before cutoff, including initial contributions and reservations |
+| ledger_entries.csv | Exact asset-unit debits/credits; join journal_id/account_id and aggregate per journal and asset |
+| accounts.csv | Referenced session/exchange/asset roles; available/reserved are inventory, equity/expense are counteraccounts |
+| accounting_movements.csv | Moving basis, realized trading/FX, fees, expenses and external flows linked to journals |
+| orders.csv | Original requested legs with fill-derived cutoff status; later mutable status is excluded |
+| lifecycle.csv | Immutable simulation transitions available before cutoff |
+| execution_observations.csv | First causal post-delay evidence and captured clock/FX provenance |
+| order_books.csv | Complete referenced depth, original source and receipt timestamps, confidence/hash |
+| fee_versions.csv | Referenced immutable maker/taker assumptions; marketable execution uses taker |
+| fx_quotes.csv | Referenced explicit conversion/initial-funding rates with source/provenance |
+| markets.csv / assets.csv / exchanges.csv | Joined registry identifiers; current registry metadata does not establish historical trading eligibility |
+| strategy_history.csv | Pinned session strategy versions and their public settings |
+| notification_attempts.csv | Existing recorded attempts; no delivery is invented, and later mutable outcomes are labeled unavailable at cutoff |
+| opportunity_invalidations.csv | Retained market-opportunity lifecycle reasons in the selected period |
+| benchmark.csv | Original-holdings benchmark alongside the same retained equity timestamps |
+| research_scenarios.csv | Selected research scenario and initial capital/benchmark; header-only for validated sessions |
+| README.md | Units, accounting/period rules, reconstruction joins and column dictionary |
+| export_manifest.json | Complete member hashes, sizes, row counts, schema, scope and reconciliation |
+
+`opportunities.csv` contains immutable evaluation rows (ID is evaluation UUID) with
+route identity and exact historical inputs/results in provenance, plus legacy
+Opportunity rows if recorded. `detected_at` is the route's first detection; evaluation
+availability remains `provenance_json.evaluation.evaluated_at`. Counting evaluation
+rows is not the count of distinct detected routes. Network detections are explicitly
+network-wide public scanner activity rather than strategy-attributed profit.
+
+Generation streams SQL records in batches of 200 into ZIP members; it never loads
+all fills/books/ledger entries into memory or constructs a complete client Blob.
+One export runs per API process. Each member is limited to 100,000 records, and total
+uncompressed output to 256 MiB. Exceeding a limit returns HTTP 413 with a shorter-period
+instruction; it does not silently truncate or mark an incomplete archive complete.
+A concurrent request receives 429/Retry-After. Empty tables have authentic headers
+and zero rows. The frontend uses the authenticated download route directly.
+
+Financial correctness is inherited from immutable records. Ledger balancing and
+nonnegative inventory are checked independently; retained equity reconciliation is
+reported separately and remains null when a valid checkpoint is unavailable.
+Completed known-CAD sample count accompanies win rate; zero samples yield null.
+Neither a low-sample win rate nor an observed spread is a real-world profit promise.
+
+### Generation responsiveness and wide fields
+
+Large evidence can produce legitimate CSV fields larger than Python's default
+128 KiB parser limit. The ZIP's README includes a streaming Python example using
+`csv.field_size_limit(256 * 1024 * 1024)`, matching the bounded uncompressed archive
+size. Do not truncate provenance to satisfy a reader's default field limit.
+
+CSV cell normalization, JSON serialization, hashing and compression now run in one
+sequential background thread job per row. SQLAlchemy attributes are extracted on
+the event-loop thread, then nested evidence remains referenced until that row's
+worker completes; no unbounded task queue or additional full-history copies exist.
+Normalization walks each node once, with a bounded 2,048-entry credential-key cache.
+ZIP DEFLATE level1 reduces CPU work without changing uncompressed member bytes,
+financial precision, columns, order or provenance. JSON/text members are also written
+outside the event loop. Cancellation waits for the in-flight write before closing
+the member/file, avoiding an abandoned thread writing into a closed ZIP.
+
+Generation has a 90-second deadline, with one in-flight row drained for safe cleanup;
+expiration returns413 with a shorter-period instruction rather than an incomplete
+archive. Other authenticated API requests can continue while compression runs.
+Synthetic wide-member and cancellation regressions verify responsiveness and CRC
+integrity. Actual before/after workload measurements belong in PERFORMANCE.md.
+
+`terminal_settings_history.csv` retains only the owner's versions effective before
+the cutoff. `config_snapshot.json.terminal_preferences_at_cutoff` selects the last
+such version, or null plus an explicit limitation. It never substitutes today's
+post-cutoff preferences for historical configuration. These settings contain public
+coverage/notification preferences only, and `notification_delivery_active=false`
+remains explicit throughout Stage5. Current route.run_id is mutable, so unproven
+historical collector-run configuration is not presented as pinned calculation input.
+
+
