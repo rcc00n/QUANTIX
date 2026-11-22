@@ -44,3 +44,32 @@ JSON aggregation and per-trade evidence; Stage 5 implements the complete authent
   versions, schema/period/unit metadata, exchange/fee assumptions and valuation/FX
   sources; never environment dumps, password hashes, chat IDs, tokens or session data.
 
+## Daily summary definitions
+
+| Metric | Definition for aggregation |
+| --- | --- |
+| Detected opportunities | Distinct opportunities with detected_at in period |
+| Telegram alerts | Distinct signals with a successful Telegram delivery in period; retries are not extra alerts |
+| Simulation attempts/outcomes | Cohort requested_at in period, classified at cutoff as pending, completed, partial, missed or failed; counts must reconcile |
+| Gross simulated profit | Matched disposal proceeds less matched cost basis before fees/expenses; no double-counting cost basis fees |
+| Trading fees / expenses | Separately converted CAD fees and transfer/rebalancing/execution expenses at their documented effective FX |
+| Net simulated realized P&L | Gross simulated profit minus trading fees and expenses under a documented recognition policy |
+| Unrealized P&L | Marked remaining virtual inventory less remaining cost basis; explicit valuation/liquidation assumptions |
+| Portfolio equity CAD | Inventory + cash converted at as_of sources; no double-counted reserved balances or system equity/expense accounts |
+| Capital utilization | Reserved/committed CAD capital divided by deployable CAD portfolio equity; 0–100%, unavailable for zero denominator |
+| Maximum drawdown | Largest percentage fall from flow-adjusted equity high-water mark in the period; initial baseline and valuation frequency disclosed |
+| Best/worst exchange pairs | Ranked matched realized simulated net P&L for buy→sell exchange pair, counts and fee allocation disclosed |
+| Failure reasons | Stable reason-code counts for missed/failed simulations and rejected signals, scoped explicitly |
+| Initial CAD comparison | Equity less initial CAD basis less subsequent net external funding; report starting FX separately |
+| No-trading benchmark | Initial virtual asset quantities marked using the same current FX/price sources, with documented handling of later external flows |
+
+If fills span periods, realized P&L is recognized at disposal/fill time while attempt
+counts stay in their requested_at cohort. Report scope and cutoff explain differences.
+Stage 4 uses per-exchange/asset moving weighted-average CAD basis, as explicitly
+specified in [ACCOUNTING.md](ACCOUNTING.md). Disposal-basis P&L and matched two-leg
+cashflow P&L are distinct. Fees already included in basis/cashflows must not be
+subtracted twice; unknown CAD conversion remains null.
+Do not claim full two-leg success when only one leg fills. All displayed P&L must say
+simulated; no estimate is realized real-world profit. Deterministic analytics, not AI,
+produces metrics. Missing/stale marks must produce quality notes and null affected totals.
+
