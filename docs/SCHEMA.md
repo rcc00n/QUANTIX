@@ -68,3 +68,11 @@ defaults to RESTRICT/NO ACTION, never cascading away evidence.
   order/fill sums, verify same-asset transfer endpoints and lock accounts atomically.
   DB structural invariants do not constitute a working accounting service.
 
+## Indexing and retention
+
+Created-at indexes support audit/report windows. Composite market/time indexes support
+book replay; session/time indexes support portfolio history. Foreign-key and ledger
+account/journal indexes cover critical joins. Add workload-driven indexes, partitioning,
+archival and retention budgets after real collection volume is measured in Stage 2/7.
+No destructive cleanup job is enabled.
+
