@@ -48,3 +48,23 @@ defaults to RESTRICT/NO ACTION, never cascading away evidence.
 | system_events | Append-only connectivity, quality, auth/config/system audit; exchange/actor linkage and sanitized details |
 | report_exports | Versioned period, owner, status, artifact SHA-256 and provenance for later exports |
 
+## Ledger invariants implemented in PostgreSQL
+
+- Journal + entries must be inserted in one transaction. Each journal requires at
+  least two entries and zero signed quantity total **per canonical asset**.
+- All accounts in a journal must belong to its paper session. USD cannot offset
+  BTC, and separate paper sessions cannot fund one another.
+- Deferred constraint triggers check final transaction contents at COMMIT.
+- Entries cannot be appended to an already committed journal, even as a balanced pair.
+- Ledger, journals, virtual accounts, deposits, balance checkpoints, fills, valuations,
+  source books/observations/FX/fees, strategy/exchange configuration versions, opportunities, signals,
+  simulation/system events and actual trades reject UPDATE, DELETE and TRUNCATE.
+- Corrections use new compensating journals/evidence, never rewriting history.
+- A virtual deposit posts +quantity to exchange inventory and -quantity to the
+  same asset's equity account. Reservations move between available/reserved roles.
+  Trades post each asset independently against appropriate counteraccounts.
+- CAD annotations explain valuation, not interchangeable units. Services in Stage 4
+  must reconcile CAD annotations, reserve inventory, prohibit overspending, validate
+  order/fill sums, verify same-asset transfer endpoints and lock accounts atomically.
+  DB structural invariants do not constitute a working accounting service.
+
