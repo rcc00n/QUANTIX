@@ -76,3 +76,15 @@ account/journal indexes cover critical joins. Add workload-driven indexes, parti
 archival and retention budgets after real collection volume is measured in Stage 2/7.
 No destructive cleanup job is enabled.
 
+## Reconstruction requirements for future writers
+
+Store source IDs and decimal-string assumptions for fee currency, tier, CAD FX,
+slippage reserve, rebalancing reserve, observed liquidity, rounding, stale/skew gates,
+requested/eligible/evaluated/fill times, cost basis policy and calculation version.
+On any failed/missed attempt, write a reason and evidence even when there are no fills.
+A partially completed two-leg trade retains residual inventory and unrealized risk;
+it is never counted as a fully realized arbitrage. Settings changes append versions.
+
+Additional columns and constraints are defined in arbiq/db/models.py and frozen in
+Alembic migrations. New stages must extend migrations rather than editing applied ones.
+
