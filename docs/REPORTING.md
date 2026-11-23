@@ -252,3 +252,62 @@ pairing/runtime. notification_counts exposes owner-scoped decision/eligible/rese
 actual alert delivery and expiry-before-delivery counts, with period/scope labels.
 
 
+## One-click full retained-data export (quantix-full-v1)
+
+The main **Export Everything for ChatGPT** control requires no portfolio, date,
+strategy, asset or exchange selection. It calls authenticated `POST /api/v1/reports/exports`
+with `{}` and receives202/job ID immediately. Authenticated status endpoints are
+`GET /api/v1/reports/exports/current` and `GET /api/v1/reports/exports/{id}`;
+`GET /api/v1/reports/exports/{id}/download` serves only a completed ZIP. The browser
+BFF mirrors these under `/api/reports/exports`. Jobs and downloads remain owner-scoped;
+a job ID is not authorization. Completed files expire after24 hours.
+
+The separate **Advanced custom-filter export** uses the same job/status interface
+with `scope=CUSTOM`, session and optional applied period/strategy. Its stable
+quantix-export-v1 members and existing explicit limits remain. Errors now appear
+in the UI rather than being saved as misleading export.json downloads. Legacy
+GET `/reports/export` remains API compatible; the UI no longer downloads its errors.
+
+Full export uses one independent connection, repeatable-read/read-only PostgreSQL
+snapshot and server cursors of8 rows, sequential disk-backed ZIP64 writes/compression
+outside the event loop, and no date or record-count cap. Every dataset has an independent
+COUNT in the same snapshot, matched to its actual streamed count before publication.
+The full-export lock and legacy semaphore prevent overlapping generators. An
+interrupted job is marked failed on shutdown or subsequent status/recovery; partial
+files are deleted. A page refresh resumes status and exposes the completed download.
+No broker, extra production service or new schema migration is required.
+
+Safety limits:2 hours,24 GiB uncompressed output, at least6 GiB free disk (above the
+existing5 GiB service guard). Limits abort with explicit failure and no partial ZIP;
+they never label omitted/truncated data complete. The existing API/DB container caps
+remain. Job metadata is0600 and the export directory0700 on the private export volume.
+Generation is independent of the HTTP request; status calls are short. The BFF
+streams the final ZIP without a browser Blob and without a10/120 second body deadline.
+The existing proxy's150 second *idle* timeout does not limit an actively streaming download.
+
+Root members: START_HERE.md, SUMMARY.md, manifest.json, data_dictionary.md, README.md,
+checksums.sha256. Folder CSVs contain every retained source-model record within
+owner scope plus shared public scanner/market/health evidence. analytics/metrics.json
+contains separate per-portfolio performance, checkpoint, benchmark and exact ledger
+reconciliation; independent portfolio equities are never added. All raw histories
+remain available even where existing summary group windows are bounded.
+Manifest files list byte lengths, SHA256, columns, actual and independently counted
+source rows, timestamp ranges, source table/scope, excluded columns and empty states.
+It lists all preceding members; checksums.sha256 also covers manifest.json and every
+other member except itself, avoiding circular hashes.
+
+Excluded sources are explicit: users/auth_sessions/login_attempts and private Telegram
+challenges, bindings, worker update offsets. Message bodies, provider destination/message
+IDs, actor/user identifiers and credential-bearing nested metadata are excluded/redacted.
+Immutable financial IDs remain for reconstruction; actual owner-recorded trades remain
+separate from paper records. No environment or filesystem log dump is included.
+
+The archive includes all retained portfolios (including independently funded research),
+strategy/config versions, evaluations/rejections/budget diagnostics, market/asset universe,
+latest and historical retained books/observations, fees/FX, paper legs/fills/transfers,
+ledger/inventory/checkpoints/daily summaries, alert decisions/outbox audit and retained
+connectivity/resource telemetry. Unsaved in-memory data, deleted samples, private provider
+messages and unavailable host telemetry cannot be reconstructed. Expired counts remain
+null when not known. Capture timestamp and source timestamps stay distinct; this is a
+snapshot of retained history, not a guarantee of complete historical market coverage.
+
