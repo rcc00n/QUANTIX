@@ -32,3 +32,14 @@ profitable paired execution, multi-day unattended storage runway and recurring
 offsite recovery are not certified by this import. Future work must preserve those
 boundaries and receive its own scope and acceptance evidence.
 
+## Scope constraints
+
+- The system never submits real orders. Enabling real trading requires a separately
+  authorized implementation stage beyond this roadmap.
+- Native user recording of actual trades may be added as a separate workflow; its
+  schema exists now, but the imported source exposes no real-trade order-placement workflow.
+- Prefer simple async workers and PostgreSQL coordination before adding a broker,
+  cache or separate orchestration service. Start background collectors in Stage 2
+  as a dedicated worker, never once per web worker.
+- NVIDIA integration is optional and disabled by default. The scanner,
+  risk engine, accounting and simulator never depend on AI text.
