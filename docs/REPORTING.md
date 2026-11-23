@@ -412,3 +412,12 @@ Stage 13 collector incidents retain typed health counters and confirmation
 timestamps in system evidence. Ephemeral storage forecasts remain operator
 measurements outside the financial snapshot.
 
+## Market profile version evidence
+
+The all-retained ZIP includes the rollback-compatible settings row in
+`settings/terminal_settings_versions.csv` and the matching non-secret owner
+event in `system_health/system_events.csv`. The event's `details` links its
+`market_profile` to the exact `settings_version_id`. The scoped report restores
+the profile inside its existing `terminal_settings_history.csv` and cutoff
+configuration projection. Both scoped surfaces use settings versions effective
+before the requested cutoff.
