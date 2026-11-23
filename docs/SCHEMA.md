@@ -131,3 +131,20 @@ FXQuote FK; a later simulation must explicitly select immutable evaluation/confi
 inputs. No simulated fills, balances or real trades are created by the scanner.
 
 
+## Stage4 accounting additions
+
+paper_controls persist active/versioned settings and immutable research classification;
+strategy_heads identify the current immutable strategy version. Existing paper_trades
+now link directly to retained route/evaluation/strategy evidence without fabricating a
+legacy Opportunity. Legacy records/columns remain valid. execution_observations pin
+first post-delay books and available FX. paper_rebalance_requests model delayed transfers.
+
+portfolio_positions cache ledger quantities and moving CAD basis; accounting_movements
+append basis/P&L/fee/external-flow evidence. portfolio_checkpoints and
+ daily_accounting_snapshots are immutable, classification-aware numerical reports.
+Unknown CAD annotations/fill values are nullable, never fabricated parity or zero.
+New guards enforce nonnegative virtual inventory, immutable scenario classification
+and fill snapshot/fee/journal/session provenance. Pending/history indexes bound worker
+queries. See ACCOUNTING.md for conventions and reconciliation.
+
+
