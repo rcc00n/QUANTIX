@@ -113,3 +113,21 @@ evidence or referenced snapshots. Health state is not trading eligibility. Actua
 trade records stay entirely separate; no real or paper orders are created in Stage 2.
 
 
+## Stage 3 research evidence
+
+- arbitrage_routes: mutable, unique directed market route/current lifecycle and
+  collector run, timestamps, revision and exact-string financial projection.
+  A DB constraint requires actionable=false. This is distinct from a fill/signal.
+- arbitrage_evaluations: immutable route/revision, evaluated UTC, buy/sell snapshot
+  and fee-version FKs, nullable precise quantity/acquisition/gross/net/return values,
+  complete exact-string inputs/results, FX route/book, clock uncertainty, market
+  metadata and calculation version. Missing CAD is NULL, not fabricated parity.
+- arbitrage_lifecycle_events: immutable transition time/state/reason and revision
+  details. API views can additionally expire stale evidence without rewriting history.
+
+Append-only guards cover both new evidence tables. Existing opportunities and all
+financial tables are unchanged. Research does not require inventing a strategy or
+FXQuote FK; a later simulation must explicitly select immutable evaluation/config
+inputs. No simulated fills, balances or real trades are created by the scanner.
+
+
