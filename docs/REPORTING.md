@@ -391,3 +391,24 @@ START_HERE, SUMMARY, manifest, data dictionary, README and checksums.
 
 Measured public verification and before/after evidence: `EXPORT_SIZE_VERIFICATION.md`.
 
+## Strategy Lab evidence
+
+Stage 12 stores the selected profile in existing versioned strategy settings
+and immutable funding proposal evidence. These fields travel in the existing
+strategy, proposal, experiment and paper datasets. The equal-capital comparison
+is a read-only view of owned sessions, their pinned strategy versions, opening
+contributions, checkpoints, outcome evidence and reconciled ledger. It introduces
+no durable dataset. Exact amounts and missing marks retain their existing JSON
+and CSV representation. Historical projections and live paper outcomes remain
+distinct. [Strategy Lab report](STAGE_12_REPORT.md)
+
+The retained full archive stores the selected Stage 10 market profile in the
+owner-scoped `system_health/system_events.csv` settings-change record. Its
+`settings_version_id` joins the exact immutable row in
+`settings/terminal_settings_versions.csv`. This keeps the stored `terminal-v1`
+payload loadable by the existing Telegram worker and the rollback image. The
+scoped export projects the joined profile into its existing settings columns.
+Stage 13 collector incidents retain typed health counters and confirmation
+timestamps in system evidence. Ephemeral storage forecasts remain operator
+measurements outside the financial snapshot.
+
