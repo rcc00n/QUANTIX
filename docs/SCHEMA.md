@@ -148,3 +148,11 @@ and fill snapshot/fee/journal/session provenance. Pending/history indexes bound 
 queries. See ACCOUNTING.md for conventions and reconciliation.
 
 
+## Stage 5 configuration and funding additions
+
+Migration0009 adds immutable terminal_settings_versions (owner/effective version),
+funding_proposals (owned expiring exact allocations/provenance) and funding_experiments
+(unique owner/idempotency receipt linking a new research session). Existing financial
+history remains intact. Strategy/risk settings continue using immutable JSON versions;
+paper-depth-v1.1.0 records new execution logic. ReportExport retains artifact checksum,
+period, scope and completion audit without exposing server paths or credentials.
