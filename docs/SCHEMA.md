@@ -15,3 +15,36 @@ defaults to RESTRICT/NO ACTION, never cascading away evidence.
 | Paper trade | paper_trades/orders/fills/simulation_events | A virtual outcome with delay, inventory and provenance |
 | Actual trade | actual_trades only | Explicit user-confirmed real activity; no paper-trade FK or write route |
 
+## Record groups
+
+| Tables | Purpose and provenance |
+| --- | --- |
+| users, auth_sessions, login_attempts | Operator identity, hashed session tokens, expiration/revocation, durable throttling |
+| exchanges | Public adapter identifier, enabled flag, capability metadata, configuration version |
+| assets, markets | Canonical identity/network; exchange-native pair; spot precision, increments and minimum notional |
+| exchange_config_versions | Immutable exchange capabilities/public configuration per version, effective time and change reason; no credentials |
+| strategy_versions | Immutable owner/version/settings/reason history; all later decisions reference it |
+| fee_versions | Effective fee fractions, scope, source, tier/fee currency assumptions; rebates permitted for maker fees |
+| fx_quotes | Explicit base→quote rate (quote units per base unit), source, observed_at and provenance |
+| market_observations | Timestamped top-of-book, sizes, receive time and explicit quality/reason |
+| order_book_snapshots | Full relevant bid/ask levels as decimal-string arrays, source, sequence, observed/received times and content hash |
+| opportunities | Both market/book/fee references, FX and strategy versions, quantity, estimated gross/fees/expenses/net CAD and net percentage, expiry and calculation version |
+| signals, notification_attempts | Decision/reason/rule snapshot; channel, attempt, status, delivery timestamp/provider ID and sanitized error code |
+| telegram_challenges, telegram_bindings | Hashed short-lived owner enrollment, explicit dashboard approval/revocation and private destination; excluded from exports |
+| notification_worker_state | Singleton worker heartbeat, safe public bot identity and durable incoming update offset |
+| alert_decisions, alert_lifecycle | Immutable source/settings/rule decision plus mutable acknowledgment/cancel/repeat control, separate from financial executions |
+| notification_outbox, notification_events | Durable delivery scheduling/status/expiry and immutable attempts/events; ambiguous sends are not silently retried |
+| paper_sessions | Strategy, virtual initial CAD basis, initial inventory/FX benchmark snapshot, session lifecycle |
+| virtual_accounts | Session + exchange + asset + role; system equity/expense accounts may omit exchange; NULLS NOT DISTINCT uniqueness |
+| journals, ledger_entries | Idempotent event, effective time, source UUID and provenance; signed asset quantity/CAD annotation per account |
+| virtual_deposits | Initial/subsequent virtual funding, exact quantity, FX and CAD equivalent linked to a journal |
+| balance_snapshots | Account quantity at an instant and last included journal; a checkpoint, never the source of truth |
+| paper_trades, paper_orders | Attempt outcome, reaction delay and eligible time; two legs, limits, side, requested quantity and failure reasons |
+| paper_fills | Individual partial fill, price/quantity, actual evaluation book, execution time, fee currency/quantity/CAD, fee/FX version, cost basis, realized simulated P&L and provenance |
+| simulation_events | Append-only transition/rejection evidence, timestamps and failed/missed reasons |
+| inventory_transfers | Virtual movement, settlement timing/state, expense asset/quantity/CAD and journal/provenance |
+| portfolio_valuations | Equity, realized simulated P&L, unrealized inventory P&L, fees, expenses, utilization, drawdown, benchmark and external flows; complete valuation inputs and calculation version |
+| actual_trades | User, market, side, quantity, price, execution and explicit confirmation times, reference/evidence; never inferred |
+| system_events | Append-only connectivity, quality, auth/config/system audit; exchange/actor linkage and sanitized details |
+| report_exports | Versioned period, owner, status, artifact SHA-256 and provenance for later exports |
+
