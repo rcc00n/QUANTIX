@@ -88,3 +88,28 @@ it is never counted as a fully realized arbitrage. Settings changes append versi
 Additional columns and constraints are defined in arbiq/db/models.py and frozen in
 Alembic migrations. New stages must extend migrations rather than editing applied ones.
 
+## Stage 2 market-data storage additions
+
+The fourth migration adds five tables without changing or dropping financial tables:
+
+| Table | Meaning | Lifecycle |
+| --- | --- | --- |
+| collector_runs | Worker identity, heartbeat, stopped/abandoned state, public configuration snapshot and aggregate health | Durable history |
+| exchange_health | Current run linkage, five-state operational health, counts, mode, timing, retry and sanitized error metrics | One mutable row per exchange |
+| latest_market_books | Exact normalized book/evidence payload, source timestamps, confidence and current run | One mutable fallback row per market; 24h expiry |
+| market_data_samples | Decimal top-of-book, timestamps, state, measured latency and content hash | Unique market/time bucket; time/row retention |
+| market_quality_events | Reasons, bounded raw evidence, confirmation status and optional immutable snapshot link | Deduplicated event key; time/row retention |
+
+Asset and market records are upserted by natural key. Existing market asset IDs
+cannot be silently replaced on a metadata conflict. Inactive/disappeared listings
+retain history and lose monitored status. Exchange configuration snapshots remain
+immutable. A collector run adds reproducible public collection settings without
+copying credentials. Collector lock ownership prevents competing writers. See
+docs/MARKET_DATA.md for retention, live-cache and source confidence semantics.
+
+Source observations in the legacy Stage 1 market_observations table stay immutable;
+Stage 2 transient samples are intentionally separate. Cleanup never touches financial
+evidence or referenced snapshots. Health state is not trading eligibility. Actual
+trade records stay entirely separate; no real or paper orders are created in Stage 2.
+
+
