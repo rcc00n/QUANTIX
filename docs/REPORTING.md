@@ -311,3 +311,83 @@ messages and unavailable host telemetry cannot be reconstructed. Expired counts 
 null when not known. Capture timestamp and source timestamps stay distinct; this is a
 snapshot of retained history, not a guarantee of complete historical market coverage.
 
+## Size-bounded full export — quantix-full-v2
+
+Stage 8B.1 serializes each typed evidence subtree once and reuses its
+canonical child fragments in the parent. Postorder interning, string
+escaping, node thresholds, source record counts, decoded semantics,
+compression levels and size limits retain the same contract. The existing
+single-generator lock, short status requests and dedicated snapshot
+connection continue to apply.
+
+The primary one-click control still requests every retained owner portfolio and all
+retained source history. The custom `quantix-export-v1` schema is unchanged. The
+full envelope is now `quantix-full-v2`; downloads, including cached custom archives,
+are strictly limited to **512,000,000 decimal bytes**. Previous oversized artifacts
+are refused rather than silently served. Progress reports processed **uncompressed**
+bytes separately from the final ZIP.
+
+Large JSON columns use `quantix-json-dag-v1`, a lossless typed-container DAG with
+SHA256 content interning. Shared normalized books, inputs, FX/fee evidence and repeated
+checkpoint positions are represented once. Scalar CSV fields and monetary strings
+retain their exact precision. Essential ledger, fill, order, strategy, signal and
+accounting-movement records remain readable CSV/JSON. DEFLATE level6 replaces level1.
+`evidence/objects.jsonl` contains `[id, typed_node]`; every container is typed (`m`
+map, `a` array, `r` reference), so source keys cannot collide with control markers.
+IDs refer only to earlier nodes. No lossy price/quantity conversion is used.
+
+The root `load_export.py` is a standalone Python standard-library loader using a
+private disk-backed SQLite index and bounded RAM. See `EVIDENCE_FORMAT.md` inside
+the ZIP. Example:
+
+```python
+from load_export import ExportReader
+reader = ExportReader("quantix-everything.zip")
+try:
+    for row in reader.rows("opportunities/arbitrage_evaluations.csv"):
+        # JSON cells are fully reconstructed; exact decimal strings stay strings.
+        print(row["id"], row["net_profit_cad"])
+finally:
+    reader.close()
+```
+
+Readable `opportunities/analysis.csv`, `analytics/portfolio_history.csv` and
+`exchanges/market_coverage.csv` support direct analysis without decoding the DAG.
+They are derived views, never additional financial transactions. Coverage includes
+all retained market listings, canonical base/quote IDs, collector membership,
+book timestamps, venue state and freshness; listings and monitored books differ.
+Every source CSV has independent snapshot count, included/omitted row counts,
+raw-payload completeness, JSON column schema and a decoded JSON semantic SHA256.
+All member SHA256s and ZIP CRCs are verified before publication. Root files retain
+START_HERE, SUMMARY, manifest, data dictionary, README and checksums.
+
+### Measured budgets and explicit fallback
+
+- One singleton job, eight-row cursors, one read-only repeatable-read snapshot,
+  private compressed SQLite scratch, bounded16384-entry content-ID cache and4MiB
+  SQLite page cache. No additional market requests, source writes or retention changes.
+- Scratch plus partial ZIP budget:2,000,000,000 bytes; keep6GiB free disk.
+  Generation deadline2hours; processed uncompressed safety bound24GiB. Cancel via
+  authenticated POST `/reports/exports/{id}/cancel`; partial ZIP/scratch are removed
+  and locks released. Worker interruption is explicit and recoverable.
+- First attempt is fully lossless. If actual compressed output/scratch exceeds budget,
+  discard the private attempt and retry once in the **same** database snapshot as an
+  explicit `analysis_snapshot`. All source scalar rows, ledger/fills, accounting,
+  decisions, calculation inputs/costs, all normalized snapshots and linked paper/alert
+  or positive-profit evaluation evidence remain complete.
+- Only redundant raw wrappers on unlinked nonpositive evaluations/routes and raw
+  JSON in lower-priority market samples/quality/observations may be reduced. Raw
+  representatives retain the lowest primary-key record per UTC-hour/market/state/code
+  plus extreme/divergence/crossed-code events. Omitted payloads have hashes/reasons;
+  all source IDs/scalars remain. Manifest per-file `raw_payload_reduced_rows`,
+  `complete_raw_rows`, `included_rows`, `omitted_rows`, sampling method and
+  `lossless_raw_history` distinguish raw reductions from missing transactions.
+- The ZIP must be completely closed, its actual size<=512,000,000 bytes and every
+  CRC valid before audit/publication/atomic rename. If essential records still cannot
+  fit, fail explicitly with `ESSENTIAL_DATA_EXCEEDS_BUDGET`; never publish partial data.
+- PostgreSQL originals remain untouched. The archive covers retained data only:
+  already expired transient observations and deliberately private auth/Telegram
+  destinations/message content remain explicitly unavailable/excluded.
+
+Measured public verification and before/after evidence: `EXPORT_SIZE_VERIFICATION.md`.
+
