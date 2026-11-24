@@ -82,3 +82,23 @@ Kraken Pro spot page titles: [BTC/CAD](https://pro.kraken.com/app/trade/btc-cad)
 Other markets show unavailable links until verified. Opening a screen never
 establishes that a projected spread still exists.
 
+## Financial fixes and compatibility
+
+Paper calculation version paper-depth-v1.1.0 floors internally derived reaction/
+slippage-adjusted budgets to18decimal places before strict optimizer validation. Planned reservations
+match the simulator's separate upward rounding of notional and quote/base fees, so
+long-precision quantities remain fundable without understated debit requirements.
+This fixes rejection of repeating decimals at the default nonzero slippage; it does
+not relax inputs or increase the budget. Full delayed two-leg/idempotent ledger
+regression covers this case. Existing source evidence and prior versions remain
+immutable. Optional maximum_slippage_bps limits each modeled depth VWAP's adverse
+impact from the contemporaneous top quote; exceeding it fails that independent leg.
+An unset additional cap preserves old pinned strategy behavior. Fees are separate.
+
+Market preferences may tighten source freshness and select exchanges/assets/quotes;
+fiat/stablecoin identities remain distinct. Disabled venues stop subsequent public
+polls and streams; late deselected responses do not re-enter the current cache or
+scanner and retain an operational event. Coverage changes can remove future evidence
+for existing work, which must expire/fail honestly; strategy versions never mutate.
+Suspicious books are retained even when optional anomaly exploration is disabled.
+
