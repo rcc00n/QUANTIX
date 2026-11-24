@@ -208,3 +208,23 @@ association. The Stage 8A.1 Telegram worker and Stage 8C rollback continue to
 parse their supported settings fields. A later settings update from older code
 uses collector defaults for the market profile.
 
+## Stage 13 sustained reliability
+
+System Health reports four independent collector checks for quote coverage, scanner
+progress, native synchronization and trusted UTC. Reports use the existing housekeeping
+cycle and monotonic intervals. Degradation requires 60 seconds of continuous evidence
+and recovery requires 30 seconds of continuous health. A sampling gap over 20 seconds
+restarts the pending interval. The coverage warning uses a 25% stale or unavailable
+book share. Queue warnings use 80% ready-queue occupancy or aged ready/deferred work.
+REST can keep a book fresh through a native stream outage. A WebSocket heartbeat cannot
+renew an individual quote timestamp.
+
+Confirmed transitions append existing system events. A scheduled daily or weekly
+Telegram report can include the warning when the paired owner enables reports and
+delivery. The deployed notification worker stays compatible with the existing report
+and preference contracts. Immediate incident delivery is unavailable. Research quotes,
+opportunity thresholds and notification escalation rules remain separate.
+
+Paper execution counts cover the current collector run. Portfolio valuation counts
+use the latest retained checkpoint for each active owner portfolio, with a 20-portfolio
+bound and an explicit unknown count for missing valuation evidence.
