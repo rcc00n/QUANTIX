@@ -179,3 +179,32 @@ Synchronization can remain healthy while an unchanged book ages. Receipt ages
 require a trusted clock. The individual book keeps its independent freshness class
 and latest collector receipt time.
 
+## Market allocation profiles
+
+Choose a profile under **Settings → Market coverage**. The collector applies the
+saved settings at its next allocation cycle. **Collector default** uses the
+environment profile when configured and the legacy selection policy otherwise.
+
+- **Liquid Markets** favors healthy compatible books with observed executable
+  depth and same-quote liquidity. It allows up to two core listings per base
+  when quote choices improve market coverage.
+- **Broad Exploration** favors distinct bases and reserves up to two rotating
+  research slots per venue. A base gets one opportunity per rotation before
+  repeating, even when the venue lists it against several quote currencies.
+- **Balanced / Adaptive** prioritizes common assets and independent compatible
+  venues, uses available depth evidence, and reserves one research slot when
+  the book cap permits.
+
+The profiles use the same collection and native subscription caps and respect
+the saved exchange, asset and quote filters. CAD conversion books get reserved
+space when available. Observed turnover and depth are ranked within identical
+quote units. A compatibility count describes potential comparisons. Execution
+still requires fresh, synchronized depth, exact costs and all financial gates.
+
+Profile changes and the corresponding strict `terminal-v1` settings version
+commit together. The owner-scoped settings event carries the market profile and
+exact settings version ID. The current terminal and its history restore this
+association. The Stage 8A.1 Telegram worker and Stage 8C rollback continue to
+parse their supported settings fields. A later settings update from older code
+uses collector defaults for the market profile.
+
