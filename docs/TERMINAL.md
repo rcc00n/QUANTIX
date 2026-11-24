@@ -70,3 +70,15 @@ API event loop. Private collector list summaries omit bulky raw books only from 
 transport; detail and immutable database evidence remain complete. These limits do
 not promise every short-lived discrepancy will be captured.
 
+## Exact market links
+
+Only individually checked complete official URLs are linked, without interpolating
+symbols or assuming eligibility. Checked2026-11-22 against the matching official
+Kraken Pro spot page titles: [BTC/CAD](https://pro.kraken.com/app/trade/btc-cad),
+[ETH/CAD](https://pro.kraken.com/app/trade/eth-cad),
+[SOL/CAD](https://pro.kraken.com/app/trade/sol-cad),
+[BTC/USD](https://pro.kraken.com/app/trade/btc-usd),
+[ETH/USD](https://pro.kraken.com/app/trade/eth-usd).
+Other markets show unavailable links until verified. Opening a screen never
+establishes that a projected spread still exists.
+
