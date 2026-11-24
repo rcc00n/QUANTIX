@@ -62,3 +62,9 @@ Disconnect, desynchronization or selection retirement marks affected Coinbase Ex
 
 A responsive connection can still carry an old quote. Heartbeat and pong activity leave the quote timestamps intact. Untrusted time, invalid or expired quotes and poor synchronization return scheduling to REST when available. Retained observations preserve their actual transport and time. [Timestamp contract](MARKET_DATA_TIMESTAMPS.md).
 
+## Observability and operation
+
+- The Exchanges view separates transport state, last WebSocket message, synchronization, cached native depth and book receipt age. Counters include REST requests on native products, resynchronizations and changed depth publication. Advertised capability is separate from valid live evidence.
+- Native observations use `coinbaseexchange_ws` or `okx_ws`. Existing normalized evidence carries the venue integrity details, subscription generation, timestamp basis and clock and pipeline fields. Kraken uses `kraken_ws` and HTTP uses `rest`.
+- Transport state, feed confidence and execution eligibility remain separate. Existing depth, price, FX, provenance and paper accounting gates still apply.
+- `COLLECTOR__WEBSOCKET_EXCHANGES` controls enabled venues. The JSON setting `["kraken"]` retains Kraken with REST on other venues. `COLLECTOR__WEBSOCKET_FAST_MARKETS_PER_EXCHANGE` controls the new per-venue cap. Zero disables the new slots while preserving REST allocation.
