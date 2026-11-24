@@ -1,0 +1,54 @@
+# QUANTIX terminal — Stage 5
+
+All views require the existing authenticated opaque session. Financial scalars stay
+exact decimal strings. Charts convert to browser numbers only for display and retain
+exact values in tooltips; they never determine trading or accounting outcomes.
+
+## Working surfaces
+
+- Command Center joins measured feed/scanner/paper health with one explicitly selected
+  portfolio, benchmark, recent public projections and classified virtual outcomes.
+- Radar filters and sorts projected quantities, CAD profit/return, liquidity and
+  confidence. Advanced filters are secondary to the route list on mobile. Evidence
+  drawers preserve timestamps, depth, fees, FX, inventory assumptions and lifecycle.
+- Paper Trading and Portfolio retain immutable accounting and separate research
+  capital. The trade inspector joins original detection, delay, independent legs,
+  fills and journal entries. Historical replay is read-only and reports absent
+  delayed evidence instead of inventing execution.
+- The funding planner explains exact missing purchase currency and sell inventory.
+  Independent research experiments consume their entire stated CAD initial capital;
+  resets create a new experiment and preserve history. See FUNDING.md.
+- Analytics uses retained checkpoints, full-period SQL aggregates and scope-aware
+  ledger reconciliation. Completed-trade statistics remain unavailable with zero
+  completed known-CAD samples. Holding gains/losses are distinct from trading results.
+- Settings saves immutable strategy and terminal preference versions. Market changes
+  apply on the next collector allocation tick (at most60seconds); saved/applied
+  versions are visible. Notifications remain configuration-only, delivery inactive
+  through Stage5. AI Insights remains disabled; no external model is called.
+- System Health shows actual clock/source uncertainty, feed modes/quality/freshness,
+  scanner/recheck backlog, coordinator health, schema, bounded request latency and
+  measured API/collector process RSS/CPU. Other service telemetry stays unavailable
+  when no host agent/Docker socket is granted. It never fabricates host measurements.
+- Stage 10 adds a per-asset coverage view from the bounded current collector selection.
+  Coinbase adapter aliases share a venue group. Same-quote directions require verified
+  asset identities and explicitly active listings. Connected venues use recent healthy
+  or degraded books. REST/WS source, quote freshness and synchronized WS coverage are
+  reported separately. Tracked unexpired scanner projections provide Decimal buy size,
+  positive after-cost research counts and timing sample sizes. The panel labels unavailable
+  values and links to the session-scoped Funding Planner for actual portfolio inventory.
+  This projection runs on the existing authenticated status read with no extra database
+  query, exchange request or scanner job.
+- Analytics includes Strategy Lab for two to four independent research portfolios with
+  equal initial capital and one UTC comparison window. Results use recorded forward paper
+  activity and each portfolio's original holdings benchmark. The comparison displays
+  period outcomes and realized amounts, closing unrealized exposure, risk and valuation
+  limits, and the strategy version and timestamp of each retained boundary checkpoint.
+  Running a comparison is read-only and on demand. Historical replay remains in the
+  separate Paper Trading evidence view.
+- System Health displays the collector's sustained freshness, scanner progress,
+  WebSocket synchronization and UTC checks. Pending checks show how long the observed
+  transition has been under confirmation. Accepted degradations and recoveries appear
+  in recent operational events. The page reads the singleton Telegram worker status
+  once per minute while visible and shows delivery policy, health and reported
+  heartbeat separately.
+
