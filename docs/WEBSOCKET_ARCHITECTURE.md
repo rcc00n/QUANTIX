@@ -40,3 +40,25 @@ Coinbase retains a known price region of at most `max(256, 4 × depth)` levels p
 
 OKX `books` begins with up to 400 levels per side and sends incremental changes at a nominal 100 ms interval when the book changes. The client retains bounded channel depth and projects the configured depth. `seqId` may advance by more than one if the predecessor links. An exact duplicate or linked empty heartbeat contributes liveness only. A reset, bad predecessor, contradictory sequence, maintenance notice or timestamp regression requires new snapshots. OKX deprecated the checksum field in this JSON channel in June 2026. A missing field or integer zero is accepted. Any other value quarantines the stream. [OKX order-book channel](https://www.okx.com/docs-v5/en/#order-book-trading-market-data-ws-order-book-channel), [OKX checksum deprecation](https://www.okx.com/docs-v5/log_en/#2026-06-23).
 
+## Limits, recovery and fallback
+
+One native connection per enabled venue lives in the singleton collector. A single subscription message requests the selected products. A changed selection retires the old connection. Reconnect starts from new snapshots and clears pending previous-generation updates. The default retry policy starts at two seconds with jitter and backs off up to 300 seconds.
+
+| Client bound | Coinbase Exchange and OKX | Kraken |
+| --- | --- | --- |
+| Incoming message size | 2 MiB | 2 MiB |
+| Receive queue high-water mark | 8 | 16 |
+| Open / close timeout | 12 / 3 seconds | 15 / 5 seconds |
+| WebSocket control ping / timeout | 20 / 10 seconds | 20 / 10 seconds |
+| Snapshot deadline | 15 seconds by default | Existing receive-idle timeout |
+| Inactivity deadline | 45 seconds by default | 45 seconds by default |
+| Publication interval | One second by default | One second by default |
+
+OKX also sends the venue text `ping` every 20 seconds and requires `pong` within 10 seconds. Coinbase publishes subscription and inbound-message limits. QUANTIX batches both channels and selected products in one request. OKX documents three connection attempts per second per IP and 480 subscribe, unsubscribe or login requests per connection per hour. Its parser accepts at most 29 spot instruments, and collector selection uses the smaller four-market cap. The selected feeds use public endpoints without login or paid depth. [Coinbase WebSocket limits](https://docs.cdp.coinbase.com/exchange/websocket-feed/rate-limits), [OKX WebSocket limits](https://www.okx.com/docs-v5/en/#overview-websocket).
+
+The Coinbase Exchange and OKX clients validate each protocol frame before publication coalescing. The client keeps one latest pending changed projection per product. Equal projected depth does not create another observation. A later changed projection can replace a waiting one within the publication interval. The accepted projection retains actual frame receipt UTC and exchange event time when supplied. Monotonic timing measures local work, queue delay and deadlines.
+
+Disconnect, desynchronization or selection retirement marks affected Coinbase Exchange and OKX cache entries stale and clears the subscription's live acceptance state. Eligible markets return to REST under existing pacing and venue cooldowns. A native observation suppresses ordinary REST only while the stream is synchronized and recently active and the cached depth has a trusted clock, usable source time and acceptable quality. Its older source or receipt age must be below the smaller of the diagnostic stale threshold and half the maximum book age. The default bound is 30 seconds. Anomaly confirmation uses paced REST. A late ordinary REST response yields to qualified stream evidence received since the request began.
+
+A responsive connection can still carry an old quote. Heartbeat and pong activity leave the quote timestamps intact. Untrusted time, invalid or expired quotes and poor synchronization return scheduling to REST when available. Retained observations preserve their actual transport and time. [Timestamp contract](MARKET_DATA_TIMESTAMPS.md).
+
