@@ -167,3 +167,15 @@ The **Research rebalance preview** compares a hypothetical transfer against hold
 balances steady. The owner supplies availability, fee and timing assumptions for the
 estimate. Paper Trading lists recorded outcome reasons separately from simulation counts.
 
+## Stage 8C order-book transports
+
+The Exchanges list displays how many native WebSocket subscriptions are synchronized
+when the collector reports a live status. Connector details show valid and total
+cached WebSocket books, median and oldest receipt ages, REST requests on subscribed
+markets and stream resynchronizations. The selected market shows its collector tier
+when known. Its order book reports the actual REST or exchange WebSocket source.
+
+Synchronization can remain healthy while an unchanged book ages. Receipt ages
+require a trusted clock. The individual book keeps its independent freshness class
+and latest collector receipt time.
+
