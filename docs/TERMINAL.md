@@ -120,3 +120,26 @@ its venue and native base/quote denomination; mixed USDT/EUR prices must not app
 as if they share a quote currency. Unknown fee units remain unknown.
 
 
+## Final Stage6 operational extension
+
+Signals&Alerts now uses authenticated /notifications status, challenge/approval/
+revocation, preview/history/events/decisions, explicit test, pause/resume and ack/
+cancel routes. The bot is connected; the owner remains unpaired, so delivery is
+inactive. Notification settings are real versioned controls rather than Stage5-only
+placeholders. Independent minimum executable BUY capital defaults to50CAD and offers
+10/25/50/100/250/500/1000/custom presets. Paper controls have their own pinned minimum.
+See NOTIFICATIONS.md; paid providers remain disabled.
+
+AIInsights reads actual owned portfolio or retained opportunity evidence through
+/ai/status and /ai/explain. Deterministic explanations work with externalAI disabled.
+No arbitrary prompt, model-authored accounting or recommendation enters financial
+logic. Size diagnostics compare seven targets from C$50 to C$5,000 and show the
+best size found within the selected budget. Each row reports net CAD, costs, both
+paper reserves and binding constraints. An uncertified search identifies the best
+evaluated size.
+
+Telegram opportunity deep links require dashboard authentication and reopen retained
+evidence after login. Return paths are restricted to known local dashboard routes;
+external/open redirects are rejected. Opening a historical route never rechecks or
+promises current profitability. The owner explicitly chooses recheck.
+
