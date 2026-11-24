@@ -52,3 +52,21 @@ exact values in tooltips; they never determine trading or accounting outcomes.
   once per minute while visible and shows delivery policy, health and reported
   heartbeat separately.
 
+## Efficient authenticated updates
+
+Bounded polling is used instead of introducing SSE connections or a broker:15seconds
+for operational summaries/portfolios,30seconds for analytics,60seconds for catalogs,
+with existing5–10second book/Radar views. Hidden tabs pause, one request batch is in
+flight, cleanup aborts requests and reconnect backs off to at most60seconds. Errors
+mark retained values stale;401returns to login. Backend public-runtime singleflight
+cache is5seconds and never stores user portfolio data.
+
+Default Radar comparisons use the most recent500retained candidates. Custom capital
+uses a disclosed50candidate window and the configured live search bound(default128).
+Only one sizing request runs per API process; contention returns429/Retry-After.
+Depth/fee/FX calculation quality is unchanged and uncertified sizing remains explicit.
+On-demand details retain the4096evaluation search bound. CPU work runs outside the
+API event loop. Private collector list summaries omit bulky raw books only from the
+transport; detail and immutable database evidence remain complete. These limits do
+not promise every short-lived discrepancy will be captured.
+
