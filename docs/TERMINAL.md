@@ -143,3 +143,27 @@ evidence after login. Return paths are restricted to known local dashboard route
 external/open redirects are rejected. Opening a historical route never rechecks or
 promises current profitability. The owner explicitly chooses recheck.
 
+## Stage 8B funding and valuation
+
+To start a research portfolio, enter a name and starting capital in **New portfolio**,
+then open the Funding Planner to select an immutable proposal. **Compare all modes**
+uses one planning cutoff for the baseline, liquidity weighted, route optimized and
+diversified hybrid modes. A comparison requires an explicit proposal selection before
+creation. Study-only and infeasible proposals remain inspectable. Retrying creation
+submits the same proposal, name and idempotency key. A reset creates a separate
+experiment with its own journal and benchmark.
+
+The planner reports alternative and simultaneous two-sided funding separately at
+each trade size. It shows reserve and concentration, exact buy and sell deficits,
+the maximum funded acquisition and the net projection at that size. Current portfolio
+coverage loads when its details are expanded. Route details show retained cost
+estimates at the pinned or capped funded size and identify FX drag already reflected
+in conversion. Historical cutoffs and excluded evidence are visible with the proposal.
+[Capital allocation design](CAPITAL_ALLOCATION_DESIGN.md)
+
+Portfolio valuation displays fresh, partial, stale or unavailable status and lists
+balances with missing marks. A known CAD subtotal may accompany partial valuation.
+The **Research rebalance preview** compares a hypothetical transfer against holding
+balances steady. The owner supplies availability, fee and timing assumptions for the
+estimate. Paper Trading lists recorded outcome reasons separately from simulation counts.
+
