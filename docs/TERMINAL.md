@@ -102,3 +102,21 @@ scanner and retain an operational event. Coverage changes can remove future evid
 for existing work, which must expire/fail honestly; strategy versions never mutate.
 Suspicious books are retained even when optional anomaly exploration is disabled.
 
+## Reporting and deployment boundaries
+
+Export for ChatGPT streams an authenticated self-contained archive, with exact raw
+records, opening dependencies, definitions, selected period/scope, limitations and
+SHA256manifest. See REPORTING.md. No test dataset enters live history. All real-trade
+records remain separate; no real-order or paid provider call is enabled.
+
+Local entry point: http://localhost:3100. Production operation is separate from
+source import and requires the deployment and recovery gates.
+
+
+Same-UTC lifecycle events use the known CANDIDATE→ELIGIBILITY_CHECK→SCHEDULED→
+RECHECKING→EXECUTING→terminal ordering for presentation and historical cutoff ties.
+Stored timestamps/IDs/provenance never change. Each simulated leg explicitly shows
+its venue and native base/quote denomination; mixed USDT/EUR prices must not appear
+as if they share a quote currency. Unknown fee units remain unknown.
+
+
