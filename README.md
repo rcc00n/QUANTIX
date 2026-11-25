@@ -25,6 +25,21 @@ portfolios make each simulated outcome inspectable.
 **PAPER ONLY.** QUANTIX never submits real exchange orders. Observed spreads and
 simulated results do not demonstrate real-world profitability or trading readiness.
 
+## Review the engineering
+
+1. [Inspect the synthetic workspace](docs/DEMO.md): the actual interface with
+   disclosed fixtures, no account, exchange credentials or provider setup required
+   for the documented capture path.
+2. [Read the accounting case](docs/ENGINEERING_CASE_STUDY.md): exact amounts,
+   independently committed execution legs, causal valuations and inspectable exports.
+3. Compare [locked accounting](backend/arbiq/portfolio/accounting.py) with
+   [its regression tests](tests/test_portfolio_accounting.py), then review the
+   [workflow](.github/workflows/ci.yml) for the exact verification scope.
+
+The [history disclosure](docs/HISTORY_IMPORT.md) distinguishes reconstructed import
+commits from original development dates. Current source and executed checks are the
+evidence; activity counts do not establish experience or simulated profitability.
+
 ## Capabilities
 
 - **Market intelligence:** exchange discovery, canonical asset identity, bounded
