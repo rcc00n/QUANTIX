@@ -334,7 +334,7 @@ async def test_unchanged_route_does_not_write_each_tick_and_rate_budget_is_bound
     await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
     assert len(engine.store.saved) == 1
     key = next(iter(engine.current))
-    engine.last_write[key] = 0
+    engine.last_write[key] = time.monotonic() - engine.config.persistence_interval_seconds - 1
     await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
     assert len(engine.store.saved) == 1
     assert engine.metrics["persistence_rate_limited"] == 1
@@ -396,11 +396,13 @@ async def test_deferred_terminal_transition_is_retried_within_shared_write_budge
 @pytest.mark.asyncio
 async def test_terminal_capacity_is_reclaimed_without_growing_causal_maps():
     engine, buy, sell, _ = engine_fixture(config=EngineConfig(max_candidates=10))
+    # Synthetic terminal entries are older than TTL even on a newly booted runner.
+    expired_before = time.monotonic() - engine.config.route_ttl_seconds - 11
     for index in range(10):
         key = f"synthetic-old-{index}"
         engine.current[key] = {"id": str(uuid4()), "status": "EXPIRED"}
-        engine.last_seen[key] = index
-        engine.last_write[key] = index
+        engine.last_seen[key] = expired_before + index
+        engine.last_write[key] = expired_before + index
     await engine.evaluate_pair(buy.id, sell.id, {"CAD": identity_cad()}, NOW)
     assert len(engine.current) == 10
     assert len(engine.last_seen) == 10 and len(engine.last_write) == 10

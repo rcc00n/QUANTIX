@@ -283,10 +283,8 @@ def test_native_metadata_flows_into_scanner_market_input():
         },
     )
     side, _ = inputs()
-    engine = SimpleNamespace()
     captured = SimpleNamespace(received_at=NOW, normalized=side)
     value = ArbitrageEngine.market_input(
-        engine,
         SimpleNamespace(slug="kraken"),
         record,
         captured,

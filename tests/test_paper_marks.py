@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import test_paper_api as paper_fixtures
-from arbiq.db.models import Asset, Exchange
+from arbiq.db.models import Asset, Exchange, PaperSession
 from arbiq.opportunities.contracts import (
     ConversionLeg,
     ConversionLevel,
@@ -19,6 +19,7 @@ from arbiq.opportunities.contracts import (
 )
 from arbiq.paper_trading.coordinator import PaperCoordinator
 from arbiq.paper_trading.market import PaperMarkets
+from arbiq.paper_trading.models import PaperControl
 from arbiq.paper_trading.service import Allocation, create_portfolio
 from arbiq.portfolio import valuation
 from arbiq.portfolio.models import PortfolioCheckpoint
@@ -252,6 +253,16 @@ async def test_four_checkpoint_marks_share_unchanging_books_and_publish_together
         return item
 
     monkeypatch.setattr(valuation, "snapshot", snapshot_for_test)
+
+    def fixture_select(*entities):
+        query = select(*entities)
+        if entities == (PaperControl, PaperSession):
+            # Other tests retain unrelated owners' active synthetic portfolios.
+            # Keep this fixture's owner inside the worker's unchanged 20-row bound.
+            return query.where(PaperSession.user_id == owner)
+        return query
+
+    monkeypatch.setattr("arbiq.paper_trading.coordinator.select", fixture_select)
     hour = NOW.astimezone(ZoneInfo("America/Edmonton")).strftime("%Y-%m-%dT%H%z")
     worker = SimpleNamespace(
         sessions=dbs,
