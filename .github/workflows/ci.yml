@@ -12,6 +12,22 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: make setup
+      - name: Configure CI notification settings
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          
+          env = Path(".env")
+          setting = "LOCAL_NOTIFICATION_WORKER_ENABLED="
+          lines = env.read_text().splitlines()
+          if sum(line.startswith(setting) for line in lines) != 1:
+              raise SystemExit("Expected exactly one local notification-worker setting")
+          env.write_text("".join(setting + "false\n" if line.startswith(setting) else line + "\n" for line in lines))
+          PYTHON
+      - name: Install Makefile prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ripgrep
       - run: make test
       - run: npm ci
         working-directory: frontend
