@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a reproducible QUANTIX defect using sanitized evidence.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For security vulnerabilities, use SECURITY.md instead of a public issue.
+        Keep credentials, private exports and personal financial data out of this report.
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      description: Include the commit SHA and relevant local platform/browser.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Minimal steps with clearly labeled synthetic data. Never include secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and observed behavior
+      description: Distinguish observed data, estimates, paper outcomes and unavailable values.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence and checks
+      description: Relevant error text, screenshots and checks run; redact private material.
