@@ -23,7 +23,7 @@ FROM build AS test
 RUN uv sync --frozen --no-editable
 COPY backend/alembic.ini ./
 COPY backend/alembic ./alembic
-COPY tests /tests
+COPY tests ./tests
 COPY scripts ./scripts
 ENV PATH="/app/.venv/bin:$PATH"
-CMD ["pytest", "-c", "/app/pyproject.toml", "-q", "--tb=short", "/tests"]
+CMD ["pytest", "-c", "/app/pyproject.toml", "-q", "--tb=short", "/app/tests"]
