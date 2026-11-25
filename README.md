@@ -10,6 +10,7 @@
 </p>
 <p align="center">
   <a href="#capabilities">Capabilities</a> ·
+  <a href="#workspace">Workspace</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="#start-locally">Start locally</a> ·
   <a href="#documentation">Documentation</a> ·
@@ -41,16 +42,24 @@ simulated results do not demonstrate real-world profitability or trading readine
 
 ## Workspace
 
-Actual local desktop and mobile captures of the sign-in surface. Inputs are empty;
-no private financial data, authenticated sessions or fabricated dashboard results
-appear in these images. [Capture notes and asset provenance](docs/assets/README.md).
+Actual desktop and mobile views of the QUANTIX frontend, running against explicitly
+**SYNTHETIC UI fixtures**. Every capture says **PAPER ONLY / NO LIVE DATA OR ORDERS**.
+The illustrated portfolios and clock flags are fixture values; they are not recorded
+financial results or a backend execution test.
 
 <table>
   <tr>
-    <td width="76%"><img src="docs/assets/workspace-desktop.png" alt="QUANTIX desktop sign-in screen with empty credential inputs" width="100%"></td>
-    <td width="24%"><img src="docs/assets/workspace-mobile.png" alt="QUANTIX mobile sign-in screen with empty credential inputs" width="100%"></td>
+    <td width="77%"><img src="docs/assets/showcase/terminal-desktop.png" alt="Actual QUANTIX Command Center with a persistent SYNTHETIC UI DEMO and PAPER ONLY ribbon" width="100%"></td>
+    <td width="23%"><img src="docs/assets/showcase/portfolio-mobile.png" alt="Actual mobile Portfolio interface with synthetic research scope and a PAPER ONLY ribbon" width="100%"></td>
   </tr>
 </table>
+
+[Interface walkthrough and reproducible captures](docs/DEMO.md) ·
+[Engineering case: accounting and provenance](docs/ENGINEERING_CASE_STUDY.md)
+
+The original empty-input [desktop](docs/assets/workspace-desktop.png) and
+[mobile](docs/assets/workspace-mobile.png) sign-in captures remain available with
+[asset provenance](docs/assets/README.md).
 
 ## Architecture
 
@@ -134,7 +143,8 @@ See the [roadmap](docs/ROADMAP.md) and [accounting contract](docs/ACCOUNTING.md)
 
 | Start here | Go deeper |
 | --- | --- |
-| [Development](docs/DEVELOPMENT.md) · [Contributing](CONTRIBUTING.md) | [Architecture](docs/ARCHITECTURE.md) · [Schema](docs/SCHEMA.md) |
+| [Development](docs/DEVELOPMENT.md) · [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) | [Architecture](docs/ARCHITECTURE.md) · [Schema](docs/SCHEMA.md) |
+| [UI walkthrough](docs/DEMO.md) · [Engineering case](docs/ENGINEERING_CASE_STUDY.md) | [Financial contracts](docs/FINANCIAL_ENGINE.md) · [Accounting](docs/ACCOUNTING.md) |
 | [Market data](docs/MARKET_DATA.md) · [Native feeds](docs/WEBSOCKET_ARCHITECTURE.md) | [Clock confidence](docs/CLOCK.md) · [Financial engine](docs/FINANCIAL_ENGINE.md) |
 | [Terminal](docs/TERMINAL.md) · [Funding](docs/FUNDING.md) | [Accounting](docs/ACCOUNTING.md) · [Sizing](docs/SIZE_DIAGNOSTICS.md) |
 | [Reporting and exports](docs/REPORTING.md) | [Telegram](docs/NOTIFICATIONS.md) · [Optional AI](docs/OPTIONAL_AI.md) |
