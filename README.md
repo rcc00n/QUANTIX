@@ -88,6 +88,13 @@ Telegram bot consumer.
 
 ```bash
 make setup
+```
+
+For local development without a Telegram token, set
+`LOCAL_NOTIFICATION_WORKER_ENABLED=false` in the generated `.env` before starting.
+Configure Telegram separately through [notification setup](docs/NOTIFICATIONS.md).
+
+```bash
 make up
 ```
 
