@@ -1,0 +1,212 @@
+{
+  "captured_utc": "2026-11-25T05:01:30.820Z",
+  "synthetic_ui_only": true,
+  "live_market_data": false,
+  "database_used": false,
+  "financial_engine_executed": false,
+  "actual_orders_or_telegram": false,
+  "source_build_id": "GhcSQngwqcMVfD6G8MFtk",
+  "fixture_sha256": "235d9ce05628fbab49d2e570c4f312993ab78e1ea76702fc2aced87ede7e853c",
+  "captures": [
+    {
+      "file": "terminal-desktop.png",
+      "width": 1680,
+      "height": 1050,
+      "body_overflow": false,
+      "synthetic_label_visible": true
+    },
+    {
+      "file": "portfolio-desktop.png",
+      "width": 1680,
+      "height": 1050,
+      "body_overflow": false,
+      "synthetic_label_visible": true
+    },
+    {
+      "file": "strategy-lab-desktop.png",
+      "width": 1680,
+      "height": 1050,
+      "body_overflow": false,
+      "synthetic_label_visible": true
+    },
+    {
+      "file": "comparison-desktop.png",
+      "width": 1680,
+      "height": 1050,
+      "body_overflow": false,
+      "synthetic_label_visible": true
+    },
+    {
+      "file": "portfolio-mobile.png",
+      "width": 390,
+      "height": 844,
+      "body_overflow": false,
+      "synthetic_label_visible": true
+    }
+  ],
+  "frame_count": 13,
+  "page_errors": [],
+  "blocked_external_origins": [],
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/system/status"
+    },
+    {
+      "method": "GET",
+      "path": "/terminal/overview"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/90000000-0000-4000-8000-000000000003/portfolio"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/90000000-0000-4000-8000-000000000003/metrics"
+    },
+    {
+      "method": "GET",
+      "path": "/analytics/sessions/90000000-0000-4000-8000-000000000003/series"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/system/status"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions"
+    },
+    {
+      "method": "GET",
+      "path": "/strategies"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/90000000-0000-4000-8000-000000000003/portfolio"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/90000000-0000-4000-8000-000000000003/metrics"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/trades"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/90000000-0000-4000-8000-000000000004/portfolio"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/90000000-0000-4000-8000-000000000004/metrics"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/trades"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/92000000-0000-4000-8000-000000000001/portfolio"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/92000000-0000-4000-8000-000000000001/metrics"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/trades"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions"
+    },
+    {
+      "method": "GET",
+      "path": "/strategies"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/90000000-0000-4000-8000-000000000003/portfolio"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/90000000-0000-4000-8000-000000000003/metrics"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/trades"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/system/status"
+    },
+    {
+      "method": "GET",
+      "path": "/reports/exports/current"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions"
+    },
+    {
+      "method": "GET",
+      "path": "/analytics/sessions/90000000-0000-4000-8000-000000000003"
+    },
+    {
+      "method": "GET",
+      "path": "/analytics/sessions/90000000-0000-4000-8000-000000000003/series"
+    },
+    {
+      "method": "POST",
+      "path": "/analytics/strategy-lab/compare"
+    },
+    {
+      "method": "GET",
+      "path": "/auth/me"
+    },
+    {
+      "method": "GET",
+      "path": "/system/status"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions"
+    },
+    {
+      "method": "GET",
+      "path": "/strategies"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/90000000-0000-4000-8000-000000000003/portfolio"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/sessions/90000000-0000-4000-8000-000000000003/metrics"
+    },
+    {
+      "method": "GET",
+      "path": "/paper/trades"
+    }
+  ]
+}
